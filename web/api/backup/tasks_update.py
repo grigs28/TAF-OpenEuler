@@ -9,8 +9,7 @@ import logging
 import json
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
-from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-from utils.scheduler.sqlite_utils import is_sqlite, get_sqlite_connection
+from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection, is_sqlite, get_sqlite_connection
 from models.system_log import OperationType
 from utils.log_utils import log_operation
 from .models import BackupTaskUpdate
@@ -44,7 +43,6 @@ async def update_backup_task(
         else:
             # 检查是否为Redis数据库
             from utils.scheduler.db_utils import is_redis
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             if is_redis():
                 logger.warning("[Redis模式] 更新备份任务模板暂未实现，抛出HTTPException")

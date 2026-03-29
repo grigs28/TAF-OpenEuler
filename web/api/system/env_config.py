@@ -67,7 +67,8 @@ class SystemEnvConfig(BaseModel):
     use_checkpoint: Optional[bool] = Field(None, description="是否启用检查点文件，默认不启用")
     enable_background_copy_update: Optional[bool] = Field(None, description="启用后台标记 is_copy_success（异步 mark_files_as_copied）")
     compression_parallel_batches: Optional[int] = Field(None, description="压缩并行批次数量（默认2），预读取程序队列数为该值+1")
-    
+    compression_batches_reduction: Optional[int] = Field(None, description="扫描时减少的并行批次数（默认1），0表示不减少")
+
     # 内存数据库配置
     use_memory_db: Optional[bool] = Field(None, description="是否使用内存数据库（默认启用，性能最优）")
     memory_db_max_files: Optional[int] = Field(None, description="内存数据库中最大文件数（默认500万）")
@@ -171,8 +172,9 @@ async def get_env_config():
             "scan_threads": parse_int(env_vars.get("SCAN_THREADS"), 4),
             "use_checkpoint": parse_bool(env_vars.get("USE_CHECKPOINT"), False),
             "enable_background_copy_update": parse_bool(env_vars.get("ENABLE_BACKGROUND_COPY_UPDATE"), False),
-            "compression_parallel_batches": parse_int(env_vars.get("COMPRESSION_PARALLEL_BATCHES"), 2),
-            
+            "compression_parallel_batches": parse_int(env_vars.get("COMPRESSION_PARALLEL_BATCHES"), 3),
+            "compression_batches_reduction": parse_int(env_vars.get("COMPRESSION_BATCHES_REDUCTION"), 1),
+
             # 内存数据库配置
             "use_memory_db": parse_bool(env_vars.get("USE_MEMORY_DB"), True),
             "memory_db_max_files": parse_int(env_vars.get("MEMORY_DB_MAX_FILES"), 5000000),
@@ -303,7 +305,12 @@ async def update_env_config(config: SystemEnvConfig, request: Request):
             if config.compression_parallel_batches < 1:
                 raise ValueError("COMPRESSION_PARALLEL_BATCHES 必须大于等于 1")
             updates["COMPRESSION_PARALLEL_BATCHES"] = str(config.compression_parallel_batches)
-        
+        if config.compression_batches_reduction is not None:
+            # 验证减少批次数范围（至少为0）
+            if config.compression_batches_reduction < 0:
+                raise ValueError("COMPRESSION_BATCHES_REDUCTION 必须大于等于 0")
+            updates["COMPRESSION_BATCHES_REDUCTION"] = str(config.compression_batches_reduction)
+
         # 内存数据库配置
         if config.use_memory_db is not None:
             updates["USE_MEMORY_DB"] = str(config.use_memory_db).lower()

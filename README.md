@@ -1,143 +1,146 @@
-# 企业级磁带备份系统 (TAF)
-Enterprise Tape Backup System
+# TAF - 企业级磁带备份系统
+# Enterprise Tape Backup System
 
 [![Python Version](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20openEuler-orange.svg)](https://www.openeuler.org/)
+[![Database](https://img.shields.io/badge/database-openGauss-blue.svg)](https://opengauss.org/zh/)
+[![Version](https://img.shields.io/badge/version-v0.2.3-brightgreen.svg)](CHANGELOG.md)
 
-## 📋 项目简介
+---
 
-企业级磁带备份系统（TAF - Tape Archive File）是一个基于 Python 开发的现代化磁带备份解决方案，专为企业级数据备份和归档场景设计。系统采用分层架构，支持 Windows 和 Linux（openEuler）双平台部署，提供完整的 Web 管理界面和 RESTful API。
+## 中文文档 | Chinese Documentation
+
+<details>
+<summary><b>项目简介</b></summary>
+
+**TAF (Tape Archive File)** 是一个基于 Python 开发的企业级磁带备份系统，专为 **Linux** 平台设计，在 **openEuler** 上开发。系统提供智能备份策略、磁带生命周期管理、LTFS 文件系统支持和完整的 RESTful API。
 
 ### 核心特性
 
-- 🔄 **智能备份策略** - 支持完整备份、增量备份、差异备份、镜像备份、归档备份
-- 🗜️ **多压缩算法** - 支持 PGZip、7-Zip、Tar、Zstandard 等多种压缩方法
-- 📼 **磁带生命周期管理** - 自动管理磁带库存、格式化、擦除、过期检测
-- 📅 **计划任务调度** - 支持每日、每周、每月、每年定时备份任务
-- 🌐 **现代化 Web 界面** - 深色科技主题，响应式设计，实时进度监控
-- 🗄️ **多数据库支持** - SQLite（开发/测试）、PostgreSQL、openGauss（推荐）、MySQL
-- ⚡ **高性能架构** - 原生 SQL 查询、连接池、异步处理、批量操作
-- 🔔 **钉钉通知集成** - 实时推送备份状态、错误告警、任务完成通知
-- 🔧 **ITDT/SCSI 双接口** - 支持 IBM Tape Diagnostic Tool 和原生 SCSI 接口
-- 📊 **详细日志系统** - 系统日志、操作日志、性能监控、错误追踪
+- **智能备份策略** - 支持完整备份、增量备份、差异备份、镜像备份、归档备份
+- **多压缩算法** - Zstandard、PGZip、7-Zip、Tar 等多种压缩方法
+- **磁带生命周期管理** - 自动管理磁带库存、格式化、擦除、过期检测
+- **计划任务调度** - 支持 Cron 风格的定时备份任务
+- **现代化 Web 界面** - 深色科技主题，响应式设计
+- **openGauss 数据库** - 生产级数据库支持，原生 SQL 查询
+- **高性能架构** - 异步处理、批量操作、连接池、内存数据库
+- **钉钉/微信通知** - 实时推送备份状态、错误告警
+- **LTFS 支持** - Linux LTFS 磁带文件系统
+- **SMB 网络路径** - 支持 SMB/CIFS 网络共享备份
 
-## 🚀 快速开始
+</details>
 
-### 系统要求
+<details>
+<summary><b>系统要求</b></summary>
 
-- **Python**: 3.8 或更高版本
-- **操作系统**: Windows 10/11 或 Linux (openEuler/Ubuntu/CentOS)
-- **数据库**: SQLite（开发）或 openGauss/PostgreSQL（生产）
-- **磁带设备**: 支持 SCSI 或 ITDT 接口的磁带驱动器
-- **内存**: 建议 4GB 以上
-- **磁盘空间**: 建议 10GB 以上（用于临时文件和日志）
+| 组件 | 要求 | 说明 |
+|------|------|------|
+| **操作系统** | Linux (openEuler 22+ / Ubuntu 20.04+ / CentOS 7+) | 仅支持 Linux 平台 |
+| **Python** | 3.8+ | 推荐使用 Conda 管理 |
+| **数据库** | openGauss 5.x+ | 生产环境必需 |
+| **内存** | 4GB+ | 推荐 8GB |
+| **磁盘空间** | 50GB+ | 用于临时文件和日志 |
+| **磁带设备** | LTO 驱动器 (SCSI 接口) | 支持 LTO-4 及以上 |
 
-### 安装步骤
+**可选组件**：
+- Redis - 高性能任务存储和缓存
+- LTFS - 磁带文件系统支持
+- 7-Zip - 7z 压缩格式支持
 
-#### 1. 克隆项目
+</details>
+
+<details>
+<summary><b>快速开始</b></summary>
 
 ```bash
-git clone https://github.com/grigs28/TAF.git
+# 1. 克隆项目
+git clone https://github.com/yourusername/TAF.git
 cd TAF
-```
 
-#### 2. 创建 Python 环境
-
-**使用 Conda（推荐）:**
-
-```bash
+# 2. 创建 Python 环境
 conda create -n taf python=3.9
 conda activate taf
-```
 
-**或使用 venv:**
-
-```bash
-python -m venv venv
-# Windows
-venv\Scripts\activate
-# Linux/Mac
-source venv/bin/activate
-```
-
-#### 3. 安装依赖
-
-```bash
+# 3. 安装依赖
 pip install -r requirements.txt
-```
+pip install aiosqlite zstandard
 
-#### 4. 配置环境变量
+# 4. 配置 openGauss 数据库
+sudo su - omm
+gsql -d postgres
+CREATE DATABASE taf_backup;
+CREATE USER taf_user WITH PASSWORD 'your_password';
+GRANT ALL PRIVILEGES ON DATABASE taf_backup TO taf_user;
+ALTER USER taf_user WITH SYSID;
 
-复制环境配置文件模板：
-
-```bash
+# 5. 配置环境变量
 cp .env.sample .env
+# 编辑 .env 文件设置数据库连接等配置
+
+# 6. 启动系统
+python main.py
+
+# 7. 访问 Web 界面
+# http://localhost:8080
 ```
 
-编辑 `.env` 文件，配置数据库连接等参数：
+</details>
+
+<details>
+<summary><b>环境变量配置</b></summary>
 
 ```ini
-# 数据库配置（openGauss 示例）
-DATABASE_URL=opengauss://username:password@localhost:5432/backup_db
+# openGauss 数据库配置
+DATABASE_URL=opengauss://taf_user:password@localhost:5432/taf_backup
 DB_HOST=localhost
 DB_PORT=5432
-DB_USER=username
+DB_USER=taf_user
 DB_PASSWORD=password
-DB_DATABASE=backup_db
+DB_DATABASE=taf_backup
 
-# 或使用 SQLite（开发/测试）
-# DATABASE_URL=sqlite:///./data/taf_backup.db
+# 连接池配置
+DB_POOL_SIZE=40
+DB_MAX_OVERFLOW=80
+DB_POOL_TIMEOUT=30.0
 
 # Web 服务配置
 WEB_PORT=8080
 WEB_HOST=0.0.0.0
 
 # 压缩配置
-COMPRESSION_METHOD=pgzip  # pgzip, py7zr, 7zip_command, tar, zstd
+COMPRESSION_METHOD=zstd
 COMPRESSION_THREADS=4
 
-# 磁带配置
-TAPE_INTERFACE_TYPE=itdt  # itdt 或 scsi
-ITDT_PATH=c:\itdt\itdt.exe  # Windows
-# ITDT_PATH=/usr/local/itdt/itdt  # Linux
+# 磁带设备配置 (Linux)
+TAPE_DEVICE_PATH=/dev/nst0
+SG_DEVICE_PATH=/dev/sg2
 
-# 钉钉通知（可选）
+# LTFS 配置
+LTFS_BINARY_PATH=/usr/local/bin/ltfs
+LTFS_MOUNT_POINT=/mnt/ltfs
+
+# 钉钉通知配置
 DINGTALK_API_URL=http://localhost:5555
 DINGTALK_API_KEY=your-api-key
+DINGTALK_DEFAULT_PHONE=13800000000
+
+# 微信通知配置 (可选)
+WECHAT_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/web/send
+WECHAT_ENABLED=false
+WECHAT_REPORT_INTERVAL=30
+
+# SMB/CIFS 网络路径配置
+SMB_USERNAME=administrator
+SMB_PASSWORD=your-password
+SMB_DOMAIN=DOMAIN
+SMB_MOUNT_BASE=/mnt/smb
 ```
 
-#### 5. 初始化数据库
+</details>
 
-**使用 openGauss（推荐）:**
-
-```sql
-CREATE DATABASE backup_db;
-CREATE USER username WITH PASSWORD 'password';
-GRANT ALL PRIVILEGES ON DATABASE backup_db TO username;
-```
-
-**使用 SQLite:**
-
-系统会自动创建数据库文件，无需手动初始化。
-
-#### 6. 启动系统
-
-```bash
-# 激活环境（如果使用 conda）
-conda activate taf
-
-# 启动主程序
-python main.py
-```
-
-#### 7. 访问 Web 界面
-
-打开浏览器访问：`http://localhost:8080`
-
-默认无需登录（开发模式），生产环境请配置认证。
-
-## 📁 项目结构
+<details>
+<summary><b>项目结构</b></summary>
 
 ```
 TAF/
@@ -145,446 +148,625 @@ TAF/
 ├── requirements.txt             # Python 依赖包
 ├── .env.sample                  # 环境配置模板
 ├── CHANGELOG.md                 # 版本更新日志
+├── CLAUDE.md                    # Claude AI 开发指导
 │
 ├── config/                      # 配置管理
 │   ├── settings.py              # 系统配置类
-│   ├── database.py              # 数据库管理器
+│   ├── database.py              # 数据库连接管理
 │   ├── database_init.py         # 数据库初始化
-│   ├── sqlite_init.py           # SQLite 初始化
+│   ├── redis_db.py              # Redis 连接管理
 │   └── config_manager.py        # 配置管理器
 │
 ├── models/                      # 数据模型
 │   ├── backup.py                # 备份任务、备份集模型
 │   ├── tape.py                  # 磁带模型
+│   ├── scheduled_task.py        # 计划任务模型
 │   ├── user.py                  # 用户模型
 │   ├── system_log.py            # 系统日志模型
-│   └── scheduled_task.py        # 计划任务模型
+│   ├── system_config.py         # 系统配置模型
+│   ├── data_classes.py          # 数据类定义
+│   ├── notification_user.py     # 通知用户模型
+│   └── base.py                  # 基础模型类
 │
 ├── backup/                      # 备份处理模块
-│   ├── backup_engine.py          # 备份引擎（主控制器）
-│   ├── backup_db.py              # 备份数据库操作
-│   ├── backup_scanner.py         # 文件扫描器
-│   ├── backup_task_manager.py    # 备份任务管理器
-│   ├── compression_worker.py    # 压缩工作线程
-│   ├── compressor.py             # 压缩处理器
-│   ├── file_move_worker.py       # 文件移动工作线程
-│   ├── memory_db_writer.py       # 内存数据库写入器
-│   ├── sqlite_backup_db.py       # SQLite 备份数据库操作
-│   ├── tape_file_mover.py        # 磁带文件移动器
-│   └── tape_handler.py           # 磁带处理器
+│   ├── backup_engine.py         # 备份引擎（主控制器）
+│   ├── compressor.py            # 压缩处理器
+│   ├── compression_worker.py    # 并行压缩工作线程
+│   ├── backup_db.py             # 备份数据库操作
+│   ├── file_scanner.py          # 文件扫描器
+│   ├── tape_handler.py          # 磁带处理器
+│   ├── memory_db_writer.py      # 内存数据库写入器
+│   ├── file_group_prefetcher.py # 文件分组预取器
+│   ├── final_dir_monitor.py     # 最终目录监控器
+│   ├── backup_scanner.py        # 备份扫描协调
+│   ├── backup_task_manager.py   # 备份任务管理
+│   ├── backup_notifier.py       # 备份通知器
+│   ├── concurrent_dir_scanner.py # 并行目录扫描
+│   ├── sequential_dir_scanner.py # 顺序目录扫描
+│   ├── file_move_worker.py      # 文件移动工作线程
+│   └── utils.py                 # 备份工具函数
 │
-├── recovery/                     # 恢复处理模块
-│   └── recovery_engine.py        # 恢复引擎
+├── tape/                        # 磁带管理模块
+│   ├── tape_manager.py          # 磁带管理器
+│   ├── tape_operations.py       # 磁带操作
+│   └── tape_cartridge.py        # 磁带盒类
 │
-├── tape/                         # 磁带管理模块
-│   ├── tape_manager.py           # 磁带管理器
-│   ├── tape_operations.py        # 磁带操作
-│   ├── scsi_interface.py         # SCSI 接口
-│   ├── itdt_interface.py          # ITDT 接口
-│   └── tape_cartridge.py         # 磁带盒类
+├── utils/                       # 工具模块
+│   ├── scheduler/               # 计划任务调度器
+│   │   ├── scheduler.py         # 任务调度器
+│   │   ├── task_storage.py      # 任务存储（openGauss）
+│   │   ├── task_executor.py     # 任务执行器
+│   │   ├── task_status_checker.py # 任务状态检查
+│   │   ├── task_unlocker.py     # 任务锁释放
+│   │   ├── schedule_calculator.py # 调度计算器
+│   │   ├── action_handlers.py   # 动作处理器
+│   │   ├── db_utils.py          # 数据库工具函数
+│   │   └── redis_task_storage.py # Redis 任务存储
+│   ├── opengauss/               # openGauss 相关
+│   │   └── guard.py            # openGauss 连接守护
+│   ├── linux_tape.py            # Linux 原生磁带操作
+│   ├── libltfs_wrapper.py       # LTFS 包装器
+│   ├── tape_tools.py            # 磁带工具集
+│   ├── dingtalk_notifier.py     # 钉钉通知器
+│   ├── wechat_notifier.py       # 微信通知器
+│   ├── network_path.py          # 网络路径处理
+│   ├── log_utils.py             # 日志工具
+│   ├── datetime_utils.py        # 日期时间工具
+│   └── production_guard.py      # 生产环境保护
 │
-├── web/                          # Web 应用
-│   ├── app.py                    # FastAPI 应用入口
-│   ├── api/                      # RESTful API
-│   │   ├── backup.py             # 备份管理 API
-│   │   ├── recovery.py           # 恢复管理 API
-│   │   ├── scheduler.py          # 计划任务 API
-│   │   ├── backup_statistics.py  # 备份统计 API
-│   │   ├── tape/                 # 磁带管理 API
-│   │   │   ├── crud.py           # 磁带 CRUD
-│   │   │   ├── operations.py     # 磁带操作
-│   │   │   └── device.py         # 设备管理
-│   │   └── system/               # 系统管理 API
-│   │       ├── database.py       # 数据库配置
-│   │       ├── logs.py           # 日志查询
-│   │       └── statistics.py     # 系统统计
-│   ├── templates/                # HTML 模板
-│   ├── static/                   # 静态资源（CSS/JS/图片）
-│   └── middleware/               # 中间件
-│       ├── auth_middleware.py    # 认证中间件
-│       └── logging_middleware.py # 日志中间件
+├── recovery/                    # 恢复模块
+│   └── recovery_engine.py       # 恢复引擎
 │
-├── utils/                        # 工具模块
-│   ├── logger.py                 # 日志管理器
-│   ├── log_utils.py              # 日志工具函数
-│   ├── scheduler/                # 计划任务调度器
-│   │   ├── scheduler.py          # 任务调度器
-│   │   ├── task_storage.py       # 任务存储（openGauss）
-│   │   ├── sqlite_task_storage.py # 任务存储（SQLite）
-│   │   └── task_executor.py      # 任务执行器
-│   ├── dingtalk_notifier.py      # 钉钉通知器
-│   └── db_utils.py               # 数据库工具函数
+├── web/                         # Web 应用
+│   ├── app.py                   # FastAPI 应用入口
+│   ├── api/                     # RESTful API
+│   │   ├── backup/              # 备份管理 API
+│   │   │   ├── operations.py    # 备份操作
+│   │   │   ├── sets.py          # 备份集
+│   │   │   ├── tasks_*.py       # 任务 CRUD
+│   │   │   └── backup_statistics.py
+│   │   ├── tape/                # 磁带管理 API
+│   │   │   ├── device.py        # 设备管理
+│   │   │   ├── operations.py    # 磁带操作
+│   │   │   ├── label.py         # 标签管理
+│   │   │   ├── tape_*.py        # 磁带 CRUD
+│   │   │   └── tape_statistics.py
+│   │   ├── scheduler.py         # 计划任务 API
+│   │   ├── system/              # 系统管理 API
+│   │   │   ├── database.py      # 数据库配置
+│   │   │   ├── logs.py          # 日志查询
+│   │   │   ├── statistics.py    # 系统统计
+│   │   │   ├── notification.py  # 通知配置
+│   │   │   ├── env_config.py    # 环境配置
+│   │   │   └── file_system.py   # 文件系统
+│   │   ├── recovery.py          # 恢复管理 API
+│   │   ├── wechat.py            # 微信 API
+│   │   └── tools.py             # 工具 API
+│   ├── middleware/              # 中间件
+│   ├── templates/               # HTML 模板
+│   └── static/                  # 静态资源（CSS/JS）
 │
-├── mcp/                          # 核心备份模块
-│   └── core.py                   # 核心备份处理器
-│
-├── tests/                        # 测试用例
-├── docs/                         # 文档目录
-├── data/                         # 数据目录（SQLite 数据库文件）
-├── logs/                         # 日志目录
-└── temp/                         # 临时文件目录
+├── scripts/                     # 脚本工具
+├── services/                    # 服务模块
+├── tests/                       # 测试用例
+├── docs/                        # 文档目录
+├── logs/                        # 日志目录
+└── temp/                        # 临时文件目录
+    ├── backup/                  # 备份临时目录
+    ├── compress/                # 压缩临时目录
+    ├── output/                  # 输出目录
+    └── recovery/                # 恢复临时目录
 ```
 
-## 🔧 配置说明
+</details>
 
-### 数据库配置
+<details>
+<summary><b>API 文档</b></summary>
 
-系统支持多种数据库类型，推荐使用 **openGauss**（生产环境）或 **SQLite**（开发/测试）。
+系统提供完整的 RESTful API，启动后可访问交互式文档：
 
-#### Web 界面配置（推荐）
+- **Swagger UI**: http://localhost:8080/docs
+- **ReDoc**: http://localhost:8080/redoc
 
-1. 启动系统后访问：`http://localhost:8080`
-2. 进入"系统设置" → "数据库"选项卡
-3. 选择数据库类型并填写连接信息
-4. 点击"测试连接"验证配置
-5. 点击"保存配置"保存设置
+**主要 API 端点**：
 
-#### 环境变量配置
+| 方法 | 端点 | 说明 |
+|------|------|------|
+| GET/POST | `/api/backup/tasks` | 备份任务 CRUD |
+| POST | `/api/backup/tasks/{id}/run` | 立即执行任务 |
+| GET | `/api/recovery/sets` | 搜索备份集 |
+| POST | `/api/recovery/restore` | 创建恢复任务 |
+| GET/POST | `/api/tape/*` | 磁带管理操作 |
+| GET/POST | `/api/scheduler/tasks` | 计划任务管理 |
+| GET | `/api/system/statistics` | 系统统计信息 |
 
-在 `.env` 文件中配置：
+</details>
 
-```ini
-# openGauss 配置
-DATABASE_URL=opengauss://username:password@host:port/database
-DB_HOST=192.168.0.36
-DB_PORT=5560
-DB_USER=username
-DB_PASSWORD=password
-DB_DATABASE=backup_db
-DB_POOL_SIZE=10
-DB_MAX_OVERFLOW=20
-
-# SQLite 配置（开发/测试）
-# DATABASE_URL=sqlite:///./data/taf_backup.db
-```
-
-**注意**: 系统已完全移除 SQLAlchemy ORM，使用原生 SQL：
-- **openGauss**: 使用 `asyncpg` 连接池，参数化查询
-- **SQLite**: 使用 `aiosqlite` 连接，参数化查询
-
-### 压缩配置
-
-系统支持多种压缩方法，可在 Web 界面或 `.env` 文件中配置：
-
-```ini
-# 压缩方法选择
-COMPRESSION_METHOD=pgzip  # 可选: pgzip, py7zr, 7zip_command, tar, zstd
-
-# PGZip 配置
-PGZIP_BLOCK_SIZE=1M  # 块大小: 1M, 128K, 1G 等
-
-# 7-Zip 配置
-SEVENZIP_PATH=C:\Program Files\7-Zip\7z.exe  # Windows
-# SEVENZIP_PATH=/usr/bin/7z  # Linux
-
-# Zstandard 配置
-ZSTD_THREADS=4  # 压缩线程数
-
-# 压缩线程数
-COMPRESSION_THREADS=4
-```
-
-**压缩方法说明**:
-- **pgzip**: 并行 GZip 压缩，生成 `.tar.gz` 文件（默认，推荐）
-- **py7zr**: Python 7-Zip 库，生成 `.7z` 文件
-- **7zip_command**: 调用 7-Zip 命令行工具，生成 `.7z` 文件
-- **tar**: 仅打包不压缩，生成 `.tar` 文件
-- **zstd**: Zstandard 压缩，生成 `.tar.zst` 文件
-
-### 磁带配置
-
-#### ITDT 接口（推荐）
-
-IBM Tape Diagnostic Tool (ITDT) 提供更稳定和标准的磁带操作。
-
-**安装 ITDT**:
-
-- **Windows**: 下载安装包，安装到 `c:\itdt\` 目录
-- **Linux**: 下载安装包，安装到 `/usr/local/itdt/` 目录
-
-**配置**:
-
-```ini
-TAPE_INTERFACE_TYPE=itdt
-ITDT_PATH=c:\itdt\itdt.exe  # Windows
-# ITDT_PATH=/usr/local/itdt/itdt  # Linux
-ITDT_LOG_LEVEL=Information  # Errors|Warnings|Information|Debug
-```
-
-#### SCSI 接口
-
-直接使用 SCSI 命令操作磁带设备：
-
-```ini
-TAPE_INTERFACE_TYPE=scsi
-TAPE_DRIVE_LETTER=O:  # Windows 磁带驱动器盘符
-DEFAULT_BLOCK_SIZE=256KB
-MAX_VOLUME_SIZE=300GB
-```
-
-### 钉钉通知配置
-
-```ini
-DINGTALK_API_URL=http://localhost:5555
-DINGTALK_API_KEY=your-api-key
-DINGTALK_DEFAULT_PHONE=13800000000
-```
-
-## 🎯 主要功能
-
-### 备份管理
-
-- ✅ **创建备份任务** - 支持完整、增量、差异、镜像、归档备份
-- ✅ **实时进度监控** - Web 界面实时显示扫描、压缩、写入进度
-- ✅ **文件分组压缩** - 智能文件分组，单包不超过配置大小
-- ✅ **多源路径支持** - 支持同时备份多个源路径
-- ✅ **排除模式** - 支持通配符排除不需要的文件
-- ✅ **后台扫描** - 扫描与压缩并行执行，提升效率
-- ✅ **内存数据库** - 使用内存数据库加速文件扫描和同步
-
-### 恢复管理
-
-- ✅ **备份集搜索** - 按时间、标签、任务名称搜索备份集
-- ✅ **文件树浏览** - 可视化浏览备份文件结构
-- ✅ **选择性恢复** - 支持选择单个或多个文件/目录恢复
-- ✅ **恢复进度监控** - 实时显示恢复进度和速度
-- ✅ **自动解压** - 根据文件扩展名自动选择解压方法
-
-### 磁带管理
-
-- ✅ **磁带库存管理** - 完整的磁带信息记录和查询
-- ✅ **自动格式化** - 创建磁带时自动格式化（可选）
-- ✅ **标签管理** - 自动生成和管理磁带标签（TPYYYYMMNN 格式）
-- ✅ **生命周期管理** - 自动检测过期磁带，支持自动擦除
-- ✅ **健康监控** - 记录磁带健康分数和使用统计
-- ✅ **设备扫描** - 自动扫描和识别磁带设备
-
-### 计划任务
-
-- ✅ **定时备份** - 支持每日、每周、每月、每年定时执行
-- ✅ **任务模板** - 创建备份任务模板，快速创建任务
-- ✅ **任务历史** - 记录任务执行历史和统计信息
-- ✅ **任务管理** - 支持启用/禁用、立即执行、删除任务
-
-### 系统监控
-
-- ✅ **系统统计** - 备份任务统计、磁带库存统计、存储使用统计
-- ✅ **操作日志** - 详细记录所有操作和状态变更
-- ✅ **系统日志** - 系统运行日志、错误日志、性能日志
-- ✅ **实时监控** - Web 界面实时显示系统状态
-
-## 🔌 API 接口
-
-系统提供完整的 RESTful API 接口：
-
-### 备份管理
-
-- `GET /api/backup/tasks` - 获取备份任务列表
-- `POST /api/backup/tasks` - 创建备份任务
-- `GET /api/backup/tasks/{task_id}` - 获取任务详情
-- `PUT /api/backup/tasks/{task_id}` - 更新任务
-- `DELETE /api/backup/tasks/{task_id}` - 删除任务
-- `POST /api/backup/tasks/{task_id}/run` - 立即执行任务
-- `POST /api/backup/tasks/{task_id}/cancel` - 取消任务
-
-### 恢复管理
-
-- `GET /api/recovery/sets` - 搜索备份集
-- `GET /api/recovery/sets/{set_id}/files` - 获取备份集文件列表
-- `GET /api/recovery/sets/{set_id}/groups` - 获取备份组列表
-- `POST /api/recovery/restore` - 创建恢复任务
-
-### 磁带管理
-
-- `GET /api/tape/list` - 获取磁带列表
-- `POST /api/tape/create` - 创建磁带记录
-- `PUT /api/tape/update/{tape_id}` - 更新磁带信息
-- `GET /api/tape/show/{tape_id}` - 获取磁带详情
-- `POST /api/tape/format` - 格式化磁带
-- `POST /api/tape/erase` - 擦除磁带
-- `GET /api/tape/inventory` - 获取磁带库存统计
-
-### 计划任务
-
-- `GET /api/scheduler/tasks` - 获取计划任务列表
-- `POST /api/scheduler/tasks` - 创建计划任务
-- `PUT /api/scheduler/tasks/{task_id}` - 更新计划任务
-- `DELETE /api/scheduler/tasks/{task_id}` - 删除计划任务
-- `POST /api/scheduler/tasks/{task_id}/run` - 立即执行任务
-- `POST /api/scheduler/tasks/{task_id}/enable` - 启用任务
-- `POST /api/scheduler/tasks/{task_id}/disable` - 禁用任务
-
-### 系统管理
-
-- `GET /api/system/statistics` - 获取系统统计信息
-- `GET /api/system/logs` - 查询系统日志
-- `GET /api/system/database/config` - 获取数据库配置
-- `PUT /api/system/database/config` - 更新数据库配置
-- `POST /api/system/database/test` - 测试数据库连接
-
-详细的 API 文档请参考代码中的接口定义或使用 FastAPI 自动生成的文档：`http://localhost:8080/docs`
-
-## 🧪 测试
-
-运行测试套件：
+<details>
+<summary><b>运行测试</b></summary>
 
 ```bash
 # 运行所有测试
-pytest
+pytest -v
 
 # 运行特定测试文件
-pytest tests/test_backup.py
+pytest tests/test_backup.py -v
 
-# 运行测试并生成覆盖率报告
+# 生成覆盖率报告
 pytest --cov=. --cov-report=html
-
-# 运行测试并显示详细输出
-pytest -v
 ```
 
-## 🐛 故障排除
+</details>
 
-### 常见问题
+<details>
+<summary><b>常见问题</b></summary>
 
-#### 1. 数据库连接失败
+**Q: 数据库连接失败？**
+```bash
+# 检查 openGauss 状态
+gs_ctl status -D /path/to/data
 
-**问题**: 启动时提示数据库连接失败
-
-**解决方案**:
-- 检查数据库服务是否运行
-- 验证 `.env` 文件中的连接参数
-- 使用 Web 界面的"测试连接"功能验证配置
-- 检查防火墙和网络连接
-- 确认数据库用户权限
-
-#### 2. 磁带设备无法识别
-
-**问题**: 系统无法检测到磁带设备
-
-**解决方案**:
-- 检查磁带驱动器物理连接
-- 确认设备驱动已正确安装
-- 检查设备权限（Linux 需要用户组权限）
-- 尝试使用 ITDT 接口（更稳定）
-- 查看系统日志获取详细错误信息
-
-#### 3. 压缩失败
-
-**问题**: 压缩过程中出现错误
-
-**解决方案**:
-- 检查临时目录权限和磁盘空间
-- 验证压缩工具安装（7-Zip、Zstandard 等）
-- 检查 `COMPRESSION_METHOD` 配置是否正确
-- 查看压缩日志获取详细错误信息
-- 尝试切换压缩方法（如从 7zip 切换到 pgzip）
-
-#### 4. 同步持续时间显示为 0.0 秒
-
-**问题**: 内存数据库同步时显示持续时间为 0.0 秒
-
-**解决方案**:
-- 此问题已在 v0.1.20 版本修复
-- 确保使用最新版本代码
-- 检查 `backup/memory_db_writer.py` 中的 `_sync_start_time` 设置
-
-#### 5. SQLAlchemy 相关错误
-
-**问题**: 提示 SQLAlchemy 相关错误
-
-**解决方案**:
-- 系统已完全移除 SQLAlchemy ORM，使用原生 SQL
-- 如果遇到相关错误，请检查代码是否使用了旧的 ORM 方法
-- 确保使用 `get_opengauss_connection()` 或 `get_sqlite_connection()` 获取连接
-
-## 📚 文档
-
-- [系统架构文档](docs/系统架构.md) - 详细的系统架构说明
-- [使用说明](docs/使用说明.md) - 用户使用指南
-- [开发说明](docs/开发说明.md) - 开发者指南
-- [数据库配置说明](docs/数据库配置说明.md) - 数据库配置详细说明
-- [ITDT集成方案](docs/ITDT集成方案.md) - ITDT 集成详细说明
-- [版本更新日志](CHANGELOG.md) - 完整的版本更新历史
-
-## 🛠️ 开发指南
-
-### 添加新的压缩方法
-
-1. 在 `backup/compressor.py` 中添加新的压缩函数
-2. 在 `config/settings.py` 中添加配置项
-3. 在 Web 界面的压缩配置中添加选项
-4. 更新恢复引擎以支持解压
-
-### 添加新的 API 接口
-
-1. 在 `web/api/` 目录下创建或修改 API 文件
-2. 使用 FastAPI 定义路由和请求/响应模型
-3. 在 `web/app.py` 中注册路由
-4. 添加相应的前端页面（如需要）
-
-### 数据库操作规范
-
-**重要**: 系统已完全移除 SQLAlchemy ORM，所有数据库操作必须使用原生 SQL。
-
-**openGauss 示例**:
-
-```python
-from utils.scheduler.db_utils import get_opengauss_connection
-
-async with get_opengauss_connection() as conn:
-    row = await conn.fetchrow(
-        "SELECT * FROM backup_tasks WHERE id = $1",
-        task_id
-    )
+# 测试连接
+gsql -d taf_backup -U taf_user -h localhost
 ```
 
-**SQLite 示例**:
+**Q: 磁带设备无法识别？**
+```bash
+# 扫描 SCSI 设备
+lsscsi -g
 
-```python
-from utils.scheduler.sqlite_utils import get_sqlite_connection
+# 查看磁带设备
+ls -la /dev/nst* /dev/sg*
 
-async with get_sqlite_connection() as conn:
-    cursor = await conn.execute(
-        "SELECT * FROM backup_tasks WHERE id = ?",
-        (task_id,)
-    )
-    row = await cursor.fetchone()
+# 设置权限
+sudo chmod 666 /dev/nst0 /dev/sg2
 ```
 
-## 🤝 贡献指南
+**Q: LTFS 挂载失败？**
+```bash
+# 检查 LTFS 安装
+which mkltfs ltfs
 
-欢迎贡献代码！请遵循以下步骤：
+# 检查磁带状态
+mt -f /dev/nst0 status
+```
 
-1. Fork 本项目
-2. 创建特性分支 (`git checkout -b feature/AmazingFeature`)
-3. 提交更改 (`git commit -m '添加新功能: AmazingFeature'`)
-4. 推送到分支 (`git push origin feature/AmazingFeature`)
-5. 创建 Pull Request
-
-### 代码规范
-
-- 使用 Python 3.8+ 语法
-- 遵循 PEP 8 代码风格
-- 添加适当的注释和文档字符串
-- 编写单元测试
-- 确保所有测试通过
-
-## 📄 许可证
-
-本项目采用 MIT 许可证。详见 [LICENSE](LICENSE) 文件。
-
-## 📞 联系方式
-
-- **项目地址**: https://github.com/grigs28/TAF
-- **问题反馈**: 请在 GitHub Issues 中提交
-- **功能建议**: 欢迎提交 Pull Request
-
-## 🎉 致谢
-
-感谢所有为本项目做出贡献的开发者和用户！
+</details>
 
 ---
 
-**企业级磁带备份系统** - 让数据备份更简单、更可靠、更高效
+## English Documentation
 
-版本: v0.1.21 | 最后更新: 2025-01-20
+<details>
+<summary><b>Project Overview</b></summary>
+
+**TAF (Tape Archive File)** is an enterprise-level tape backup system built in Python, designed exclusively for **Linux** platforms and developed on **openEuler**. The system provides intelligent backup strategies, tape lifecycle management, LTFS filesystem support, and comprehensive RESTful APIs.
+
+### Key Features
+
+- **Intelligent Backup Strategies** - Full, Incremental, Differential, Mirror, Archive backups
+- **Multiple Compression Algorithms** - Zstandard, PGZip, 7-Zip, Tar
+- **Tape Lifecycle Management** - Automated inventory, format, erase, expiration
+- **Scheduled Task Management** - Cron-style scheduled backups
+- **Modern Web Interface** - Dark tech-themed, responsive design
+- **openGauss Database** - Production-grade database with native SQL
+- **High Performance** - Async processing, batch operations, connection pooling
+- **DingTalk/WeChat Notifications** - Real-time backup status and alerts
+- **LTFS Support** - Linux LTFS tape filesystem
+- **SMB Network Paths** - Backup from SMB/CIFS network shares
+
+</details>
+
+<details>
+<summary><b>System Requirements</b></summary>
+
+| Component | Requirement | Notes |
+|-----------|-------------|-------|
+| **OS** | Linux (openEuler 22+ / Ubuntu 20.04+ / CentOS 7+) | Linux only |
+| **Python** | 3.8+ | Conda recommended |
+| **Database** | openGauss 5.x+ | Required for production |
+| **Memory** | 4GB+ | 8GB recommended |
+| **Disk Space** | 50GB+ | For temp files and logs |
+| **Tape Drive** | LTO Drive (SCSI) | LTO-4 and above |
+
+**Optional Components**:
+- Redis - High-performance task storage and caching
+- LTFS - Tape filesystem support
+- 7-Zip - 7z compression format support
+
+</details>
+
+<details>
+<summary><b>Quick Start</b></summary>
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/yourusername/TAF.git
+cd TAF
+
+# 2. Create Python environment
+conda create -n taf python=3.9
+conda activate taf
+
+# 3. Install dependencies
+pip install -r requirements.txt
+pip install aiosqlite zstandard
+
+# 4. Configure openGauss database
+sudo su - omm
+gsql -d postgres
+CREATE DATABASE taf_backup;
+CREATE USER taf_user WITH PASSWORD 'your_password';
+GRANT ALL PRIVILEGES ON DATABASE taf_backup TO taf_user;
+ALTER USER taf_user WITH SYSID;
+
+# 5. Configure environment variables
+cp .env.sample .env
+# Edit .env file to set database connection and other configs
+
+# 6. Start the system
+python main.py
+
+# 7. Access Web UI
+# http://localhost:8080
+```
+
+</details>
+
+<details>
+<summary><b>Environment Variables</b></summary>
+
+```ini
+# openGauss Database Configuration
+DATABASE_URL=opengauss://taf_user:password@localhost:5432/taf_backup
+DB_HOST=localhost
+DB_PORT=5432
+DB_USER=taf_user
+DB_PASSWORD=password
+DB_DATABASE=taf_backup
+
+# Connection Pool Configuration
+DB_POOL_SIZE=40
+DB_MAX_OVERFLOW=80
+DB_POOL_TIMEOUT=30.0
+
+# Web Service Configuration
+WEB_PORT=8080
+WEB_HOST=0.0.0.0
+
+# Compression Configuration
+COMPRESSION_METHOD=zstd
+COMPRESSION_THREADS=4
+
+# Tape Device Configuration (Linux)
+TAPE_DEVICE_PATH=/dev/nst0
+SG_DEVICE_PATH=/dev/sg2
+
+# LTFS Configuration
+LTFS_BINARY_PATH=/usr/local/bin/ltfs
+LTFS_MOUNT_POINT=/mnt/ltfs
+
+# DingTalk Notification Configuration
+DINGTALK_API_URL=http://localhost:5555
+DINGTALK_API_KEY=your-api-key
+DINGTALK_DEFAULT_PHONE=13800000000
+
+# WeChat Notification Configuration (Optional)
+WECHAT_WEBHOOK_URL=https://qyapi.weixin.qq.com/cgi-bin/web/send
+WECHAT_ENABLED=false
+WECHAT_REPORT_INTERVAL=30
+
+# SMB/CIFS Network Path Configuration
+SMB_USERNAME=administrator
+SMB_PASSWORD=your-password
+SMB_DOMAIN=DOMAIN
+SMB_MOUNT_BASE=/mnt/smb
+```
+
+</details>
+
+<details>
+<summary><b>Project Structure</b></summary>
+
+```
+TAF/
+├── main.py                      # Main entry point
+├── requirements.txt             # Python dependencies
+├── .env.sample                  # Environment config template
+├── CHANGELOG.md                 # Version changelog
+├── CLAUDE.md                    # Claude AI development guide
+│
+├── config/                      # Configuration management
+│   ├── settings.py              # System settings
+│   ├── database.py              # Database connection manager
+│   ├── database_init.py         # Database initialization
+│   ├── redis_db.py              # Redis connection manager
+│   └── config_manager.py        # Configuration manager
+│
+├── models/                      # Data models
+│   ├── backup.py                # Backup task and set models
+│   ├── tape.py                  # Tape models
+│   ├── scheduled_task.py        # Scheduled task models
+│   ├── user.py                  # User models
+│   ├── system_log.py            # System log models
+│   ├── system_config.py         # System config models
+│   ├── data_classes.py          # Data class definitions
+│   ├── notification_user.py     # Notification user models
+│   └── base.py                  # Base model class
+│
+├── backup/                      # Backup processing module
+│   ├── backup_engine.py         # Backup engine (main controller)
+│   ├── compressor.py            # Compression processor
+│   ├── compression_worker.py    # Parallel compression worker
+│   ├── backup_db.py             # Backup database operations
+│   ├── file_scanner.py          # File scanner
+│   ├── tape_handler.py          # Tape handler
+│   ├── memory_db_writer.py      # In-memory database writer
+│   ├── file_group_prefetcher.py # File group prefetcher
+│   ├── final_dir_monitor.py     # Final directory monitor
+│   ├── backup_scanner.py        # Backup scan coordinator
+│   ├── backup_task_manager.py   # Backup task manager
+│   ├── backup_notifier.py       # Backup notifier
+│   ├── concurrent_dir_scanner.py # Parallel directory scanner
+│   ├── sequential_dir_scanner.py # Sequential directory scanner
+│   ├── file_move_worker.py      # File move worker
+│   └── utils.py                 # Backup utility functions
+│
+├── tape/                        # Tape management module
+│   ├── tape_manager.py          # Tape manager
+│   ├── tape_operations.py       # Tape operations
+│   └── tape_cartridge.py        # Tape cartridge class
+│
+├── utils/                       # Utility modules
+│   ├── scheduler/               # Scheduled task scheduler
+│   │   ├── scheduler.py         # Task scheduler
+│   │   ├── task_storage.py      # Task storage (openGauss)
+│   │   ├── task_executor.py     # Task executor
+│   │   ├── task_status_checker.py # Task status checker
+│   │   ├── task_unlocker.py     # Task lock releaser
+│   │   ├── schedule_calculator.py # Schedule calculator
+│   │   ├── action_handlers.py   # Action handlers
+│   │   ├── db_utils.py          # Database utility functions
+│   │   └── redis_task_storage.py # Redis task storage
+│   ├── opengauss/               # openGauss related
+│   │   └── guard.py            # openGauss connection guard
+│   ├── linux_tape.py            # Linux native tape operations
+│   ├── libltfs_wrapper.py       # LTFS wrapper
+│   ├── tape_tools.py            # Tape tools collection
+│   ├── dingtalk_notifier.py     # DingTalk notifier
+│   ├── wechat_notifier.py       # WeChat notifier
+│   ├── network_path.py          # Network path handler
+│   ├── log_utils.py             # Logging utilities
+│   ├── datetime_utils.py        # Date/time utilities
+│   └── production_guard.py      # Production environment guard
+│
+├── recovery/                    # Recovery module
+│   └── recovery_engine.py       # Recovery engine
+│
+├── web/                         # Web application
+│   ├── app.py                   # FastAPI application entry
+│   ├── api/                     # RESTful API
+│   │   ├── backup/              # Backup management API
+│   │   │   ├── operations.py    # Backup operations
+│   │   │   ├── sets.py          # Backup sets
+│   │   │   ├── tasks_*.py       # Task CRUD
+│   │   │   └── backup_statistics.py
+│   │   ├── tape/                # Tape management API
+│   │   │   ├── device.py        # Device management
+│   │   │   ├── operations.py    # Tape operations
+│   │   │   ├── label.py         # Label management
+│   │   │   ├── tape_*.py        # Tape CRUD
+│   │   │   └── tape_statistics.py
+│   │   ├── scheduler.py         # Scheduled task API
+│   │   ├── system/              # System management API
+│   │   │   ├── database.py      # Database config
+│   │   │   ├── logs.py          # Log query
+│   │   │   ├── statistics.py    # System statistics
+│   │   │   ├── notification.py  # Notification config
+│   │   │   ├── env_config.py    # Environment config
+│   │   │   └── file_system.py   # File system
+│   │   ├── recovery.py          # Recovery management API
+│   │   ├── wechat.py            # WeChat API
+│   │   └── tools.py             # Tools API
+│   ├── middleware/              # Middleware
+│   ├── templates/               # HTML templates
+│   └── static/                  # Static resources (CSS/JS)
+│
+├── scripts/                     # Script utilities
+├── services/                    # Service modules
+├── tests/                       # Test cases
+├── docs/                        # Documentation
+├── logs/                        # Log directory
+└── temp/                        # Temporary files directory
+    ├── backup/                  # Backup temp directory
+    ├── compress/                # Compression temp directory
+    ├── output/                  # Output directory
+    └── recovery/                # Recovery temp directory
+```
+
+</details>
+
+<details>
+<summary><b>API Documentation</b></summary>
+
+The system provides complete RESTful APIs with interactive documentation:
+
+- **Swagger UI**: http://localhost:8080/docs
+- **ReDoc**: http://localhost:8080/redoc
+
+**Main API Endpoints**:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET/POST | `/api/backup/tasks` | Backup task CRUD |
+| POST | `/api/backup/tasks/{id}/run` | Execute task immediately |
+| GET | `/api/recovery/sets` | Search backup sets |
+| POST | `/api/recovery/restore` | Create recovery task |
+| GET/POST | `/api/tape/*` | Tape management operations |
+| GET/POST | `/api/scheduler/tasks` | Scheduled task management |
+| GET | `/api/system/statistics` | System statistics |
+
+</details>
+
+<details>
+<summary><b>Running Tests</b></summary>
+
+```bash
+# Run all tests
+pytest -v
+
+# Run specific test file
+pytest tests/test_backup.py -v
+
+# Generate coverage report
+pytest --cov=. --cov-report=html
+```
+
+</details>
+
+<details>
+<summary><b>Troubleshooting</b></summary>
+
+**Q: Database connection failed?**
+```bash
+# Check openGauss status
+gs_ctl status -D /path/to/data
+
+# Test connection
+gsql -d taf_backup -U taf_user -h localhost
+```
+
+**Q: Tape device not detected?**
+```bash
+# Scan SCSI devices
+lsscsi -g
+
+# List tape devices
+ls -la /dev/nst* /dev/sg*
+
+# Set permissions
+sudo chmod 666 /dev/nst0 /dev/sg2
+```
+
+**Q: LTFS mount failed?**
+```bash
+# Check LTFS installation
+which mkltfs ltfs
+
+# Check tape status
+mt -f /dev/nst0 status
+```
+
+</details>
+
+---
+
+## 技术架构 | Architecture
+
+### 分层架构 | Layered Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│  Web Layer (FastAPI + Jinja2)                          │
+├─────────────────────────────────────────────────────────┤
+│  Business Logic Layer (Backup, Recovery, Scheduler)    │
+├─────────────────────────────────────────────────────────┤
+│  Data Access Layer (Native SQL + Connection Pool)      │
+├─────────────────────────────────────────────────────────┤
+│  Hardware Layer (LTFS, SCSI, Tape Drive)               │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 备份数据流 | Backup Data Flow
+
+```
+Source Files → FileScanner → MemoryDBWriter (in-memory SQLite)
+                                    ↓
+                        Batch sync to openGauss
+                                    ↓
+        CompressionWorker ← FileGroupPrefetcher
+                ↓
+          Compressor (zstd/pgzip)
+                ↓
+    temp/output/ → FinalDirMonitor → TapeHandler → Tape
+```
+
+### 关键技术 | Key Technologies
+
+- **FastAPI** - 现代化 Web 框架 | Modern web framework
+- **openGauss** - 企业级数据库 | Enterprise-grade database
+- **asyncpg** - 异步 PostgreSQL 连接 | Async PostgreSQL adapter
+- **LTFS** - 磁带文件系统 | Tape filesystem
+- **Zstandard** - 高性能压缩 | High-performance compression
+
+---
+
+## 开发指南 | Development Guide
+
+### 添加压缩方法 | Add Compression Method
+
+1. 在 `backup/compressor.py` 添加压缩函数 | Add compression function
+2. 在 `config/settings.py` 添加配置 | Add configuration
+3. 更新 `recovery/recovery_engine.py` 支持解压 | Update recovery engine
+
+### 添加 API 端点 | Add API Endpoint
+
+1. 在 `web/api/` 创建/修改文件 | Create/modify file
+2. 定义 FastAPI 路由和模型 | Define route and models
+3. 在 `web/app.py` 注册路由 | Register route
+
+---
+
+## 版本历史 | Version History
+
+当前版本 | Current Version: **v0.2.3**
+
+详见 | See [CHANGELOG.md](CHANGELOG.md)
+
+---
+
+## 许可证 | License
+
+MIT License - 详见 | See [LICENSE](LICENSE)
+
+---
+
+## 贡献 | Contributing
+
+欢迎贡献！请遵循 | Welcome contributions! Please follow:
+
+1. Fork 项目 | Fork the project
+2. 创建特性分支 | Create feature branch
+3. 提交更改 | Commit changes
+4. 推送到分支 | Push to branch
+5. 创建 Pull Request | Create Pull Request
+
+---
+
+## 联系方式 | Contact
+
+- **项目地址 | Repository**: https://github.com/yourusername/TAF
+- **问题反馈 | Issues**: GitHub Issues
+- **开发平台 | Development Platform**: openEuler 22.03 LTS
+
+---
+
+## 致谢 | Acknowledgments
+
+- **openEuler** - 企业级 Linux 操作系统 | Enterprise Linux OS
+- **openGauss** - 企业级数据库 | Enterprise database
+- **FastAPI** - 现代化 Web 框架 | Modern web framework
+- **LTFS** - 磁带文件系统 | Tape filesystem
+
+---
+
+<div align="center">
+
+**TAF - Enterprise Tape Backup System for Linux**
+
+*Designed on openEuler, Built for openGauss*
+
+在 openEuler 上设计，为 openGauss 构建
+
+</div>
+# TAF-OpenEuler

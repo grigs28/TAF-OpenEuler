@@ -197,8 +197,7 @@ async def get_system_logs(
                 
         else:
             # 检查是否为Redis数据库
-            from utils.scheduler.db_utils import is_redis
-            from utils.scheduler.sqlite_utils import is_sqlite, get_sqlite_connection
+            from utils.scheduler.db_utils import is_redis, is_sqlite, get_sqlite_connection
             
             if is_redis():
                 # Redis模式下不返回日志（Redis没有日志表）

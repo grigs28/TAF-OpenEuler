@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 
 from config.settings import get_settings
 from utils.logger import get_logger
-from web.api import backup, recovery, tape, system, user, scheduler, tools
+from web.api import backup, recovery, tape, system, user, scheduler, tools, wechat
 # system、tape 和 backup 现在已经是模块包，直接导入 router
 from web.middleware.auth_middleware import AuthMiddleware
 from web.middleware.logging_middleware import LoggingMiddleware
@@ -184,6 +184,7 @@ def create_app(system_instance=None) -> FastAPI:
     app.include_router(user.router, prefix="/api/user", tags=["用户管理"])
     app.include_router(scheduler.router, prefix="/api/scheduler", tags=["计划任务管理"])
     app.include_router(tools.router, tags=["工具管理"])
+    app.include_router(wechat.router, tags=["微信通知"])
 
     @app.get("/health")
     async def health_check():

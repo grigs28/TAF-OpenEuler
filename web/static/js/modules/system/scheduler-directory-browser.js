@@ -13,31 +13,73 @@ export class DirectoryBrowser {
     constructor() {
         this.browserType = null; // 'backup', 'backup_target', 'recovery'
         this.currentBrowserPath = null;
+        this.eventsInitialized = false; // 标记事件是否已初始化
+        this.modalInstance = null; // 缓存模态框实例
     }
-    
+
     /**
      * 显示目录浏览器
      */
     async showDirectoryBrowser(type) {
         this.browserType = type;
         this.currentBrowserPath = null;
-        
+
         // 打开模态框
         const modalEl = document.getElementById('directoryBrowserModal');
-        const modal = new bootstrap.Modal(modalEl);
+
+        // 获取或创建模态框实例（避免重复创建）
+        this.modalInstance = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+
         // 确保隐藏时移除焦点，避免 aria-hidden 焦点保留
         modalEl.addEventListener('hidden.bs.modal', () => {
             if (document.activeElement) {
                 document.activeElement.blur();
             }
         }, { once: true });
-        modal.show();
-        
+
+        // 重置目录列表为初始状态
+        const container = document.getElementById('directoryItemsList');
+        if (container) {
+            container.innerHTML = `
+                <div class="text-center text-muted py-5">
+                    <i class="bi bi-folder-x display-4 d-block mb-3"></i>
+                    <p>请选择驱动器或输入网络路径</p>
+                </div>
+            `;
+        }
+
+        // 清空选中的路径
+        const selectedPathInput = document.getElementById('selectedPathInput');
+        if (selectedPathInput) {
+            selectedPathInput.value = '';
+        }
+
+        // 清空网络路径输入框
+        const networkPathInput = document.getElementById('networkPathInput');
+        if (networkPathInput) {
+            networkPathInput.value = '';
+        }
+
+        // 清空当前路径显示
+        const browserCurrentPath = document.getElementById('browserCurrentPath');
+        if (browserCurrentPath) {
+            browserCurrentPath.value = '';
+        }
+
+        // 重置面包屑
+        this.updateBreadcrumb(null);
+
+        // 显示模态框
+        this.modalInstance.show();
+
         // 加载驱动器列表
         await this.loadDrives();
-        
-        // 设置事件监听
-        this.setupDirectoryBrowserEvents();
+
+        // 只在第一次设置事件监听（避免重复绑定）
+        if (!this.eventsInitialized) {
+            this.setupDirectoryBrowserEvents();
+            this.eventsInitialized = true;
+        }
     }
     
     /**
@@ -76,17 +118,19 @@ export class DirectoryBrowser {
     
     /**
      * 浏览目录
+     * @param {string} path - 要浏览的路径
+     * @param {boolean} rethrowOnError - 是否在错误时重新抛出异常（用于外部处理错误显示）
      */
-    async browseDirectory(path) {
+    async browseDirectory(path, rethrowOnError = false) {
         try {
             this.currentBrowserPath = path;
             document.getElementById('browserCurrentPath').value = path;
             document.getElementById('selectedPathInput').value = path;
             this.updateBreadcrumb(path);
-            
+
             const response = await SchedulerAPI.browseDirectory(path);
             this.renderDirectoryItems(response.items || []);
-            
+
         } catch (error) {
             console.error('浏览目录失败:', error);
             if (error.response?.status === 403) {
@@ -95,6 +139,10 @@ export class DirectoryBrowser {
                 showMessage('路径不存在', 'error');
             } else {
                 showMessage('浏览目录失败', 'error');
+            }
+            // 如果需要外部处理错误显示，重新抛出异常
+            if (rethrowOnError) {
+                throw error;
             }
         }
     }
@@ -297,8 +345,60 @@ export class DirectoryBrowser {
     updateBreadcrumb(path) {
         const breadcrumb = document.getElementById('currentPathBreadcrumb');
         if (!breadcrumb) return;
-        
+
         breadcrumb.textContent = path || '-';
+    }
+
+    /**
+     * 渲染网络路径错误信息
+     */
+    renderNetworkPathError(path, error) {
+        const container = document.getElementById('directoryItemsList');
+        if (!container) return;
+
+        // 获取错误消息
+        let errorMsg = '未知错误';
+        if (error.response?.data?.detail) {
+            errorMsg = error.response.data.detail;
+        } else if (error.message) {
+            errorMsg = error.message;
+        }
+
+        // 创建错误提示元素
+        container.innerHTML = '';
+
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'text-center py-5';
+
+        const icon = document.createElement('i');
+        icon.className = 'bi bi-exclamation-triangle text-warning display-4 d-block mb-3';
+        errorDiv.appendChild(icon);
+
+        const titleP = document.createElement('p');
+        titleP.className = 'text-warning mb-2';
+        titleP.textContent = '无法浏览网络路径';
+        errorDiv.appendChild(titleP);
+
+        const pathP = document.createElement('p');
+        pathP.className = 'text-info small mb-2';
+        pathP.style.wordBreak = 'break-all';
+        pathP.textContent = path;
+        errorDiv.appendChild(pathP);
+
+        const errorP = document.createElement('p');
+        errorP.className = 'text-muted small mb-3';
+        errorP.textContent = errorMsg;
+        errorDiv.appendChild(errorP);
+
+        const hintP = document.createElement('p');
+        hintP.className = 'text-muted small';
+        const hintIcon = document.createElement('i');
+        hintIcon.className = 'bi bi-info-circle me-1';
+        hintP.appendChild(hintIcon);
+        hintP.appendChild(document.createTextNode('路径已保留，您可以点击"确定"按钮使用此路径，或检查网络连接和SMB配置后重试'));
+        errorDiv.appendChild(hintP);
+
+        container.appendChild(errorDiv);
     }
     
     /**
@@ -318,14 +418,34 @@ export class DirectoryBrowser {
         // 添加网络路径按钮
         const addNetworkBtn = document.getElementById('addNetworkPathBtn');
         if (addNetworkBtn) {
-            addNetworkBtn.onclick = () => {
+            addNetworkBtn.onclick = async () => {
                 const networkPath = document.getElementById('networkPathInput').value.trim();
                 if (networkPath) {
                     // 验证网络路径格式
                     if (networkPath.startsWith('\\\\') || networkPath.startsWith('//') || networkPath.startsWith('smb://')) {
-                        document.getElementById('selectedPathInput').value = networkPath;
-                        document.getElementById('browserCurrentPath').value = networkPath;
-                        this.updateBreadcrumb(networkPath);
+                        // 规范化路径：将 // 和 smb:// 转换为 \\ 格式
+                        let normalizedPath = networkPath;
+                        if (networkPath.startsWith('smb://')) {
+                            normalizedPath = '\\\\' + networkPath.substring(6).replace(/\//g, '\\');
+                        } else if (networkPath.startsWith('//')) {
+                            normalizedPath = '\\\\' + networkPath.substring(2).replace(/\//g, '\\');
+                        }
+
+                        document.getElementById('networkPathInput').value = normalizedPath;
+                        document.getElementById('selectedPathInput').value = normalizedPath;
+                        document.getElementById('browserCurrentPath').value = normalizedPath;
+                        this.updateBreadcrumb(normalizedPath);
+
+                        // 尝试浏览该网络路径（rethrowOnError=true 以便捕获错误并显示详细信息）
+                        try {
+                            await this.browseDirectory(normalizedPath, true);
+                        } catch (error) {
+                            console.error('浏览网络路径失败:', error);
+                            // 在右侧显示错误信息
+                            this.renderNetworkPathError(normalizedPath, error);
+                            // 即使浏览失败，也保留路径让用户可以确认使用
+                            showMessage('无法浏览该网络路径，但您仍可以确认使用此路径', 'warning');
+                        }
                     } else {
                         showMessage('请输入正确的网络路径格式（如 \\\\server\\share 或 //server/share）', 'error');
                     }

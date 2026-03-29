@@ -383,7 +383,6 @@ class TaskScheduler:
             
             # 更新数据库中的下次执行时间
             from utils.scheduler.db_utils import is_redis
-            from utils.scheduler.sqlite_utils import is_sqlite
             from utils.scheduler.redis_task_storage import update_task_redis
             
             if is_redis():
@@ -562,19 +561,20 @@ class TaskScheduler:
             # 如果任务不在内存中，强制加载（忽略 enabled 状态）
             if task_id not in self.tasks:
                 # 手动运行时，即使任务未启用也允许运行
-                # 先尝试正常加载，如果因为未启用而跳过，则强制加载
+                # 先尝试正常加载，如果因为未启用或时间已过而跳过，则强制加载
                 load_result = await self._load_task(task)
-                if load_result == 'skipped' and not task.enabled:
-                    # 任务未启用，但手动运行允许执行，强制加载到内存
-                    logger.info(f"[手动运行] 任务未启用，但允许手动运行，强制加载到内存 - ID: {task_id}, 名称: {task.task_name}")
+
+                if load_result == 'skipped':
+                    # 任务被跳过（可能是因为未启用或执行时间已过），但手动运行允许执行，强制加载到内存
+                    logger.info(f"[手动运行] 任务被跳过，但允许手动运行，强制加载到内存 - ID: {task_id}, 名称: {task.task_name}, 跳过原因: {'未启用' if not task.enabled else '执行时间已过'}")
                     # 计算下次执行时间
                     next_run = calculate_next_run_time(task)
                     if not next_run:
-                        # 如果无法计算下次执行时间，使用当前时间作为下次执行时间（仅用于手动运行）
+                        # 如果无法计算下次执行时间（比如一次性任务时间已过），使用当前时间作为下次执行时间（仅用于手动运行）
                         from datetime import datetime
                         next_run = datetime.now()
                         logger.debug(f"[手动运行] 无法计算下次执行时间，使用当前时间: {next_run}")
-                    
+
                     # 创建任务执行函数（手动运行标记为True）
                     execute_func = create_task_executor(
                         task,
@@ -886,7 +886,7 @@ class TaskScheduler:
                 
                 # 每分钟检查一次
                 await asyncio.sleep(360)
-                
+
             except asyncio.CancelledError:
                 logger.info("[调度器主循环] 收到取消信号，退出主循环")
                 break

@@ -8,10 +8,9 @@ Backup Statistics API - SQLite Support
 import logging
 from typing import Dict, Any
 from datetime import datetime, timedelta
-from utils.scheduler.sqlite_utils import get_sqlite_connection
 from models.backup import BackupTask, BackupTaskStatus
 from models.scheduled_task import ScheduledTask, TaskActionType
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
+from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +19,6 @@ async def get_backup_statistics() -> Dict[str, Any]:
     """获取备份统计信息（支持 SQLite、openGauss、Redis）"""
     try:
         from utils.scheduler.db_utils import is_redis
-        from utils.scheduler.sqlite_utils import is_sqlite
         
         if is_redis():
             return await _get_backup_statistics_redis()

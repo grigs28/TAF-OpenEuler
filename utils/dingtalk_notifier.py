@@ -175,6 +175,42 @@ class DingTalkNotifier:
                 'message': f'发送异常: {str(e)}'
             }
 
+    def send_message_sync(self, phone: str, title: str, content: str,
+                          message_type: str = "markdown") -> Dict[str, Any]:
+        """发送单条消息（同步版本，用于在线程中调用）"""
+        import requests
+
+        try:
+            url = f"{self.api_url}/api/v1/messages/send"
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+
+            payload = {
+                "phone": phone,
+                "title": title,
+                "content": content,
+                "message_type": message_type
+            }
+
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+            result = response.json()
+
+            if result.get('success'):
+                logger.info(f"钉钉消息发送成功: {title} -> {phone}")
+            else:
+                logger.error(f"钉钉消息发送失败: {result.get('message', '未知错误')}")
+
+            return result
+
+        except Exception as e:
+            logger.error(f"发送钉钉消息异常: {str(e)}")
+            return {
+                'success': False,
+                'message': f'发送异常: {str(e)}'
+            }
+
     async def send_backup_notification(self, backup_name: str, status: str,
                                      details: Optional[Dict] = None):
         """发送备份通知"""
@@ -378,6 +414,52 @@ class DingTalkNotifier:
                 return
             
             await self.send_message(self.default_phone, title, content)
+        except Exception as e:
+            logger.error(f"发送磁带格式化通知失败: {str(e)}")
+
+    def send_tape_format_notification_sync(self, tape_id: str, status: str,
+                                           error_detail: Optional[str] = None,
+                                           volume_label: Optional[str] = None,
+                                           serial_number: Optional[str] = None):
+        """发送磁带格式化通知（同步版本，用于在线程中调用）"""
+        # 检查是否应该发送通知
+        if status == "failed" and not self._should_send_notification("notify_tape_error"):
+            logger.debug("磁带格式化失败通知已禁用")
+            return
+
+        try:
+            if status == "success":
+                title = "✅ 磁带格式化完成"
+                content = f"""## 磁带格式化完成通知
+
+**磁带ID**: {tape_id}
+**状态**: 格式化成功
+**完成时间**: {format_datetime(now())}
+"""
+                if volume_label:
+                    content += f"**卷标**: {volume_label}\n"
+                if serial_number:
+                    content += f"**序列号**: {serial_number}\n"
+                content += "\n磁带已成功格式化，可以正常使用。"
+            elif status == "failed":
+                title = "❌ 磁带格式化失败"
+                content = f"""## 磁带格式化失败通知
+
+**磁带ID**: {tape_id}
+**状态**: 格式化失败
+**失败时间**: {format_datetime(now())}
+"""
+                if volume_label:
+                    content += f"**卷标**: {volume_label}\n"
+                if serial_number:
+                    content += f"**序列号**: {serial_number}\n"
+                if error_detail:
+                    content += f"\n**错误详情**:\n```\n{error_detail}\n```\n"
+                content += "\n请检查设备状态和磁带是否正确加载。"
+            else:
+                return
+
+            self.send_message_sync(self.default_phone, title, content)
         except Exception as e:
             logger.error(f"发送磁带格式化通知失败: {str(e)}")
 

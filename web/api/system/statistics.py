@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from config.database import db_manager
 from models.backup import BackupTask, BackupSet, BackupTaskStatus, BackupSetStatus
 from models.tape import TapeCartridge as TapeCartridgeModel, TapeStatus
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
+from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -103,7 +103,6 @@ async def _get_backup_tasks_statistics() -> Dict[str, Any]:
                 }
         else:
             # 使用原生SQL查询（SQLite）
-            from utils.scheduler.sqlite_utils import get_sqlite_connection
             
             async with get_sqlite_connection() as conn:
                 # 查询运行中的任务
@@ -186,7 +185,6 @@ async def _get_tape_inventory_statistics() -> Dict[str, Any]:
                 }
         else:
             # 使用原生SQL查询（SQLite）
-            from utils.scheduler.sqlite_utils import get_sqlite_connection, is_sqlite
             
             if not is_sqlite():
                 logger.debug("[数据库类型错误] 当前数据库类型不支持使用SQLite连接查询磁带库存统计，返回默认值")
@@ -291,7 +289,6 @@ async def _get_storage_statistics() -> Dict[str, Any]:
                 }
         else:
             # 检查是否为SQLite数据库
-            from utils.scheduler.sqlite_utils import is_sqlite
             if not is_sqlite() or db_manager.AsyncSessionLocal is None:
                 logger.debug("[数据库类型错误] 当前数据库类型不支持使用SQLAlchemy会话查询存储统计，返回默认值")
                 return {"total_capacity": 0, "used_capacity": 0, "usage_percent": 0.0}
@@ -341,7 +338,6 @@ async def _get_recent_backups(limit: int = 5) -> List[Dict[str, Any]]:
     try:
         # 在函数开始处导入所有需要的函数，避免变量未定义错误
         from utils.scheduler.db_utils import is_redis, is_opengauss
-        from utils.scheduler.sqlite_utils import is_sqlite
         
         if is_redis():
             # Redis模式下返回空列表（暂未实现Redis查询最近备份）
@@ -455,7 +451,6 @@ async def _get_storage_trend(days: int = 30) -> List[Dict[str, Any]]:
                 return trend
         else:
             # 检查是否为SQLite数据库
-            from utils.scheduler.sqlite_utils import is_sqlite
             if not is_sqlite() or db_manager.AsyncSessionLocal is None:
                 logger.debug("[数据库类型错误] 当前数据库类型不支持使用SQLAlchemy会话查询存储使用趋势，返回空列表")
                 return []
@@ -574,7 +569,6 @@ async def _get_success_rate_statistics() -> Dict[str, Any]:
                 }
         else:
             # 检查是否为SQLite数据库
-            from utils.scheduler.sqlite_utils import is_sqlite
             if not is_sqlite() or db_manager.AsyncSessionLocal is None:
                 logger.debug("[数据库类型错误] 当前数据库类型不支持使用SQLAlchemy会话查询成功率统计，返回默认值")
                 return {"overall": 0.0, "this_month": 0.0, "last_month": 0.0, "change": 0.0, "this_month_count": 0, "last_month_count": 0}

@@ -12,7 +12,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from models.system_log import OperationType, LogCategory, LogLevel
 from utils.log_utils import log_system
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
+from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, get_sqlite_connection
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -72,7 +72,6 @@ async def get_tape_history(request: Request, limit: int = 50, offset: int = 0):
                 return {"success": True, "data": [], "total": 0}
 
             # 非openGauss数据库，使用原生SQL（SQLite）
-            from utils.scheduler.sqlite_utils import get_sqlite_connection, is_sqlite
 
             # 再次检查是否为SQLite
             if not is_sqlite():

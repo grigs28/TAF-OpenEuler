@@ -117,7 +117,7 @@ def calculate_next_run_time(scheduled_task: ScheduledTask) -> Optional[datetime]
                 )
                 # 返回当前时间+1分钟，确保尽快执行
                 return current_time + timedelta(minutes=1)
-            
+
             day_of_month = config.get('day_of_month', 1)
             # 确保 day_of_month 是整数类型
             try:

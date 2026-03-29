@@ -165,38 +165,52 @@ export class ScheduleConfigManager {
 
         const scheduleType = scheduleTypeElement.value;
         let config = {};
+        console.log('getScheduleConfig: scheduleType =', scheduleType);
 
         switch (scheduleType) {
             case 'once':
                 // 优先从隐藏字段获取（如果可用）
                 const onceDateTimeHidden = document.getElementById('onceDateTimeHidden');
                 let dateTimeValue = null;
-                
+
+                console.log('onceDateTimeHidden element:', onceDateTimeHidden);
+                console.log('onceDateTimeHidden value:', onceDateTimeHidden?.value);
+
                 if (onceDateTimeHidden && onceDateTimeHidden.value) {
                     // 从隐藏字段获取（datetime-local格式）
                     dateTimeValue = onceDateTimeHidden.value;
-                } else if (isElementVisible('onceDateTime')) {
-                    // 从显示字段获取（需要验证格式）
-                    const displayValue = safeGetValue('onceDateTime');
-                    if (displayValue && !displayValue.includes('Invalid')) {
-                        // 尝试解析显示字段的日期格式
-                        try {
-                            const date = new Date(displayValue);
-                            if (!isNaN(date.getTime())) {
-                                // 转换为 YYYY-MM-DDTHH:MM 格式
-                                const year = date.getFullYear();
-                                const month = String(date.getMonth() + 1).padStart(2, '0');
-                                const day = String(date.getDate()).padStart(2, '0');
-                                const hours = String(date.getHours()).padStart(2, '0');
-                                const minutes = String(date.getMinutes()).padStart(2, '0');
-                                dateTimeValue = `${year}-${month}-${day}T${hours}:${minutes}`;
+                    console.log('Got dateTime from hidden input:', dateTimeValue);
+                }
+
+                // 如果隐藏字段没有值，尝试从显示字段获取
+                if (!dateTimeValue) {
+                    const onceDateTimeDisplay = document.getElementById('onceDateTime');
+                    console.log('onceDateTime display element:', onceDateTimeDisplay);
+                    console.log('onceDateTime display value:', onceDateTimeDisplay?.value);
+
+                    if (onceDateTimeDisplay && onceDateTimeDisplay.value) {
+                        const displayValue = onceDateTimeDisplay.value;
+                        if (!displayValue.includes('Invalid')) {
+                            // 尝试解析显示字段的日期格式
+                            try {
+                                const date = new Date(displayValue);
+                                if (!isNaN(date.getTime())) {
+                                    // 转换为 YYYY-MM-DDTHH:MM 格式
+                                    const year = date.getFullYear();
+                                    const month = String(date.getMonth() + 1).padStart(2, '0');
+                                    const day = String(date.getDate()).padStart(2, '0');
+                                    const hours = String(date.getHours()).padStart(2, '0');
+                                    const minutes = String(date.getMinutes()).padStart(2, '0');
+                                    dateTimeValue = `${year}-${month}-${day}T${hours}:${minutes}`;
+                                    console.log('Parsed dateTime from display:', dateTimeValue);
+                                }
+                            } catch (e) {
+                                console.warn('无法解析日期:', displayValue, e);
                             }
-                        } catch (e) {
-                            console.warn('无法解析日期:', displayValue, e);
                         }
                     }
                 }
-                
+
                 if (dateTimeValue && !dateTimeValue.includes('Invalid')) {
                     // datetime-local格式: YYYY-MM-DDTHH:MM
                     // 需要转换为: YYYY-MM-DD HH:MM:SS
@@ -207,9 +221,12 @@ export class ScheduleConfigManager {
                         config = {
                             datetime: dateTime
                         };
+                        console.log('Final once config:', config);
                     } else {
                         console.warn('无效的日期格式:', dateTime);
                     }
+                } else {
+                    console.warn('No valid dateTimeValue for once task');
                 }
                 break;
 

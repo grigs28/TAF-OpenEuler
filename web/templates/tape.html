@@ -252,7 +252,7 @@
                 <form>
                     <div class="mb-3">
                         <button type="button" class="btn btn-sm btn-outline-info" id="scanForAddTapeBtn">
-                            <i class="bi bi-search me-1"></i>从磁带机扫描信息（包含读取磁带卷标）
+                            <i class="bi bi-search me-1"></i>从磁带机扫描信息（获取类型和容量）
                         </button>
                     </div>
                     <div id="tapeLabelInfo" class="alert alert-light d-none mb-3">
@@ -341,17 +341,17 @@
 <!-- 扫描结果模态框 -->
 <div class="modal fade" id="scanResultModal" tabindex="-1" data-bs-backdrop="false">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
-        <div class="modal-content">
-            <div class="modal-header">
+        <div class="modal-content bg-dark text-white">
+            <div class="modal-header border-secondary">
                 <h5 class="modal-title">磁带设备扫描结果</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body" id="scanResultBody" style="max-height: 70vh; overflow-y: auto;">
                 <p>正在扫描...</p>
             </div>
-            <div class="modal-footer">
+            <div class="modal-footer border-secondary">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                <button type="button" class="btn btn-primary" id="applyScanResultBtn" data-bs-dismiss="modal" disabled>应用信息</button>
+                <button type="button" class="btn btn-primary" id="applyScanResultBtn" disabled>应用信息</button>
             </div>
         </div>
     </div>
@@ -867,6 +867,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const addTapeModal = document.getElementById('addTapeModal');
     if (addTapeModal) {
         addTapeModal.addEventListener('show.bs.modal', function() {
+            // 如果是应用扫描结果模式，不重置表单
+            if (window.isApplyingScanResult) {
+                console.log('应用扫描结果模式，跳过表单重置');
+                return;
+            }
             // 检查是否是编辑模式（通过editMode属性判断）
             const isEditMode = this.dataset.editMode === 'true';
             // 如果不是编辑模式，重置为添加模式
@@ -969,11 +974,28 @@ document.addEventListener('DOMContentLoaded', async () => {
             // 只有卷标输入框不是只读时才允许生成
             if (!tapeLabelInput.readOnly) {
                 tapeLabelInput.value = generateTapeLabel();
+                // 自动更新序列号
+                const tapeSerialInput = document.getElementById('tapeSerial');
+                if (tapeSerialInput) {
+                    tapeSerialInput.value = generateTapeSerial();
+                }
+            }
+        });
+    }
+
+    // 监听卷标输入变化，自动更新序列号
+    const tapeLabelInput = document.getElementById('tapeLabel');
+    if (tapeLabelInput) {
+        tapeLabelInput.addEventListener('blur', function() {
+            const tapeSerialInput = document.getElementById('tapeSerial');
+            // 如果序列号为空或者是默认格式，则自动生成
+            if (tapeSerialInput && (!tapeSerialInput.value || tapeSerialInput.value.match(/^TP\d{4}$/) || tapeSerialInput.value.match(/^\d{6}01$/))) {
+                tapeSerialInput.value = generateTapeSerial();
             }
         });
     }
     
-    // 从磁带机扫描信息（包含读取磁带卷标）
+    // 从磁带机扫描信息（只扫描设备，不读取卷标）
     const scanForAddTapeBtn = document.getElementById('scanForAddTapeBtn');
     if (scanForAddTapeBtn) {
         scanForAddTapeBtn.addEventListener('click', async function() {
@@ -981,238 +1003,136 @@ document.addEventListener('DOMContentLoaded', async () => {
             const originalHtml = btn.innerHTML;
             btn.disabled = true;
             btn.innerHTML = '<i class="bi bi-arrow-clockwise spinner me-1"></i>扫描中...';
-            
+
             const scanResultModal = new bootstrap.Modal(document.getElementById('scanResultModal'));
             const scanResultBody = document.getElementById('scanResultBody');
             const applyScanResultBtn = document.getElementById('applyScanResultBtn');
-            
+
             // 重置状态
             window.lastScanResult = null;
             window.lastTapeLabel = null;
             applyScanResultBtn.disabled = true;
-            
+
             // 显示扫描中状态
             scanResultBody.innerHTML = `
                 <div class="text-center">
                     <div class="spinner-border text-primary mb-3" role="status">
                         <span class="visually-hidden">扫描中...</span>
                     </div>
-                    <p>正在扫描磁带设备并读取磁带卷标...</p>
+                    <p>正在扫描磁带设备...</p>
                 </div>
             `;
             scanResultModal.show();
-            
+
             try {
-                // 并行执行设备扫描和读取磁带卷标
-                const [scanResponse, labelResponse] = await Promise.allSettled([
-                    fetch('/api/system/tape/scan'),
-                    fetch('/api/tape/read-label')
-                ]);
-                
+                // 只执行设备扫描，不读取磁带卷标
                 let device = null;
-                let labelResult = null;
-                
-                // 处理设备扫描结果
-                if (scanResponse.status === 'fulfilled') {
-                    try {
-                        if (!scanResponse.value.ok) {
-                            throw new Error(`HTTP ${scanResponse.value.status}: ${scanResponse.value.statusText}`);
-                        }
-                        const scanResult = await scanResponse.value.json();
-                        if (scanResult.success && scanResult.devices && scanResult.devices.length > 0) {
-                            device = scanResult.devices[0];
-                            window.lastScanResult = device;
-                        }
-                    } catch (e) {
-                        console.error('处理设备扫描结果失败:', e);
+
+                try {
+                    const response = await fetch('/api/system/tape/scan');
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
                     }
-                } else {
-                    console.error('设备扫描请求失败:', scanResponse.reason);
-                }
-                
-                // 处理磁带卷标读取结果
-                if (labelResponse.status === 'fulfilled') {
-                    try {
-                        if (!labelResponse.value.ok) {
-                            throw new Error(`HTTP ${labelResponse.value.status}: ${labelResponse.value.statusText}`);
-                        }
-                        labelResult = await labelResponse.value.json();
-                        if (labelResult.success && labelResult.metadata) {
-                            window.lastTapeLabel = labelResult.metadata;
-                        }
-                    } catch (e) {
-                        console.error('处理卷标读取结果失败:', e);
+                    const scanResult = await response.json();
+                    if (scanResult.success && scanResult.devices && scanResult.devices.length > 0) {
+                        device = scanResult.devices[0];
+                        window.lastScanResult = device;
                     }
-                } else {
-                    console.error('卷标读取请求失败:', labelResponse.reason);
+                } catch (e) {
+                    console.error('设备扫描失败:', e);
                 }
-                
-                // 生成扫描结果HTML
+
+                // 生成扫描结果HTML - 使用紧凑的两列表单布局（深色背景）
                 let html = '';
-                
-                // 设备信息部分 - 使用更紧凑的两列布局
+
                 if (device) {
-                    html += '<div class="row mb-3">';
-                    html += '<div class="col-12"><h6 class="text-primary mb-2"><i class="bi bi-hdd me-2"></i>设备信息</h6></div>';
-                    
-                    // 关键信息使用两列布局
-                    html += '<div class="col-md-6">';
+                    html += '<div class="card mb-3 border-secondary bg-secondary">';
+                    html += '<div class="card-header py-2 bg-dark text-white"><i class="bi bi-hdd me-2"></i>磁带机信息</div>';
+                    html += '<div class="card-body py-2">';
+
+                    // 第一行：厂商和型号
+                    html += '<div class="row mb-2">';
+                    html += '<div class="col-4 text-light small">厂商/型号</div>';
+                    html += '<div class="col-8">';
                     if (device.vendor && device.vendor !== 'Unknown') {
-                        html += `<div class="mb-2"><small class="text-muted">厂商:</small><br><strong>${device.vendor}</strong></div>`;
+                        html += `<strong class="text-white">${device.vendor}</strong>`;
+                        if (device.model && device.model !== 'Tape Drive') {
+                            html += `<span class="text-light"> ${device.model}</span>`;
+                        }
+                    } else if (device.model) {
+                        html += `<strong class="text-white">${device.model}</strong>`;
+                    } else {
+                        html += '<span class="text-muted">未知</span>';
                     }
-                    if (device.model && device.model !== 'Tape Drive') {
-                        html += `<div class="mb-2"><small class="text-muted">型号:</small><br><strong>${device.model}</strong></div>`;
-                    }
-                    html += '</div>';
-                    
-                    html += '<div class="col-md-6">';
-                    // 磁带类型和容量信息（优先显示）
+                    html += '</div></div>';
+
+                    // 第二行：磁带类型
+                    html += '<div class="row mb-2">';
+                    html += '<div class="col-4 text-light small">磁带类型</div>';
+                    html += '<div class="col-8">';
                     let ltoGen = null;
                     if (device.is_ibm_lto && device.lto_generation) {
                         ltoGen = device.lto_generation;
-                        html += `<div class="mb-2"><small class="text-muted">磁带类型:</small><br><span class="badge bg-info">LTO-${ltoGen}</span></div>`;
+                        html += `<span class="badge bg-info text-dark">LTO-${ltoGen}</span>`;
                     } else if (device.model) {
                         const modelUpper = device.model.toUpperCase();
                         const ltoMatch = modelUpper.match(/LTO[-_]?(\d+)|HH(\d+)|ULTRIUM[-_]?HH(\d+)/);
                         if (ltoMatch) {
                             ltoGen = parseInt(ltoMatch[1] || ltoMatch[2] || ltoMatch[3]);
                             if (ltoGen >= 5 && ltoGen <= 9) {
-                                html += `<div class="mb-2"><small class="text-muted">磁带类型:</small><br><span class="badge bg-info">LTO-${ltoGen}</span></div>`;
+                                html += `<span class="badge bg-info text-dark">LTO-${ltoGen}</span>`;
                             }
                         }
                     }
-                    
-                    // 容量信息
+                    if (!ltoGen) {
+                        html += '<span class="text-muted">未识别</span>';
+                    }
+                    html += '</div></div>';
+
+                    // 第三行：容量
+                    html += '<div class="row mb-2">';
+                    html += '<div class="col-4 text-light small">容量</div>';
+                    html += '<div class="col-8">';
                     if (device.native_capacity) {
                         const tb = (device.native_capacity / (1024 ** 4)).toFixed(1);
-                        html += `<div class="mb-2"><small class="text-muted">容量:</small><br><strong>${tb} TB</strong></div>`;
+                        html += `<strong class="text-white">${tb} TB</strong>`;
                     } else if (ltoGen) {
-                        const capacityMap = {9: '18TB', 8: '12TB', 7: '6TB', 6: '2.5TB', 5: '1.5TB'};
+                        const capacityMap = {9: '18 TB', 8: '12 TB', 7: '6 TB', 6: '2.5 TB', 5: '1.5 TB'};
                         if (capacityMap[ltoGen]) {
-                            html += `<div class="mb-2"><small class="text-muted">容量:</small><br><strong>${capacityMap[ltoGen]}</strong> <small class="text-muted">(建议)</small></div>`;
+                            html += `<strong class="text-white">${capacityMap[ltoGen]}</strong> <small class="text-light">(标准容量)</small>`;
                         }
+                    } else {
+                        html += '<span class="text-muted">未知</span>';
                     }
-                    html += '</div>';
-                    
-                    // 设备序列号和路径（如果有）显示在底部，使用小字体
-                    if (device.serial && device.serial !== 'Unknown') {
-                        html += '<div class="col-12"><hr class="my-2"><small class="text-muted">设备序列号: </small><code class="small">' + device.serial + '</code></div>';
-                    }
+                    html += '</div></div>';
+
+                    // 第四行：设备路径
                     if (device.path) {
-                        html += '<div class="col-12"><small class="text-muted">设备路径: </small><code class="small">' + device.path + '</code></div>';
+                        html += '<div class="row">';
+                        html += '<div class="col-4 text-light small">设备路径</div>';
+                        html += '<div class="col-8"><code class="bg-dark text-light px-1 rounded">' + device.path + '</code></div>';
+                        html += '</div>';
                     }
-                    
+
+                    // 保存LTO代数供后续使用
+                    window.detectedLtoGen = ltoGen;
+
+                    html += '</div></div>';
+
+                    // 提示信息
+                    html += '<div class="alert alert-secondary mb-0 py-2 small text-light">';
+                    html += '<i class="bi bi-info-circle me-2"></i>扫描成功！点击"应用"将自动填充类型和容量，卷标需手动设置。';
                     html += '</div>';
+
                 } else {
-                    html += '<div class="alert alert-warning mb-3"><i class="bi bi-exclamation-triangle me-2"></i>未检测到磁带设备</div>';
+                    html += '<div class="alert alert-warning mb-0"><i class="bi bi-exclamation-triangle me-2"></i>未检测到磁带设备，请检查设备连接</div>';
                 }
-                
-                // 磁带卷标信息部分 - 使用更紧凑的布局
-                if (labelResult && labelResult.success && labelResult.metadata) {
-                    const metadata = labelResult.metadata;
-                    
-                    // 生成新规则的序列号（TPMMNN格式）
-                    let generatedSerial = null;
-                    try {
-                        const yearSelect = document.getElementById('tapeYear');
-                        const monthSelect = document.getElementById('tapeMonth');
-                        let year, month;
-                        
-                        if (yearSelect && yearSelect.value) {
-                            year = parseInt(yearSelect.value, 10);
-                        }
-                        if (monthSelect && monthSelect.value) {
-                            month = parseInt(monthSelect.value, 10);
-                        }
-                        
-                        if (!year || !month) {
-                            const labelMatch = metadata.tape_id ? metadata.tape_id.match(/(\d{4})(\d{2})/) : null;
-                            if (labelMatch) {
-                                year = parseInt(labelMatch[1], 10);
-                                month = parseInt(labelMatch[2], 10);
-                            }
-                        }
-                        
-                        if (!year || !month) {
-                            const now = new Date();
-                            year = now.getFullYear();
-                            month = now.getMonth() + 1;
-                        }
-                        
-                        const mm = month;
-                        generatedSerial = `TP${mm.toString().padStart(2, '0')}01`;
-                    } catch (e) {
-                        console.error('生成序列号失败:', e);
-                        const now = new Date();
-                        const mm = now.getMonth() + 1;
-                        generatedSerial = `TP${mm.toString().padStart(2, '0')}01`;
-                    }
-                    
-                    window.generatedTapeSerial = generatedSerial;
-                    
-                    html += '<div class="alert alert-success mb-3"><i class="bi bi-check-circle me-2"></i>成功读取磁带信息！</div>';
-                    
-                    html += '<div class="row mb-3">';
-                    html += '<div class="col-12"><h6 class="text-success mb-2"><i class="bi bi-tag me-2"></i>磁带信息</h6></div>';
-                    
-                    // 关键信息使用两列布局
-                    html += '<div class="col-md-6">';
-                    if (metadata.tape_id) {
-                        html += `<div class="mb-2"><small class="text-muted">磁带卷标:</small><br><strong class="text-primary">${metadata.tape_id}</strong></div>`;
-                    }
-                    if (generatedSerial) {
-                        html += `<div class="mb-2"><small class="text-muted">序列号:</small><br><strong>${generatedSerial}</strong></div>`;
-                    }
-                    html += '</div>';
-                    
-                    html += '<div class="col-md-6">';
-                    if (metadata.created_date) {
-                        const createdDate = new Date(metadata.created_date);
-                        html += `<div class="mb-2"><small class="text-muted">创建日期:</small><br>${createdDate.getFullYear()}年${createdDate.getMonth() + 1}月</div>`;
-                    }
-                    if (metadata.expiry_date) {
-                        const expiryDate = new Date(metadata.expiry_date);
-                        html += `<div class="mb-2"><small class="text-muted">过期日期:</small><br>${expiryDate.getFullYear()}年${expiryDate.getMonth() + 1}月</div>`;
-                    }
-                    html += '</div>';
-                    
-                    // 其他信息（如果有）显示在底部，使用小字体
-                    if (metadata.serial_number) {
-                        html += '<div class="col-12"><hr class="my-2"><small class="text-muted">卷标序列号: </small><code class="small">' + metadata.serial_number + '</code></div>';
-                    }
-                    
-                    html += '</div>';
-                } else if (labelResult && !labelResult.success) {
-                    html += '<div class="alert alert-warning mb-3"><i class="bi bi-exclamation-triangle me-2"></i>未读取到磁带卷标信息</div>';
-                }
-                
-                // 检查是否在数据库中存在
-                if (labelResult && labelResult.success && labelResult.metadata && labelResult.metadata.tape_id) {
-                    try {
-                        const checkResponse = await fetch(`/api/tape/check/${labelResult.metadata.tape_id}`);
-                        const checkResult = await checkResponse.json();
-                        
-                        if (checkResult.exists) {
-                            html += '<div class="alert alert-info mb-2"><i class="bi bi-info-circle me-2"></i>数据库中已存在此磁带记录</div>';
-                        }
-                    } catch (e) {
-                        console.error('检查磁带存在性失败:', e);
-                    }
-                }
-                
-                // 启用"应用信息"按钮（只有获得磁带卷标后才启用）
-                if (labelResult && labelResult.success && labelResult.metadata) {
-                    applyScanResultBtn.disabled = false;
-                } else if (device) {
-                    // 若存在设备信息，则仍允许应用以填充其他信息
-                    html += '<div class="alert alert-info mb-2"><i class="bi bi-info-circle me-2"></i>已获取设备信息，可应用以自动填写类型、容量和设备路径</div>';
-                    applyScanResultBtn.disabled = false;
-                } else {
-                    applyScanResultBtn.disabled = true;
-                }
-                
+
+                // 启用应用按钮
+                applyScanResultBtn.disabled = !device;
+
                 scanResultBody.innerHTML = html;
-                
+
             } catch (error) {
                 scanResultBody.innerHTML = `<div class="alert alert-danger"><i class="bi bi-x-circle me-2"></i>扫描失败: ${error.message}</div>`;
                 applyScanResultBtn.disabled = true;
@@ -1223,256 +1143,132 @@ document.addEventListener('DOMContentLoaded', async () => {
         });
     }
     
-    // 应用扫描结果到表单
+    // 应用扫描结果到表单 - 只填充类型和容量，不读取卷标
     const applyScanResultBtn = document.getElementById('applyScanResultBtn');
     if (applyScanResultBtn) {
         applyScanResultBtn.addEventListener('click', function() {
             const device = window.lastScanResult;
-            const tapeLabel = window.lastTapeLabel;
-            const modal = document.getElementById('addTapeModal');
-            
-            // 优先使用从磁带卷标读取的信息
-            if (tapeLabel && tapeLabel.tape_id) {
-                // 填充磁带卷标（从磁带读取，可编辑）
-                const tapeLabelInput = document.getElementById('tapeLabel');
-                tapeLabelInput.value = tapeLabel.tape_id;
-                tapeLabelInput.readOnly = false;
-                tapeLabelInput.disabled = false;  // 保持可查看但可编辑
-                
-                // 设置年份、月份为磁带卷标中的值，仍可继续编辑
-                const tapeMonthSelect = document.getElementById('tapeMonth');
-                const tapeYearSelect = document.getElementById('tapeYear');
-                const parsedLabelDate = extractYearMonthFromLabel(tapeLabel.tape_id);
-                if (parsedLabelDate) {
-                    if (tapeYearSelect) {
-                        populateTapeYearOptions(parseInt(parsedLabelDate.year, 10));
-                        tapeYearSelect.value = parsedLabelDate.year;
-                    }
-                    if (tapeMonthSelect) {
-                        tapeMonthSelect.value = parsedLabelDate.month;
-                    }
-                }
-                if (tapeMonthSelect) {
-                    tapeMonthSelect.disabled = false;
-                }
-                if (tapeYearSelect) {
-                    tapeYearSelect.disabled = false;
-                }
-                document.getElementById('generateLabelBtn').disabled = false;
-                
-                // 标记卷标来自磁带
-                modal.dataset.labelFromTape = 'true';
-                
-                // 优先使用生成的新规则序列号（TPMMNN格式）
-                if (window.generatedTapeSerial) {
-                    document.getElementById('tapeSerial').value = window.generatedTapeSerial;
-                }
-                
-                // 保存生成的序列号，供后续使用
-                const savedGeneratedSerial = window.generatedTapeSerial;
-                
-                // 检查数据库中是否存在此磁带
-                if (tapeLabel.tape_id) {
-                    fetch(`/api/tape/check/${tapeLabel.tape_id}`)
-                        .then(response => response.json())
-                        .then(checkResult => {
-                            if (checkResult.exists) {
-                                // 数据库中存在：更新模式
-                                modal.dataset.editMode = 'true';
-                                modal.dataset.editTapeId = tapeLabel.tape_id;
-                                document.getElementById('addTapeModalTitle').textContent = '更新磁带信息';
-                                document.getElementById('confirmAddTapeBtn').textContent = '更新';
-                                
-                                // 从数据库获取完整信息
-                                return fetch(`/api/tape/show/${tapeLabel.tape_id}`)
-                                    .then(response => response.json())
-                                    .then(detailResult => {
-                                        if (detailResult.tape) {
-                                            const tape = detailResult.tape;
-                                            // 填充其他字段（其他字段可编辑）
-                                            if (tape.media_type && tape.generation) {
-                                                document.getElementById('tapeType').value = `${tape.media_type}-${tape.generation}`;
-                                            }
-                                            if (tape.capacity_bytes) {
-                                                const tb = Math.round((tape.capacity_bytes / (1024 ** 4)) * 10) / 10;
-                                                document.getElementById('tapeCapacity').value = `${tb}TB`;
-                                            }
-                                            if (tape.location) {
-                                                document.getElementById('tapeLocation').value = tape.location;
-                                            }
-                                            if (tape.notes) {
-                                                document.getElementById('tapeRemark').value = tape.notes;
-                                            }
-                                            // 优先使用生成的新规则序列号（TPMMNN格式）
-                                            if (savedGeneratedSerial) {
-                                                document.getElementById('tapeSerial').value = savedGeneratedSerial;
-                                            } else if (tape.serial_number) {
-                                                document.getElementById('tapeSerial').value = tape.serial_number;
-                                            } else {
-                                                document.getElementById('tapeSerial').value = generateTapeSerial();
-                                            }
-                                        }
-                                        // 在异步操作完成后清空缓存
-                                        cleanupScanCache();
-                                    })
-                                    .catch(e => {
-                                        console.error('获取磁带详情失败:', e);
-                                        cleanupScanCache();
-                                    });
-                            } else {
-                                // 数据库不存在：创建模式（卷标来自磁带，可修改）
-                                modal.dataset.editMode = 'false';
-                                delete modal.dataset.editTapeId;
-                                document.getElementById('addTapeModalTitle').textContent = '添加新磁带（卷标来自磁带，可修改）';
-                                document.getElementById('confirmAddTapeBtn').textContent = '保存';
-                                
-                                // 使用扫描到的信息填充其他字段
-                                fillFormFromScan(device, tapeLabel);
-                                cleanupScanCache();
-                            }
-                        })
-                        .catch(e => {
-                            console.error('检查磁带存在性失败:', e);
-                            // 出错时也设置为创建模式，卷标仍可修改
-                            modal.dataset.editMode = 'false';
-                            delete modal.dataset.editTapeId;
-                            document.getElementById('addTapeModalTitle').textContent = '添加新磁带（卷标来自磁带，可修改）';
-                            document.getElementById('confirmAddTapeBtn').textContent = '保存';
-                            fillFormFromScan(device, tapeLabel);
-                            cleanupScanCache();
-                        });
-                } else {
-                    fillFormFromScan(device, tapeLabel);
-                    cleanupScanCache();
-                }
-            } else if (device) {
-                // 没有磁带卷标，但有设备信息，使用设备信息填充（正常添加模式）
-                modal.dataset.editMode = 'false';
-                modal.dataset.labelFromTape = 'false';
-                delete modal.dataset.editTapeId;
-                document.getElementById('tapeLabel').readOnly = false;
-                document.getElementById('tapeLabel').disabled = false;
-                const tapeMonthSelect = document.getElementById('tapeMonth');
-                if (tapeMonthSelect) {
-                    tapeMonthSelect.disabled = false;
-                }
-                const tapeYearSelect = document.getElementById('tapeYear');
-                if (tapeYearSelect) {
-                    populateTapeYearOptions();
-                    tapeYearSelect.disabled = false;
-                }
-                document.getElementById('generateLabelBtn').disabled = false;
-                document.getElementById('addTapeModalTitle').textContent = '添加新磁带';
-                document.getElementById('confirmAddTapeBtn').textContent = '保存';
-                fillFormFromScan(device, null);
-                cleanupScanCache();
+            const addTapeModalEl = document.getElementById('addTapeModal');
+
+            // 设置标志，防止 show.bs.modal 事件中的 resetTapeForm 重置表单值
+            window.isApplyingScanResult = true;
+
+            // 先关闭扫描结果模态框
+            const scanResultModalEl = document.getElementById('scanResultModal');
+            const scanResultModal = bootstrap.Modal.getInstance(scanResultModalEl);
+            if (scanResultModal) {
+                scanResultModal.hide();
             }
-            
-            // 清理扫描结果缓存的辅助函数
-            function cleanupScanCache() {
-                delete window.lastScanResult;
-                delete window.lastTapeLabel;
-                delete window.generatedTapeSerial;
+
+            // 确保是正常添加模式
+            addTapeModalEl.dataset.editMode = 'false';
+            addTapeModalEl.dataset.labelFromTape = 'false';
+            delete addTapeModalEl.dataset.editTapeId;
+
+            // 确保表单字段可编辑
+            const tapeLabelInput = document.getElementById('tapeLabel');
+            tapeLabelInput.readOnly = false;
+            tapeLabelInput.disabled = false;
+
+            const tapeMonthSelect = document.getElementById('tapeMonth');
+            if (tapeMonthSelect) {
+                tapeMonthSelect.disabled = false;
             }
+
+            const tapeYearSelect = document.getElementById('tapeYear');
+            if (tapeYearSelect) {
+                populateTapeYearOptions();
+                tapeYearSelect.disabled = false;
+            }
+
+            document.getElementById('generateLabelBtn').disabled = false;
+            document.getElementById('addTapeModalTitle').textContent = '添加新磁带';
+            document.getElementById('confirmAddTapeBtn').textContent = '保存';
+
+            // 计算LTO代数
+            let ltoGen = window.detectedLtoGen || null;
+            if (device) {
+                if (!ltoGen) {
+                    if (device.lto_generation) {
+                        ltoGen = device.lto_generation;
+                    } else if (device.model) {
+                        const modelUpper = device.model.toUpperCase();
+                        const ltoMatch = modelUpper.match(/ULT3580.*HH(\d)|ULTRIUM.*HH(\d)|HH(\d)|LTO[-_]?(\d+)/);
+                        if (ltoMatch) {
+                            ltoGen = parseInt(ltoMatch[1] || ltoMatch[2] || ltoMatch[3] || ltoMatch[4]);
+                        }
+                    }
+                }
+            }
+            console.log('准备应用的 LTO 代数:', ltoGen);
+
+            // 保存到临时变量，在模态框显示后应用
+            window.pendingLtoGen = ltoGen;
+            window.pendingDevice = device;
+
+            // 清理扫描缓存
+            delete window.lastScanResult;
+            delete window.detectedLtoGen;
+
+            // 显示添加磁带模态框（在关闭扫描结果模态框之后）
+            setTimeout(function() {
+                const bsModal = new bootstrap.Modal(addTapeModalEl);
+                bsModal.show();
+            }, 300);
         });
     }
-    
-    // 从扫描结果填充表单的辅助函数
-    function fillFormFromScan(device, tapeLabel) {
-        // 尝试从设备信息中提取LTO类型和容量
-        if (device) {
-            let ltoGen = null;
-            
-            // 方法1：如果设备有明确的LTO信息
-            if (device.is_ibm_lto && device.lto_generation) {
-                ltoGen = device.lto_generation;
-            }
-            // 方法2：从model中提取LTO信息
-            else if (device.model) {
-                const modelUpper = device.model.toUpperCase();
-                // 尝试提取LTO代数
-                const ltoMatch = modelUpper.match(/LTO[-_]?(\d+)|HH(\d+)|ULTRIUM[-_]?HH(\d+)/);
-                if (ltoMatch) {
-                    ltoGen = parseInt(ltoMatch[1] || ltoMatch[2] || ltoMatch[3]);
-                }
-            }
-            
-            // 如果找到了LTO代数，填充类型和容量
-            if (ltoGen && ltoGen >= 5 && ltoGen <= 9) {
-                const tapeTypeValue = `LTO-${ltoGen}`;
-                const tapeTypeSelect = document.getElementById('tapeType');
-                if (tapeTypeSelect) {
-                    tapeTypeSelect.value = tapeTypeValue;
-                }
-                
-                // 根据LTO代数设置容量
-                const capacityMap = {9: '18TB', 8: '12TB', 7: '6TB', 6: '2.5TB', 5: '1.5TB'};
-                if (capacityMap[ltoGen]) {
+
+    // 监听添加磁带模态框完全显示事件，在此处应用扫描结果值
+    const addTapeModalForApply = document.getElementById('addTapeModal');
+    if (addTapeModalForApply) {
+        addTapeModalForApply.addEventListener('shown.bs.modal', function() {
+            // 检查是否有待应用的扫描结果
+            if (window.isApplyingScanResult && (window.pendingLtoGen || window.pendingDevice)) {
+                const ltoGen = window.pendingLtoGen;
+                const device = window.pendingDevice;
+
+                console.log('模态框已显示，开始应用 LTO 代数:', ltoGen);
+
+                if (ltoGen && ltoGen >= 5 && ltoGen <= 9) {
+                    const tapeTypeSelect = document.getElementById('tapeType');
+                    if (tapeTypeSelect) {
+                        tapeTypeSelect.value = `LTO-${ltoGen}`;
+                        console.log('设置磁带类型: LTO-' + ltoGen);
+                    }
+
+                    // 根据LTO代数填充容量
+                    const capacityMap = {9: '18TB', 8: '12TB', 7: '6TB', 6: '2.5TB', 5: '1.5TB'};
                     const tapeCapacitySelect = document.getElementById('tapeCapacity');
-                    if (tapeCapacitySelect) {
+                    if (tapeCapacitySelect && capacityMap[ltoGen]) {
                         tapeCapacitySelect.value = capacityMap[ltoGen];
+                        console.log('设置容量: ' + capacityMap[ltoGen]);
+                    }
+                } else if (device && device.native_capacity) {
+                    const capacityTB = Math.round((device.native_capacity / (1024 ** 4)) * 10) / 10;
+                    const tapeCapacitySelect = document.getElementById('tapeCapacity');
+                    if (tapeCapacitySelect && capacityTB > 0) {
+                        const capacityOptions = ['1.5TB', '2.5TB', '6TB', '12TB', '18TB'];
+                        let closestOption = capacityOptions[0];
+                        let minDiff = Math.abs(capacityTB - parseFloat(closestOption.replace('TB', '')));
+                        for (const option of capacityOptions) {
+                            const optionValue = parseFloat(option.replace('TB', ''));
+                            const diff = Math.abs(capacityTB - optionValue);
+                            if (diff < minDiff) {
+                                minDiff = diff;
+                                closestOption = option;
+                            }
+                        }
+                        tapeCapacitySelect.value = closestOption;
+                        console.log('根据容量设置: ' + closestOption);
                     }
                 }
+
+                // 清理临时变量
+                delete window.pendingLtoGen;
+                delete window.pendingDevice;
+                delete window.isApplyingScanResult;
             }
-            // 如果设备有原生容量信息，也尝试填充
-            else if (device.native_capacity) {
-                // 将字节转换为TB
-                const capacityTB = Math.round((device.native_capacity / (1024 ** 4)) * 10) / 10;
-                const tapeCapacitySelect = document.getElementById('tapeCapacity');
-                if (tapeCapacitySelect && capacityTB > 0) {
-                    // 尝试匹配最接近的容量选项
-                    const capacityOptions = ['1.5TB', '2.5TB', '6TB', '12TB', '18TB'];
-                    let closestOption = capacityOptions[0];
-                    let minDiff = Math.abs(capacityTB - parseFloat(closestOption.replace('TB', '')));
-                    for (const option of capacityOptions) {
-                        const optionValue = parseFloat(option.replace('TB', ''));
-                        const diff = Math.abs(capacityTB - optionValue);
-                        if (diff < minDiff) {
-                            minDiff = diff;
-                            closestOption = option;
-                        }
-                    }
-                    tapeCapacitySelect.value = closestOption;
-                    
-                    // 如果找到了匹配的容量，尝试推断LTO代数
-                    if (closestOption === '18TB') ltoGen = 9;
-                    else if (closestOption === '12TB') ltoGen = 8;
-                    else if (closestOption === '6TB') ltoGen = 7;
-                    else if (closestOption === '2.5TB') ltoGen = 6;
-                    else if (closestOption === '1.5TB') ltoGen = 5;
-                    
-                    if (ltoGen) {
-                        const tapeTypeValue = `LTO-${ltoGen}`;
-                        const tapeTypeSelect = document.getElementById('tapeType');
-                        if (tapeTypeSelect) {
-                            tapeTypeSelect.value = tapeTypeValue;
-                        }
-                    }
-                }
-            }
-        }
-        
-        // 如果没有磁带卷标，生成新的卷标
-        if (!tapeLabel || !tapeLabel.tape_id) {
-            document.getElementById('tapeLabel').value = generateTapeLabel();
-        }
-        
-        // 序列号：优先使用生成的新规则序列号（TPMMNN格式，如果已设置），其次使用卷标中的，最后生成新的
-        // 注意：如果序列号字段已经有值（可能是从扫描结果中应用的序列号），则不再覆盖
-        const currentSerial = document.getElementById('tapeSerial').value;
-        if (!currentSerial) {
-            // 只有当序列号字段为空时，才进行填充
-            if (window.generatedTapeSerial) {
-                document.getElementById('tapeSerial').value = window.generatedTapeSerial;
-            } else if (tapeLabel && tapeLabel.serial_number) {
-                document.getElementById('tapeSerial').value = tapeLabel.serial_number;
-            } else {
-                document.getElementById('tapeSerial').value = generateTapeSerial();
-            }
-        } else if (window.generatedTapeSerial && currentSerial !== window.generatedTapeSerial) {
-            // 如果字段有值但不同于生成的新规则序列号，优先使用生成的新规则序列号
-            document.getElementById('tapeSerial').value = window.generatedTapeSerial;
-        }
+        });
     }
     
     
@@ -1591,48 +1387,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                         create_month: parseInt(selectedMonth, 10)  // 创建月份
                     };
                     
-                    // 检查磁带是否已存在，如果存在则询问是否格式化
-                    let formatTape = true;  // 默认格式化
+                    // tar方式写入磁带不需要LTFS格式化，默认跳过
+                    // 只有用户明确要求时才格式化
+                    let formatTape = false;  // 默认不格式化（tar方式）
                     try {
                         console.log('检查磁带是否存在:', tapeLabel);
                         const checkResponse = await fetch(`/api/tape/check/${encodeURIComponent(tapeLabel)}`);
                         if (!checkResponse.ok) {
                             console.warn('检查磁带存在性API返回错误:', checkResponse.status);
-                            // API错误时默认格式化
-                        } else {
-                            const checkResult = await checkResponse.json();
-                            console.log('磁带存在性检查结果:', checkResult);
-                            
-                            if (checkResult.exists) {
-                                // 数据库中已有记录，询问用户是否格式化
-                                const confirmMessage = `数据库中已存在磁带记录 "${tapeLabel}"。\n\n` +
-                                    `⚠️ 格式化操作会清空磁带上的所有数据！\n\n` +
-                                    `是否要格式化磁带？\n\n` +
-                                    `• 点击"确定"：格式化磁带并更新数据库\n` +
-                                    `• 点击"取消"：仅更新数据库，不格式化磁带`;
-                                
-                                formatTape = confirm(confirmMessage);
-                                
-                                if (!formatTape) {
-                                    // 用户选择不格式化，提示用户
-                                    const skipFormatConfirm = confirm(
-                                        `您选择跳过格式化。\n\n` +
-                                        `注意：磁带上的数据不会被清空，但数据库记录会被更新。\n\n` +
-                                        `是否继续？`
-                                    );
-                                    
-                                    if (!skipFormatConfirm) {
-                                        // 用户取消操作
-                                        btn.disabled = false;
-                                        btn.innerHTML = originalHtml;
-                                        return;
-                                    }
-                                }
-                            }
                         }
+                        // 不再自动格式化，直接创建数据库记录
                     } catch (e) {
                         console.error('检查磁带存在性失败:', e);
-                        // 检查失败时默认格式化（保持原有行为）
                     }
                     
                     // 添加format_tape参数

@@ -18,6 +18,7 @@ from config.database import get_db
 from config.settings import get_settings
 from models.backup import BackupTask, BackupTaskStatus, BackupTaskType
 from utils.network_path import validate_network_path
+from utils.scheduler.db_utils import is_sqlite, get_sqlite_connection
 
 logger = logging.getLogger(__name__)
 
@@ -176,7 +177,6 @@ class BackupTaskManager:
                         logger.warning(f"[备份任务] 提交创建任务及其 backup_files 分组/表事务失败（可能已自动提交）: {commit_err}")
             else:
                 # SQLite 版本：使用原生 SQL
-                from utils.scheduler.sqlite_utils import get_sqlite_connection
                 import json as json_module
                 
                 async with get_sqlite_connection() as conn:
@@ -475,7 +475,6 @@ class BackupTaskManager:
             else:
                 # 检查是否是 Redis 模式
                 from utils.scheduler.db_utils import is_redis
-                from utils.scheduler.sqlite_utils import is_sqlite
                 if is_redis():
                     # Redis 模式：使用 Redis 更新
                     from backup.redis_backup_db import KEY_PREFIX_BACKUP_TASK, _get_redis_key, update_task_status_redis

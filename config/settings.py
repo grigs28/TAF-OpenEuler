@@ -56,9 +56,6 @@ class Settings(BaseSettings):
     DB_COMMAND_TIMEOUT: float = 60.0  # 命令超时时间（秒）
     DB_ACQUIRE_TIMEOUT: float = 10.0  # 从连接池获取连接的超时时间（秒）
     DB_MAX_INACTIVE_CONNECTION_LIFETIME: float = 600.0  # 非活跃连接的最大生命周期（秒，默认10分钟）
-    # 增大此值可以减少连接重建开销，但会占用更多资源
-    # 建议值：300-1800秒（5-30分钟），根据系统负载调整
-    DB_FLAVOR: Optional[str] = None  # 显式指定数据库类型（如 opengauss/postgresql/sqlite）
     DB_QUERY_DOP: int = 16  # openGauss 查询并行度（1-64，默认16，用于优化查询性能）
     OG_HEARTBEAT_INTERVAL: int = 30  # openGauss 心跳间隔（秒）
     OG_HEARTBEAT_TIMEOUT: float = 5.0  # 单次心跳超时时间
@@ -88,22 +85,21 @@ class Settings(BaseSettings):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
 
-    # 磁带配置
-    TAPE_DRIVE_LETTER: str = "O"  # Windows盘符（大写，不带冒号，LTFS命令使用）
+    # 磁带配置 (Linux)
     DEFAULT_BLOCK_SIZE: int = 262144  # 256KB
     MAX_VOLUME_SIZE: int = 322122547200  # 300GB
     # 是否在完整备份前自动格式化磁带（保留卷标信息）
-    # - True: 保持当前行为，自动执行 LtfsCmdFormat.exe
-    # - False: 跳过自动格式化，仅进行卷标校验，不对磁带做格式化操作
     ENABLE_TAPE_FORMAT_BEFORE_FULL: bool = True
     # ITDT 接口配置
-    TAPE_INTERFACE_TYPE: str = "itdt"  # 仅使用 ITDT
-    ITDT_PATH: str = "C:\\itdt\\itdt.exe" if os.name == "nt" else "/usr/local/itdt/itdt"
+    TAPE_INTERFACE_TYPE: str = "linux"  # linux 使用 mt 命令
+    ITDT_PATH: str = "/usr/local/itdt/itdt"
     ITDT_LOG_LEVEL: str = "Information"  # Errors|Warnings|Information|Debug
     ITDT_LOG_PATH: str = "output"
-    
-    # LTFS 工具目录配置（必须在LTFS程序目录下执行命令）
-    LTFS_TOOLS_DIR: str = "D:\\APP\\TAF\\ITDT" if os.name == "nt" else "/usr/local/ltfs"
+
+    # LTFS 工具目录配置
+    LTFS_TOOLS_DIR: str = "/usr/local/ltfs"
+    MKLTFS_PATH: str = "/usr/local/bin/mkltfs"  # mkltfs 命令路径
+    LTFS_PATH: str = "/usr/local/bin/ltfs"  # ltfs 挂载命令路径
     ITDT_RESULT_PATH: str = "output"
     ITDT_DEVICE_PATH: str | None = None
     ITDT_FORCE_GENERIC_DD: bool = True  # 允许在无专用驱动时强制使用通用驱动
@@ -115,6 +111,11 @@ class Settings(BaseSettings):
     MAX_FILE_SIZE: int = 12 * 1024 * 1024 * 1024  # 12GB (默认值，可通过.env中的MAX_FILE_SIZE覆盖)
     COMPRESSION_DICTIONARY_SIZE: str = "256m"  # 7-Zip字典大小（固定256M）
     COMPRESS_DIRECTLY_TO_TAPE: bool = True  # 是否直接压缩到磁带机（默认True，跳过temp/final目录）
+
+    # 磁盘空间检查配置
+    DISK_CHECK_INTERVAL: int = 30  # 磁盘空间检查间隔（秒）
+    DISK_CHECK_MAX_WAIT_MINUTES: int = 60  # 最大等待时间（分钟）
+    DISK_CHECK_MIN_FREE_MULTIPLIER: int = 3  # 最小剩余空间倍数（3 * MAX_FILE_SIZE）
 
     # 计划任务配置
     SCHEDULER_ENABLED: bool = True
@@ -134,14 +135,25 @@ class Settings(BaseSettings):
     DINGTALK_API_KEY: str = "your-dingtalk-api-key"
     DINGTALK_DEFAULT_PHONE: str = "13800000000"
 
+    # 微信通知配置（企业微信机器人）
+    WECHAT_WEBHOOK_URL: str = ""  # 企业微信机器人 Webhook URL
+    WECHAT_ENABLED: bool = False  # 是否启用微信通知
+    WECHAT_REPORT_INTERVAL: int = 30  # 备份进度汇报间隔（分钟）
+
+    # SMB/CIFS 网络路径配置
+    SMB_USERNAME: str = ""  # SMB 用户名（如：administrator）
+    SMB_PASSWORD: str = ""  # SMB 密码
+    SMB_DOMAIN: str = ""  # SMB 域（如：DOMAIN 或 nt08）
+    SMB_MOUNT_BASE: str = "/mnt/smb"  # SMB 挂载基础目录
+
     # 备份配置
     BACKUP_TEMP_DIR: str = "temp/backup"
     RECOVERY_TEMP_DIR: str = "temp/recovery"
     BACKUP_COMPRESS_DIR: str = "temp/compress"  # 压缩文件临时目录（先压缩到这里，再移动到磁带机）
+    COMPRESS_OUTPUT_DIR: str = "temp/output"  # 压缩输出目录（用于存放最终压缩文件）
     COMPRESSION_THREADS: int = 4  # Python压缩线程数（py7zr/PGZip）
     # 压缩方法配置
-    COMPRESSION_METHOD: str = "pgzip"  # 压缩方法: "pgzip"、"py7zr"、"7zip_command"、"tar" 或 "zstd"
-    SEVENZIP_PATH: str = r"C:\Program Files\7-Zip\7z.exe"  # 7-Zip程序路径
+    COMPRESSION_METHOD: str = "zstd"  # 压缩方法: "pgzip"、"zstd" 或 "tar"
     # 注意：COMPRESSION_COMMAND_THREADS 默认使用 WEB_WORKERS 的值，在代码中动态获取
     PGZIP_BLOCK_SIZE: str = "1M"  # PGZip块大小（默认1M，可通过.env中的PGZIP_BLOCK_SIZE覆盖）
     PGZIP_THREADS: int = 4  # PGZip线程数
@@ -155,13 +167,13 @@ class Settings(BaseSettings):
     SCAN_LOG_INTERVAL_SECONDS: int = 60  # 后台扫描进度日志输出的时间间隔（秒）
     SCAN_WAIT_TIMEOUT: int = 300  # 等待后台扫描写入文件记录的超时时间（秒），默认300秒（5分钟）
     ENABLE_BACKGROUND_COPY_UPDATE: bool = False  # 是否启用压缩线程后台标记 is_copy_success
-    
+
     # 压缩并行批次配置
-    COMPRESSION_PARALLEL_BATCHES: int = 2  # 压缩并行批次数量（默认2），预读取程序队列数为该值+1
-    
+    COMPRESSION_PARALLEL_BATCHES: int = 3  # 压缩并行批次数量（默认3），预读取程序队列数为该值+1
+    COMPRESSION_BATCHES_REDUCTION: int = 1  # 扫描时减少的并行批次数（默认1），0表示不减少
+
     # 扫描方法配置
-    SCAN_METHOD: str = "default"  # 扫描方法: "default" (默认) 或 "es" (Everything搜索工具)
-    ES_EXE_PATH: str = r"E:\app\TAF\ITDT\ES\es.exe"  # Everything搜索工具可执行文件路径
+    SCAN_METHOD: str = "default"  # 扫描方法: "default" (默认)
     
     # 简洁扫描配置
     ENABLE_SIMPLE_SCAN: bool = True  # 是否启用简洁扫描（默认开启），使用简化的扫描和写入逻辑
@@ -210,7 +222,8 @@ class Settings(BaseSettings):
     ENABLE_CORS: bool = True
     CORS_ORIGINS: str = "*"
     ENABLE_GZIP: bool = True
-    TAPE_DEVICE_PATH: str = "/dev/nst0"
+    TAPE_DEVICE_PATH: str = "/dev/nst0"  # mt 命令使用的磁带设备
+    LTFS_DEVICE_PATH: str = "/dev/sg2"   # LTFS 挂载使用的 SCSI generic 设备
     LOG_BACKUP_COUNT: int = 30
     ASYNC_POOL_SIZE: int = 20
     ASYNC_MAX_OVERFLOW: int = 40
@@ -221,14 +234,6 @@ class Settings(BaseSettings):
     
     # 数据目录配置
     DATA_DIR: str = "data"
-    SQLITE_DB_FILE: str = "data/backup_system.db"
-    
-    # SQLite 配置参数
-    SQLITE_CACHE_SIZE: int = 10000  # 缓存大小（KB），默认 10MB
-    SQLITE_PAGE_SIZE: int = 4096  # 页面大小（字节），默认 4KB
-    SQLITE_TIMEOUT: float = 30.0  # 连接超时时间（秒）
-    SQLITE_JOURNAL_MODE: str = "WAL"  # 日志模式：WAL, DELETE, TRUNCATE, PERSIST, MEMORY, OFF
-    SQLITE_SYNCHRONOUS: str = "NORMAL"  # 同步模式：OFF, NORMAL, FULL, EXTRA
 
     class Config:
         env_file = ".env"

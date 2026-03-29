@@ -114,7 +114,6 @@ async def load_tasks_from_db(enabled_only: bool = True) -> List[ScheduledTask]:
                 return tasks
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import load_tasks_from_db_sqlite
             return await load_tasks_from_db_sqlite(enabled_only)
                 
     except Exception as e:
@@ -175,7 +174,6 @@ async def record_run_start(task_id: int, execution_id: str, started_at: datetime
                     await actual_conn.commit()
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import record_run_start_sqlite
             await record_run_start_sqlite(task_id, execution_id, started_at)
     except Exception as e:
         logger.warning(f"记录任务开始失败（忽略继续）: {str(e)}")
@@ -396,7 +394,6 @@ async def acquire_task_lock(task_id: int, execution_id: str) -> bool:
                             return False
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import acquire_task_lock_sqlite
             return await acquire_task_lock_sqlite(task_id, execution_id)
     except Exception as e:
         logger.error(f"获取任务锁失败: {str(e)}", exc_info=True)
@@ -435,7 +432,6 @@ async def release_task_lock(task_id: int, execution_id: str) -> None:
                     logger.warning(f"提交任务锁释放事务失败（可能已自动提交）: {commit_err}")
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import release_task_lock_sqlite
             await release_task_lock_sqlite(task_id, execution_id)
     except Exception as e:
         logger.warning(f"释放任务锁失败（忽略继续）: {str(e)}")
@@ -492,7 +488,6 @@ async def release_task_locks_by_task(task_id: int) -> None:
                         logger.info(f"任务 {task_id} 没有活跃锁需要释放")
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import release_task_locks_by_task_sqlite
             await release_task_locks_by_task_sqlite(task_id)
     except Exception as e:
         logger.warning(f"释放指定任务锁失败（忽略继续）: {str(e)}")
@@ -537,7 +532,6 @@ async def release_all_active_locks() -> None:
                     logger.info("没有活跃的任务锁需要释放")
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import release_all_active_locks_sqlite
             await release_all_active_locks_sqlite()
     except Exception as e:
         logger.warning(f"释放所有任务锁失败（忽略继续）: {str(e)}")
@@ -563,7 +557,6 @@ async def get_task_by_id(task_id: int) -> Optional[ScheduledTask]:
                 return row_to_task(row)
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import get_task_by_id_sqlite
             return await get_task_by_id_sqlite(task_id)
     except Exception as e:
         import traceback
@@ -603,7 +596,6 @@ async def get_all_tasks(enabled_only: bool = False) -> List[ScheduledTask]:
                 return tasks
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import get_all_tasks_sqlite
             return await get_all_tasks_sqlite(enabled_only)
     except Exception as e:
         import traceback
@@ -718,7 +710,6 @@ async def add_task(scheduled_task: ScheduledTask) -> bool:
                 return True
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import add_task_sqlite
             return await add_task_sqlite(scheduled_task)
             
     except Exception as e:
@@ -798,7 +789,6 @@ async def delete_task(task_id: int) -> bool:
                 return True
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import delete_task_sqlite
             return await delete_task_sqlite(task_id)
                     
     except Exception as e:
@@ -958,7 +948,6 @@ async def update_task(task_id: int, updates: Dict[str, Any], next_run_time: Opti
                 return await get_task_by_id(task_id)
         else:
             # SQLite 版本
-            from utils.scheduler.sqlite_task_storage import update_task_sqlite
             return await update_task_sqlite(task_id, updates, next_run_time)
             
     except Exception as e:

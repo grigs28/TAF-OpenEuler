@@ -53,7 +53,7 @@
         <h5 class="mb-0">
             <i class="bi bi-tools me-2"></i>磁带工具管理
         </h5>
-        <small class="text-secondary">ITDT和LTFS命令行工具集成管理</small>
+        <small class="text-secondary">Linux 磁带操作工具 (mt/mkltfs/ltfs)</small>
     </div>
 
     <!-- 工具可用性检查 -->
@@ -69,40 +69,38 @@
         </div>
     </div>
 
-    <!-- ITDT 工具 -->
+    <!-- Linux mt 命令工具 -->
     <div class="tool-section">
         <div class="service-card">
             <div class="card-body">
                 <h6 class="mb-3">
-                    <i class="bi bi-cpu me-2"></i>ITDT 工具（低级操作）
+                    <i class="bi bi-terminal me-2"></i>mt 命令工具（基础磁带操作）
                 </h6>
+                <div class="alert alert-info small mb-3">
+                    <i class="bi bi-info-circle me-1"></i>
+                    <strong>说明：</strong>使用 Linux 原生 mt 命令进行磁带操作。
+                </div>
                 <div class="d-flex flex-wrap">
-                    <button class="btn btn-success tool-btn" onclick="itdtLoadTape()">
-                        <i class="bi bi-play-circle me-1"></i>加载磁带
-                    </button>
-                    <button class="btn btn-info tool-btn" onclick="itdtCheckStatus()">
+                    <button class="btn btn-success tool-btn" onclick="mtStatus()">
                         <i class="bi bi-heart-pulse me-1"></i>检查状态
                     </button>
-                    <button class="btn btn-info tool-btn" onclick="itdtGetPartitionInfo()">
-                        <i class="bi bi-list-ul me-1"></i>分区信息
+                    <button class="btn btn-info tool-btn" onclick="mtRewind()">
+                        <i class="bi bi-arrow-counterclockwise me-1"></i>倒带
                     </button>
-                    <button class="btn btn-warning tool-btn" onclick="showChangePartitionModal()">
-                        <i class="bi bi-arrow-left-right me-1"></i>切换分区
+                    <button class="btn btn-warning tool-btn" onclick="mtEject()">
+                        <i class="bi bi-eject me-1"></i>弹出磁带
                     </button>
-                    <button class="btn btn-info tool-btn" onclick="itdtGetTapeUsage()">
-                        <i class="bi bi-bar-chart me-1"></i>使用统计
+                    <button class="btn btn-info tool-btn" onclick="mtEOD()">
+                        <i class="bi bi-skip-end me-1"></i>定位到末尾
                     </button>
-                    <button class="btn btn-info tool-btn" onclick="itdtListTape()">
-                        <i class="bi bi-list-check me-1"></i>列出内容
+                    <button class="btn btn-info tool-btn" onclick="mtTell()">
+                        <i class="bi bi-geo-alt me-1"></i>获取位置
                     </button>
-                    <button class="btn btn-info tool-btn" onclick="showMamAttributesModal()">
-                        <i class="bi bi-tag me-1"></i>MAM属性
+                    <button class="btn btn-secondary tool-btn" onclick="mtSetCompression()">
+                        <i class="bi bi-compress me-1"></i>启用压缩
                     </button>
-                    <button class="btn btn-danger tool-btn" onclick="showEraseModal(true)">
-                        <i class="bi bi-eraser me-1"></i>快速擦除
-                    </button>
-                    <button class="btn btn-danger tool-btn" onclick="showEraseModal(false)">
-                        <i class="bi bi-trash3 me-1"></i>完全擦除
+                    <button class="btn btn-secondary tool-btn" onclick="mtSetBlock()">
+                        <i class="bi bi-bricks me-1"></i>设置变长块
                     </button>
                 </div>
             </div>
@@ -114,52 +112,27 @@
         <div class="service-card">
             <div class="card-body">
                 <h6 class="mb-3">
-                    <i class="bi bi-file-earmark-zip me-2"></i>LTFS 工具（高级文件系统操作）
-                </h6>
-                <div class="d-flex flex-wrap">
-                    <button class="btn btn-primary tool-btn" onclick="ltfsListDrives()">
-                        <i class="bi bi-list-check me-1"></i>列出驱动器
-                    </button>
-                    <button class="btn btn-success tool-btn" onclick="showLtfsLoadModal()">
-                        <i class="bi bi-box-arrow-in-down me-1"></i>物理加载
-                    </button>
-                    <button class="btn btn-warning tool-btn" onclick="showLtfsEjectModal()">
-                        <i class="bi bi-box-arrow-up me-1"></i>物理弹出
-                    </button>
-                    <button class="btn btn-info tool-btn" onclick="showFormatModal()">
-                        <i class="bi bi-disc me-1"></i>格式化(LtfsCmd)
-                    </button>
-                    <button class="btn btn-info tool-btn" onclick="showMkltfsFormatModal()">
-                        <i class="bi bi-disc-fill me-1"></i>格式化(mkltfs)
-                    </button>
-                    <button class="btn btn-secondary tool-btn" onclick="showAssignModal()">
-                        <i class="bi bi-link-45deg me-1"></i>分配盘符
-                    </button>
-                    <button class="btn btn-secondary tool-btn" onclick="showUnassignModal()">
-                        <i class="bi bi-x-circle me-1"></i>卸载盘符
-                    </button>
-                    <button class="btn btn-info tool-btn" onclick="showCheckModal()">
-                        <i class="bi bi-shield-check me-1"></i>检查完整性
-                    </button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- libltfs.dll 直接调用 -->
-    <div class="tool-section">
-        <div class="service-card">
-            <div class="card-body">
-                <h6 class="mb-3">
-                    <i class="bi bi-code-square me-2"></i>libltfs.dll 直接调用（高级API）
+                    <i class="bi bi-file-earmark-zip me-2"></i>LTFS 工具（文件系统操作）
                 </h6>
                 <div class="alert alert-info small mb-3">
                     <i class="bi bi-info-circle me-1"></i>
-                    <strong>说明：</strong>直接调用 libltfs.dll 实现卷标、序列号、条码的读写操作，无需通过命令行工具。
+                    <strong>说明：</strong>使用 mkltfs 格式化磁带，使用 ltfs 挂载磁带。
                 </div>
                 <div class="d-flex flex-wrap">
-                    <button class="btn btn-primary tool-btn" onclick="showLibltfsModal()">
-                        <i class="bi bi-gear me-1"></i>libltfs.dll 管理
+                    <button class="btn btn-primary tool-btn" onclick="showScanDevicesModal()">
+                        <i class="bi bi-search me-1"></i>扫描设备
+                    </button>
+                    <button class="btn btn-danger tool-btn" onclick="showMkltfsModal()">
+                        <i class="bi bi-disc me-1"></i>LTFS格式化
+                    </button>
+                    <button class="btn btn-success tool-btn" onclick="showLtfsMountModal()">
+                        <i class="bi bi-folder2-open me-1"></i>挂载LTFS
+                    </button>
+                    <button class="btn btn-warning tool-btn" onclick="showLtfsUnmountModal()">
+                        <i class="bi bi-folder me-1"></i>卸载LTFS
+                    </button>
+                    <button class="btn btn-info tool-btn" onclick="checkLtfsMount()">
+                        <i class="bi bi-check-circle me-1"></i>检查挂载
                     </button>
                 </div>
             </div>
@@ -174,17 +147,11 @@
                     <i class="bi bi-diagram-3 me-2"></i>组合操作流程
                 </h6>
                 <div class="d-flex flex-wrap">
-                    <button class="btn btn-success tool-btn" style="min-width: 180px;" onclick="showMountCompleteModal()">
-                        <i class="bi bi-arrow-repeat me-1"></i>完整挂载流程
-                    </button>
-                    <button class="btn btn-warning tool-btn" style="min-width: 180px;" onclick="showUnmountCompleteModal()">
-                        <i class="bi bi-power me-1"></i>完整卸载流程
+                    <button class="btn btn-success tool-btn" style="min-width: 180px;" onclick="showPrepareTapeModal()">
+                        <i class="bi bi-arrow-repeat me-1"></i>准备磁带
                     </button>
                     <button class="btn btn-info tool-btn" style="min-width: 180px;" onclick="readTapeLabel()">
                         <i class="bi bi-tag me-1"></i>读取卷标
-                    </button>
-                    <button class="btn btn-info tool-btn" style="min-width: 180px;" onclick="getVolumeInfo()">
-                        <i class="bi bi-info-circle me-1"></i>详细卷信息
                     </button>
                 </div>
             </div>
@@ -213,576 +180,180 @@
     </div>
 </div>
 
-<!-- 模态框：切换分区 -->
-<div class="modal fade" id="changePartitionModal" tabindex="-1">
+<!-- 模态框：扫描设备 -->
+<div class="modal fade" id="scanDevicesModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">切换分区</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="mb-3">
-                    <label class="form-label">分区号</label>
-                    <select class="form-select" id="partitionNumber">
-                        <option value="0">分区 0</option>
-                        <option value="1">分区 1</option>
-                    </select>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="itdtChangePartition()">确定</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 模态框：擦除确认 -->
-<div class="modal fade" id="eraseModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title">⚠️ 擦除磁带确认</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <p><strong>警告：此操作将擦除磁带上的所有数据！</strong></p>
-                <p id="eraseType"></p>
-                <p>请确认是否继续？</p>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-danger" onclick="itdtEraseTape()">确认擦除</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 模态框：LTFS 加载 -->
-<div class="modal fade" id="ltfsLoadModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">物理加载磁带</h5>
+                <h5 class="modal-title">扫描磁带设备</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <div class="alert alert-info small">
                     <i class="bi bi-info-circle me-1"></i>
-                    <strong>命令格式：</strong><code>LtfsCmdLoad.exe 0.0.24.0</code>
+                    <strong>命令：</strong><code>lsscsi -g</code> 和 <code>mt -f /dev/nst0 status</code>
                 </div>
-                <div class="mb-3">
-                    <label class="form-label">驱动器地址 <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="ltfsLoadDriveId" placeholder="如：0.0.24.0">
-                    <small class="form-text text-secondary">SCSI地址（从"列出驱动器"获取）</small>
-                </div>
+                <p>扫描系统中所有可用的磁带设备，包括 SCSI 地址、厂商、型号等信息。</p>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="ltfsLoadTape()">加载</button>
+                <button type="button" class="btn btn-primary" onclick="scanDevices()">扫描</button>
             </div>
         </div>
     </div>
 </div>
 
-<!-- 模态框：LTFS 弹出 -->
-<div class="modal fade" id="ltfsEjectModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">物理弹出磁带</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="alert alert-info small">
-                    <i class="bi bi-info-circle me-1"></i>
-                    <strong>命令格式：</strong><code>LtfsCmdEject.exe 0.0.24.0</code>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">驱动器地址 <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="ltfsEjectDriveId" placeholder="如：0.0.24.0">
-                    <small class="form-text text-secondary">SCSI地址（从"列出驱动器"获取）</small>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="ltfsEjectTape()">弹出</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 模态框：LtfsCmdFormat 格式化 -->
-<div class="modal fade" id="formatModal" tabindex="-1">
+<!-- 模态框：LTFS 格式化 -->
+<div class="modal fade" id="mkltfsModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">
-                    <i class="bi bi-1-circle me-2"></i>格式化磁带 (LtfsCmdFormat.exe)
+                    <i class="bi bi-disc me-2"></i>LTFS 格式化 (mkltfs)
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <div class="alert alert-info">
-                    <strong>方式1：LtfsCmdFormat.exe（推荐）</strong>
-                    <ul class="mb-0 small">
-                        <li>速度快，功能完整</li>
-                        <li>支持卷标、序列号、格式化后弹出</li>
-                        <li><strong>参数是盘符（如O），不是地址</strong></li>
-                    </ul>
+                <div class="alert alert-danger small">
+                    <i class="bi bi-exclamation-triangle me-1"></i>
+                    <strong>警告：</strong>格式化将清除磁带上的所有数据！
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">盘符 <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="formatDriveLetter" 
-                           value="O" maxlength="1" style="text-transform: uppercase;" required>
-                    <small class="form-text text-secondary">大写字母，不带冒号（如：O）</small>
+                    <label class="form-label">设备路径 <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="mkltfsDevicePath"
+                           placeholder="如：/dev/sg3 或 /dev/nst0" required>
+                    <small class="form-text text-secondary">SCSI generic 设备 (推荐) 或磁带设备路径</small>
                 </div>
                 <div class="mb-3">
                     <label class="form-label">卷标名称</label>
-                    <input type="text" class="form-control" id="formatVolumeLabel" placeholder="可选，自动生成">
+                    <input type="text" class="form-control" id="mkltfsVolumeLabel" placeholder="可选，如：TP20260328">
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">序列号（6位大写字母数字）</label>
-                    <input type="text" class="form-control" id="formatSerial" placeholder="可选，如：ABC123" maxlength="6" style="text-transform: uppercase;">
+                    <label class="form-label">序列号（6位字母数字）</label>
+                    <input type="text" class="form-control" id="mkltfsSerial" placeholder="可选，如：ABC123" maxlength="6" style="text-transform: uppercase;">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-danger" onclick="mkltfsFormat()">格式化</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 模态框：LTFS 挂载 -->
+<div class="modal fade" id="ltfsMountModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">挂载 LTFS 文件系统</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="alert alert-info small">
+                    <i class="bi bi-info-circle me-1"></i>
+                    <strong>命令：</strong><code>ltfs /mnt/ltfs -o devname=/dev/sg3</code>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">设备路径 <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="ltfsDevicePath"
+                           placeholder="如：/dev/sg3" required>
+                    <small class="form-text text-secondary">SCSI generic 设备路径</small>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">挂载点</label>
+                    <input type="text" class="form-control" id="ltfsMountPoint"
+                           value="/mnt/ltfs" required>
+                    <small class="form-text text-secondary">LTFS 挂载目录</small>
                 </div>
                 <div class="form-check">
-                    <input class="form-check-input" type="checkbox" id="formatEjectAfter">
-                    <label class="form-check-label" for="formatEjectAfter">
-                        格式化后弹出磁带
+                    <input class="form-check-input" type="checkbox" id="ltfsSyncMode">
+                    <label class="form-check-label" for="ltfsSyncMode">
+                        同步写入模式（更安全但较慢）
                     </label>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="ltfsFormatTape()">格式化</button>
+                <button type="button" class="btn btn-success" onclick="ltfsMount()">挂载</button>
             </div>
         </div>
     </div>
 </div>
 
-<!-- 模态框：mkltfs 格式化 -->
-<div class="modal fade" id="mkltfsFormatModal" tabindex="-1">
+<!-- 模态框：LTFS 卸载 -->
+<div class="modal fade" id="ltfsUnmountModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-2-circle me-2"></i>格式化磁带 (mkltfs.exe)
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="alert alert-secondary">
-                    <strong>方式2：mkltfs.exe（备用）</strong>
-                    <ul class="mb-0 small">
-                        <li>功能更强大但速度较慢</li>
-                        <li>仅支持卷标设置</li>
-                    </ul>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">设备地址 <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="mkltfsDeviceId" placeholder="如：0.0.24.0" required>
-                    <small class="form-text text-secondary">SCSI地址格式</small>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">卷标名称</label>
-                    <input type="text" class="form-control" id="mkltfsVolumeLabel" placeholder="可选">
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="mkltfsFormatTape()">格式化</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 模态框：分配到盘符 -->
-<div class="modal fade" id="assignModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">分配磁带到盘符</h5>
+                <h5 class="modal-title">卸载 LTFS 文件系统</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <div class="alert alert-info small">
                     <i class="bi bi-info-circle me-1"></i>
-                    <strong>命令格式：</strong><code>LtfsCmdAssign.exe 0.0.24.0 O</code>
+                    <strong>命令：</strong><code>fusermount -u /mnt/ltfs</code> 或 <code>umount /mnt/ltfs</code>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">驱动器地址 <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="assignDriveId" placeholder="如：0.0.24.0">
-                    <small class="form-text text-secondary">SCSI地址（从"列出驱动器"获取）</small>
+                    <label class="form-label">挂载点</label>
+                    <input type="text" class="form-control" id="ltfsUnmountPoint"
+                           value="/mnt/ltfs" required>
                 </div>
-                <div class="mb-3">
-                    <label class="form-label">盘符</label>
-                    <input type="text" class="form-control" id="assignDriveLetter" 
-                           value="O" maxlength="1" style="text-transform: uppercase;" readonly>
-                    <small class="form-text text-secondary">大写字母，不带冒号（系统自动添加冒号）</small>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="ltfsEjectAfter">
+                    <label class="form-check-label" for="ltfsEjectAfter">
+                        卸载后弹出磁带
+                    </label>
                 </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="ltfsAssignTape()">分配</button>
+                <button type="button" class="btn btn-warning" onclick="ltfsUnmount()">卸载</button>
             </div>
         </div>
     </div>
 </div>
 
-<!-- 模态框：从盘符卸载 -->
-<div class="modal fade" id="unassignModal" tabindex="-1">
+<!-- 模态框：准备磁带 -->
+<div class="modal fade" id="prepareTapeModal" tabindex="-1">
     <div class="modal-dialog">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">从盘符卸载磁带</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="alert alert-info small">
-                    <i class="bi bi-info-circle me-1"></i>
-                    <strong>命令格式：</strong><code>LtfsCmdUnassign.exe 0.0.24.0</code>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">驱动器地址 <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="unassignDriveId" placeholder="如：0.0.24.0">
-                    <small class="form-text text-secondary">SCSI地址（从"列出驱动器"获取）</small>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="ltfsUnassignTape()">卸载</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 模态框：检查完整性 -->
-<div class="modal fade" id="checkModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">检查磁带完整性</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="alert alert-info small">
-                    <i class="bi bi-info-circle me-1"></i>
-                    <strong>命令格式：</strong><code>LtfsCmdCheck.exe 0.0.24.0</code>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">驱动器地址 <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="checkDriveId" placeholder="如：0.0.24.0">
-                    <small class="form-text text-secondary">SCSI地址（从"列出驱动器"获取）</small>
-                </div>
-                <div class="alert alert-warning">
-                    <i class="bi bi-exclamation-triangle me-1"></i>
-                    此操作可能需要较长时间（最长2小时）
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="ltfsCheckTape()">开始检查</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 模态框：完整挂载 -->
-<div class="modal fade" id="mountCompleteModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">完整挂载流程</h5>
+                <h5 class="modal-title">准备磁带</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
                 <div class="alert alert-info small">
                     <strong>流程说明：</strong>
                     <ol class="mb-0">
-                        <li><code>LtfsCmdLoad.exe 0.0.24.0</code> - 物理加载</li>
-                        <li><code>LtfsCmdFormat.exe 0.0.24.0 /N:卷标</code> - 格式化（可选）</li>
-                        <li><code>LtfsCmdAssign.exe 0.0.24.0 O</code> - 分配到盘符O</li>
+                        <li>检查磁带状态</li>
+                        <li>如果磁带不为空，使用 LTFS 格式化</li>
+                        <li>倒带并设置变长块模式</li>
                     </ol>
                 </div>
                 <div class="mb-3">
-                    <label class="form-label">驱动器地址 <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="mountDriveId" placeholder="如：0.0.24.0" required>
-                    <small class="form-text text-secondary">SCSI地址（从"列出驱动器"获取）</small>
+                    <label class="form-label">设备路径 <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="prepareDevicePath" placeholder="如：/dev/nst0" required>
                 </div>
-                <div class="form-check mb-3">
-                    <input class="form-check-input" type="checkbox" id="mountFormatTape" checked>
-                    <label class="form-check-label" for="mountFormatTape">
-                        格式化磁带
+                <div class="mb-3">
+                    <label class="form-label">LTFS 设备路径 (用于格式化)</label>
+                    <input type="text" class="form-control" id="prepareLtfsDevice" placeholder="如：/dev/sg3">
+                    <small class="form-text text-secondary">SCSI generic 设备路径，用于 LTFS 格式化</small>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">卷标名称</label>
+                    <input type="text" class="form-control" id="prepareVolumeLabel" placeholder="可选，自动生成">
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input" type="checkbox" id="prepareForceErase">
+                    <label class="form-check-label" for="prepareForceErase">
+                        强制格式化（即使磁带为空）
                     </label>
                 </div>
-                <div class="mb-3" id="mountLabelSection">
-                    <label class="form-label">卷标名称</label>
-                    <input type="text" class="form-control" id="mountVolumeLabel" placeholder="可选，自动生成">
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">挂载到盘符</label>
-                    <input type="text" class="form-control" value="O" maxlength="1" readonly style="text-transform: uppercase;">
-                    <small class="form-text text-secondary">系统配置的盘符</small>
-                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="mountTapeComplete()">开始挂载</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 模态框：完整卸载 -->
-<div class="modal fade" id="unmountCompleteModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">完整卸载流程</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="alert alert-info small">
-                    <strong>流程说明：</strong>
-                    <ol class="mb-0">
-                        <li><code>LtfsCmdUnassign.exe 0.0.24.0</code> - 从盘符O卸载</li>
-                        <li><code>LtfsCmdEject.exe 0.0.24.0</code> - 物理弹出磁带</li>
-                    </ol>
-                </div>
-                <div class="mb-3">
-                    <label class="form-label">驱动器地址 <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="unmountDriveId" placeholder="如：0.0.24.0" required>
-                    <small class="form-text text-secondary">SCSI地址（从"列出驱动器"获取）</small>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="unmountTapeComplete()">开始卸载</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 模态框：MAM属性管理 -->
-<div class="modal fade" id="mamAttributesModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-tag me-2"></i>MAM属性管理
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="alert alert-info small mb-3">
-                    <strong>MAM (Media Auxiliary Memory) 属性说明：</strong>
-                    <ul class="mb-0 small">
-                        <li><code>0x0001</code>: Media Manufacturer (制造商)</li>
-                        <li><code>0x0002</code>: Media Serial Number (序列号)</li>
-                        <li><code>0x0009</code>: Media Barcode (二维码)</li>
-                    </ul>
-                </div>
-                
-                <div class="row mb-3">
-                    <div class="col-md-6">
-                        <label class="form-label">分区号 <span class="text-danger">*</span></label>
-                        <select class="form-select" id="mamPartition">
-                            <option value="0">分区 0（默认）</option>
-                            <option value="1">分区 1</option>
-                            <option value="2">分区 2</option>
-                            <option value="3">分区 3</option>
-                        </select>
-                    </div>
-                    <div class="col-md-6">
-                        <label class="form-label">属性标识符 <span class="text-danger">*</span></label>
-                        <select class="form-select" id="mamAttributeId">
-                            <option value="0x0002">0x0002 - 序列号 (Serial Number)</option>
-                            <option value="0x0001">0x0001 - 制造商 (Manufacturer)</option>
-                            <option value="0x0009">0x0009 - 二维码 (Barcode)</option>
-                        </select>
-                    </div>
-                </div>
-                
-                <div class="mb-3">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <label class="form-label mb-0">属性值</label>
-                        <button type="button" class="btn btn-sm btn-outline-primary" onclick="readMamAttribute()">
-                            <i class="bi bi-arrow-clockwise me-1"></i>读取
-                        </button>
-                    </div>
-                    <textarea class="form-control" id="mamAttributeValue" rows="3" placeholder="点击'读取'按钮获取当前值，或直接输入要写入的值"></textarea>
-                    <small class="form-text text-secondary">读取：从磁带MAM中读取属性值 | 写入：将输入的值写入磁带MAM</small>
-                </div>
-                
-                <div id="mamReadResult" class="alert alert-success d-none">
-                    <h6 class="alert-heading">读取结果</h6>
-                    <div id="mamReadResultContent"></div>
-                </div>
-                
-                <div id="mamWriteResult" class="alert d-none">
-                    <h6 class="alert-heading">写入结果</h6>
-                    <div id="mamWriteResultContent"></div>
-                </div>
-                
-                <div class="mt-3 pt-3 border-top">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <label class="form-label mb-0"><strong>磁带卷标</strong></label>
-                        <button type="button" class="btn btn-sm btn-outline-info" onclick="readTapeLabel()">
-                            <i class="bi bi-tag me-1"></i>读取卷标
-                        </button>
-                    </div>
-                    <div id="tapeLabelResult" class="alert alert-light d-none">
-                        <div id="tapeLabelResultContent"></div>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
-                <button type="button" class="btn btn-info" onclick="readTapeLabel()">
-                    <i class="bi bi-tag me-1"></i>读取卷标
-                </button>
-                <button type="button" class="btn btn-primary" onclick="readMamAttribute()">
-                    <i class="bi bi-arrow-clockwise me-1"></i>读取属性
-                </button>
-                <button type="button" class="btn btn-success" onclick="writeMamAttribute()">
-                    <i class="bi bi-save me-1"></i>写入属性
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- 模态框：libltfs.dll 管理 -->
-<div class="modal fade" id="libltfsModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="bi bi-code-square me-2"></i>libltfs.dll 直接调用管理
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="alert alert-info small mb-3">
-                    <strong>libltfs.dll 功能说明：</strong>
-                    <ul class="mb-0 small">
-                        <li>直接调用 libltfs.dll API，无需通过命令行工具</li>
-                        <li>支持卷标、序列号、条码的读写操作</li>
-                        <li>性能更高，响应更快</li>
-                    </ul>
-                </div>
-                
-                <!-- 驱动器盘符输入区域 -->
-                <div class="service-card mb-3">
-                    <div class="card-body">
-                        <h6 class="mb-3">
-                            <i class="bi bi-hdd me-2"></i>驱动器设置
-                        </h6>
-                        <div class="row align-items-end">
-                            <div class="col-md-4">
-                                <label class="form-label">
-                                    <i class="bi bi-hdd-rack me-1"></i>驱动器标识 
-                                    <span class="text-danger">*</span>
-                                </label>
-                                <input type="text" 
-                                       class="form-control" 
-                                       id="libltfsDriveLetter" 
-                                       placeholder="O 或 0.0.24.0" 
-                                       onkeyup="formatDriveIdentifier(this)">
-                                <small class="form-text text-secondary mt-1">
-                                    <i class="bi bi-info-circle me-1"></i>LTFS驱动器盘符（如：O）或SCSI地址（如：0.0.24.0）
-                                </small>
-                            </div>
-                            <div class="col-md-4">
-                                <button type="button" class="btn btn-outline-info w-100" onclick="detectLtfsDrive()">
-                                    <i class="bi bi-search me-1"></i>自动检测
-                                </button>
-                            </div>
-                            <div class="col-md-4">
-                                <div id="libltfsDriveStatus" class="alert alert-light mb-0 d-none">
-                                    <small id="libltfsDriveStatusText"></small>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- 卷标操作 -->
-                <div class="row mb-3">
-                    <div class="col-md-6">
-                        <div class="service-card h-100">
-                            <div class="card-body">
-                                <h6 class="mb-3"><i class="bi bi-tag me-2"></i>卷标操作</h6>
-                                <div class="mb-3">
-                                    <input type="text" class="form-control" id="libltfsVolumeLabel" placeholder="输入卷标名称">
-                                </div>
-                                <div class="d-grid gap-2">
-                                    <button type="button" class="btn btn-primary" onclick="libltfsGetVolumeLabel()">
-                                        <i class="bi bi-arrow-down-circle me-1"></i>读取
-                                    </button>
-                                    <button type="button" class="btn btn-success" onclick="libltfsSetVolumeLabel()">
-                                        <i class="bi bi-save me-1"></i>设置卷标
-                                    </button>
-                                </div>
-                                <div id="libltfsVolumeLabelResult" class="alert alert-light d-none mt-2">
-                                    <div id="libltfsVolumeLabelResultContent"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    
-                    <!-- 序列号操作 -->
-                    <div class="col-md-6">
-                        <div class="service-card h-100">
-                            <div class="card-body">
-                                <h6 class="mb-3"><i class="bi bi-hash me-2"></i>序列号操作 (MAM 0x0002)</h6>
-                                <div class="mb-3">
-                                    <input type="text" class="form-control" id="libltfsSerialNumber" placeholder="输入序列号（如：TP1101）">
-                                </div>
-                                <div class="d-grid gap-2">
-                                    <button type="button" class="btn btn-primary" onclick="libltfsGetSerialNumber()">
-                                        <i class="bi bi-arrow-down-circle me-1"></i>读取
-                                    </button>
-                                    <button type="button" class="btn btn-success" onclick="libltfsSetSerialNumber()">
-                                        <i class="bi bi-save me-1"></i>设置序列号
-                                    </button>
-                                </div>
-                                <div id="libltfsSerialNumberResult" class="alert alert-light d-none mt-2">
-                                    <div id="libltfsSerialNumberResultContent"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <!-- 条码操作 -->
-                <div class="row mb-3">
-                    <div class="col-md-6">
-                        <div class="service-card h-100">
-                            <div class="card-body">
-                                <h6 class="mb-3"><i class="bi bi-upc-scan me-2"></i>条码操作 (MAM 0x0009)</h6>
-                                <div class="mb-3">
-                                    <input type="text" class="form-control" id="libltfsBarcode" placeholder="输入条码">
-                                </div>
-                                <div class="d-grid gap-2">
-                                    <button type="button" class="btn btn-primary" onclick="libltfsGetBarcode()">
-                                        <i class="bi bi-arrow-down-circle me-1"></i>读取
-                                    </button>
-                                    <button type="button" class="btn btn-success" onclick="libltfsSetBarcode()">
-                                        <i class="bi bi-save me-1"></i>设置条码
-                                    </button>
-                                </div>
-                                <div id="libltfsBarcodeResult" class="alert alert-light d-none mt-2">
-                                    <div id="libltfsBarcodeResultContent"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">关闭</button>
+                <button type="button" class="btn btn-primary" onclick="prepareTape()">开始准备</button>
             </div>
         </div>
     </div>
@@ -791,21 +362,29 @@
 
 {% block extra_js %}
 <script>
-    let currentEraseQuick = true;
-
     // 输出到控制台
-    function logToConsole(message, type = 'info') {
-        const console = document.getElementById('outputConsole');
-        const timestamp = new Date().toLocaleTimeString();
-        const color = {
+    function logToConsole(message, type) {
+        type = type || 'info';
+        var consoleEl = document.getElementById('outputConsole');
+        var timestamp = new Date().toLocaleTimeString();
+        var color = {
             'info': '#00aaff',
             'success': '#00ff88',
             'error': '#ff4081',
             'warning': '#ffaa00'
         }[type] || '#00ff88';
-        
-        console.innerHTML += `<span style="color: #666">[${timestamp}]</span> <span style="color: ${color}">${message}</span>\n`;
-        console.scrollTop = console.scrollHeight;
+
+        var line = document.createElement('div');
+        var timeSpan = document.createElement('span');
+        timeSpan.style.color = '#666';
+        timeSpan.textContent = '[' + timestamp + '] ';
+        var msgSpan = document.createElement('span');
+        msgSpan.style.color = color;
+        msgSpan.textContent = message;
+        line.appendChild(timeSpan);
+        line.appendChild(msgSpan);
+        consoleEl.appendChild(line);
+        consoleEl.scrollTop = consoleEl.scrollHeight;
     }
 
     function clearConsole() {
@@ -821,75 +400,43 @@
     async function checkToolsAvailability() {
         logToConsole('正在检查工具可用性...', 'info');
         try {
-            const response = await axios.get('/api/tools/check');
-            const status = document.getElementById('toolsStatus');
-            
-            let html = '<div class="row g-3">';
-            
-            // ITDT工具
-            html += '<div class="col-md-6"><h6 class="text-primary mb-2"><i class="bi bi-cpu me-1"></i>ITDT工具</h6>';
-            if (response.data.itdt_available) {
-                html += `<div class="status-badge status-success mb-2"><i class="bi bi-check-circle me-1"></i>可用</div>`;
-                html += `<small class="text-secondary d-block mb-3">${response.data.itdt_path}</small>`;
-                
-                // 显示ITDT命令列表
-                if (response.data.itdt_commands) {
-                    const commands = response.data.itdt_commands;
-                    
-                    // 已实现的命令（高亮显示）
-                    if (commands.implemented && commands.implemented.length > 0) {
-                        html += '<details open class="mb-2"><summary class="text-success small fw-bold" style="cursor:pointer">✓ 已实现的命令</summary>';
-                        html += '<div class="mt-2" style="max-height:200px;overflow-y:auto;">';
-                        commands.implemented.forEach(cmd => {
-                            html += `<div class="small text-success mb-1">`;
-                            html += `<code class="text-primary">${cmd.cmd}</code> - ${cmd.desc}`;
-                            if (cmd.method) {
-                                html += ` <span class="text-secondary">(${cmd.method})</span>`;
-                            }
-                            html += `</div>`;
-                        });
-                        html += '</div></details>';
-                    }
-                    
-                    // 通用命令
-                    if (commands.general && commands.general.length > 0) {
-                        html += '<details class="mb-2"><summary class="text-info small" style="cursor:pointer">通用命令 (General)</summary>';
-                        html += '<div class="mt-2" style="max-height:150px;overflow-y:auto;">';
-                        commands.general.forEach(cmd => {
-                            html += `<div class="small text-secondary"><code>${cmd.cmd}</code> - ${cmd.desc}</div>`;
-                        });
-                        html += '</div></details>';
-                    }
-                    
-                    // 高级命令
-                    if (commands.advanced && commands.advanced.length > 0) {
-                        html += '<details><summary class="text-info small" style="cursor:pointer">高级命令 (Advanced)</summary>';
-                        html += '<div class="mt-2" style="max-height:150px;overflow-y:auto;">';
-                        commands.advanced.forEach(cmd => {
-                            html += `<div class="small text-secondary"><code>${cmd.cmd}</code> - ${cmd.desc}</div>`;
-                        });
-                        html += '</div></details>';
-                    }
-                }
+            var response = await axios.get('/api/tools/check');
+            var status = document.getElementById('toolsStatus');
+
+            var html = '<div class="row g-3">';
+
+            // mt 命令
+            html += '<div class="col-md-6"><h6 class="text-primary mb-2"><i class="bi bi-terminal me-1"></i>mt 命令</h6>';
+            if (response.data.mt_available) {
+                html += '<div class="status-badge status-success mb-2"><i class="bi bi-check-circle me-1"></i>可用</div>';
+                html += '<small class="text-secondary d-block mb-3">路径: ' + response.data.mt_path + '</small>';
             } else {
-                html += `<div class="status-badge status-error"><i class="bi bi-x-circle me-1"></i>不可用</div>`;
-                html += `<small class="text-danger d-block">路径: ${response.data.itdt_path}</small>`;
+                html += '<div class="status-badge status-error"><i class="bi bi-x-circle me-1"></i>不可用</div>';
+                html += '<small class="text-danger d-block">请安装: sudo dnf install mt-st</small>';
             }
             html += '</div>';
-            
-            // LTFS工具
-            html += '<div class="col-md-6"><h6 class="text-primary mb-2"><i class="bi bi-file-earmark-zip me-1"></i>LTFS工具</h6><div class="d-flex flex-wrap gap-2">';
-            let availableCount = 0;
-            for (const [tool, info] of Object.entries(response.data.ltfs_tools)) {
-                if (info.available) availableCount++;
-                const statusClass = info.available ? 'status-success' : 'status-error';
-                const icon = info.available ? 'bi-check-circle' : 'bi-x-circle';
-                html += `<span class="status-badge ${statusClass}"><i class="bi ${icon} me-1"></i>${tool}</span>`;
+
+            // LTFS 工具
+            html += '<div class="col-md-6"><h6 class="text-primary mb-2"><i class="bi bi-file-earmark-zip me-1"></i>LTFS 工具</h6>';
+            var ltfsTools = response.data.ltfs_tools || {};
+            html += '<div class="d-flex flex-wrap gap-2">';
+            for (var tool in ltfsTools) {
+                if (ltfsTools.hasOwnProperty(tool)) {
+                    var info = ltfsTools[tool];
+                    var statusClass = info.available ? 'status-success' : 'status-error';
+                    var icon = info.available ? 'bi-check-circle' : 'bi-x-circle';
+                    html += '<span class="status-badge ' + statusClass + '"><i class="bi ' + icon + ' me-1"></i>' + tool + '</span>';
+                }
             }
-            html += '</div>';
-            html += `<small class="text-secondary d-block mt-2">${availableCount}/${Object.keys(response.data.ltfs_tools).length} 可用</small>`;
-            html += '</div>';
-            
+            html += '</div></div>';
+
+            // 磁带设备
+            if (response.data.tape_device) {
+                html += '<div class="col-12"><h6 class="text-primary mb-2"><i class="bi bi-hdd me-1"></i>磁带设备</h6>';
+                html += '<div class="status-badge status-success"><i class="bi bi-check-circle me-1"></i>' + response.data.tape_device + '</div>';
+                html += '</div>';
+            }
+
             html += '</div>';
             status.innerHTML = html;
             logToConsole('工具可用性检查完成', 'success');
@@ -898,697 +445,306 @@
         }
     }
 
-    // ITDT 工具函数
-    async function itdtLoadTape() {
-        logToConsole('正在加载磁带...', 'info');
+    // mt 命令工具函数
+    async function mtStatus() {
+        logToConsole('正在检查磁带状态...', 'info');
         showLoading(true);
         try {
-            const response = await axios.post('/api/tools/itdt/load', {});
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            logToConsole('ITDT输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
-            if (!response.data.success && response.data.stderr) {
-                logToConsole('错误信息:\n' + response.data.stderr, 'error');
-            }
-        } catch (error) {
-            logToConsole('加载磁带失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    async function itdtCheckStatus() {
-        logToConsole('正在检查磁带设备状态...', 'info');
-        showLoading(true);
-        try {
-            const response = await axios.get('/api/tools/itdt/status');
-            
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            
+            var response = await axios.get('/api/tools/linux/status');
             if (response.data.success) {
-                if (response.data.stdout && response.data.stdout.trim()) {
-                    logToConsole('ITDT输出:\n' + response.data.stdout, 'success');
-                } else {
-                    logToConsole('ITDT输出: (命令执行成功，但无输出)', 'info');
-                    logToConsole('返回码: ' + (response.data.returncode !== undefined ? response.data.returncode : '0'), 'info');
+                var status = response.data;
+                logToConsole('设备: ' + status.device, 'success');
+                logToConsole('在线: ' + (status.online ? '是' : '否'), status.online ? 'success' : 'error');
+                logToConsole('写保护: ' + (status.write_protected ? '是' : '否'), status.write_protected ? 'warning' : 'success');
+                logToConsole('文件号: ' + status.file_number, 'info');
+                logToConsole('块号: ' + status.block_number, 'info');
+                logToConsole('是否为空: ' + (status.is_empty ? '是' : '否'), 'info');
+                if (status.raw_output) {
+                    logToConsole('\n原始输出:\n' + status.raw_output, 'info');
                 }
             } else {
-                // 命令执行失败
-                const errorMsg = response.data.stderr && response.data.stderr.trim() 
-                    ? response.data.stderr 
-                    : (response.data.error || '未知错误');
-                logToConsole('ITDT命令执行失败:', 'error');
-                logToConsole('返回码: ' + (response.data.returncode !== undefined ? response.data.returncode : 'N/A'), 'error');
-                if (response.data.stdout && response.data.stdout.trim()) {
-                    logToConsole('输出:\n' + response.data.stdout, 'error');
-                }
-                logToConsole('错误信息: ' + errorMsg, 'error');
+                logToConsole('获取状态失败: ' + (response.data.stderr || response.data.error), 'error');
             }
         } catch (error) {
             logToConsole('检查状态失败: ' + error.message, 'error');
-            if (error.response && error.response.data) {
-                logToConsole('详细信息: ' + JSON.stringify(error.response.data), 'error');
-            }
         } finally {
             showLoading(false);
         }
     }
 
-    async function itdtGetPartitionInfo() {
-        logToConsole('正在获取分区信息...', 'info');
+    async function mtRewind() {
+        logToConsole('正在倒带...', 'info');
         showLoading(true);
         try {
-            const response = await axios.get('/api/tools/itdt/partition');
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            logToConsole('ITDT输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
-        } catch (error) {
-            logToConsole('获取分区信息失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    function showChangePartitionModal() {
-        const modal = new bootstrap.Modal(document.getElementById('changePartitionModal'));
-        modal.show();
-    }
-
-    async function itdtChangePartition() {
-        const partitionNumber = parseInt(document.getElementById('partitionNumber').value);
-        logToConsole(`正在切换到分区 ${partitionNumber}...`, 'info');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post('/api/tools/itdt/partition', {
-                partition_number: partitionNumber
-            });
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            logToConsole('ITDT输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
-            bootstrap.Modal.getInstance(document.getElementById('changePartitionModal')).hide();
-        } catch (error) {
-            logToConsole('切换分区失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    function showEraseModal(quick) {
-        currentEraseQuick = quick;
-        document.getElementById('eraseType').textContent = quick ? '快速擦除（仅擦除头部）' : '完全擦除（擦除整个磁带，耗时较长）';
-        const modal = new bootstrap.Modal(document.getElementById('eraseModal'));
-        modal.show();
-    }
-
-    async function itdtEraseTape() {
-        logToConsole(`正在${currentEraseQuick ? '快速' : '完全'}擦除磁带...`, 'warning');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post('/api/tools/itdt/erase', {
-                quick: currentEraseQuick
-            });
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            logToConsole('ITDT输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
-            bootstrap.Modal.getInstance(document.getElementById('eraseModal')).hide();
-        } catch (error) {
-            logToConsole('擦除磁带失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    async function itdtGetTapeUsage() {
-        logToConsole('正在获取磁带使用统计...', 'info');
-        showLoading(true);
-        try {
-            const response = await axios.get('/api/tools/itdt/usage');
-            
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            
+            var response = await axios.post('/api/tools/linux/rewind');
             if (response.data.success) {
-                if (response.data.stdout && response.data.stdout.trim()) {
-                    logToConsole('ITDT输出:\n' + response.data.stdout, 'success');
-                } else {
-                    logToConsole('ITDT输出: (命令执行成功，但无输出)', 'info');
-                }
+                logToConsole('倒带成功', 'success');
             } else {
-                const errorMsg = response.data.stderr && response.data.stderr.trim() 
-                    ? response.data.stderr 
-                    : (response.data.error || '未知错误');
-                logToConsole('ITDT命令执行失败:', 'error');
-                logToConsole('返回码: ' + (response.data.returncode !== undefined ? response.data.returncode : 'N/A'), 'error');
-                if (response.data.stdout && response.data.stdout.trim()) {
-                    logToConsole('输出:\n' + response.data.stdout, 'error');
-                }
-                logToConsole('错误信息: ' + errorMsg, 'error');
+                logToConsole('倒带失败: ' + (response.data.stderr || response.data.error), 'error');
             }
         } catch (error) {
-            logToConsole('获取磁带使用统计失败: ' + error.message, 'error');
-            if (error.response && error.response.data) {
-                logToConsole('详细信息: ' + JSON.stringify(error.response.data), 'error');
-            }
+            logToConsole('倒带失败: ' + error.message, 'error');
         } finally {
             showLoading(false);
         }
     }
 
-    async function itdtListTape() {
-        logToConsole('正在列出磁带内容...', 'info');
+    async function mtEject() {
+        logToConsole('正在弹出磁带...', 'info');
         showLoading(true);
         try {
-            const response = await axios.get('/api/tools/itdt/list');
-            
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            
+            var response = await axios.post('/api/tools/linux/eject');
             if (response.data.success) {
-                if (response.data.stdout && response.data.stdout.trim()) {
-                    logToConsole('ITDT输出:\n' + response.data.stdout, 'success');
-                } else {
-                    logToConsole('ITDT输出: (命令执行成功，但无输出)', 'info');
-                }
+                logToConsole('磁带已弹出', 'success');
             } else {
-                const errorMsg = response.data.stderr && response.data.stderr.trim() 
-                    ? response.data.stderr 
-                    : (response.data.error || '未知错误');
-                logToConsole('ITDT命令执行失败:', 'error');
-                logToConsole('返回码: ' + (response.data.returncode !== undefined ? response.data.returncode : 'N/A'), 'error');
-                if (response.data.stdout && response.data.stdout.trim()) {
-                    logToConsole('输出:\n' + response.data.stdout, 'error');
-                }
-                logToConsole('错误信息: ' + errorMsg, 'error');
+                logToConsole('弹出失败: ' + (response.data.stderr || response.data.error), 'error');
             }
         } catch (error) {
-            logToConsole('列出磁带内容失败: ' + error.message, 'error');
-            if (error.response && error.response.data) {
-                logToConsole('详细信息: ' + JSON.stringify(error.response.data), 'error');
-            }
+            logToConsole('弹出失败: ' + error.message, 'error');
         } finally {
             showLoading(false);
         }
     }
 
-    // MAM属性管理
-    function showMamAttributesModal() {
-        const modal = new bootstrap.Modal(document.getElementById('mamAttributesModal'));
-        modal.show();
-        // 重置结果区域
-        document.getElementById('mamReadResult').classList.add('d-none');
-        document.getElementById('mamWriteResult').classList.add('d-none');
-        document.getElementById('tapeLabelResult').classList.add('d-none');
-        document.getElementById('mamAttributeValue').value = '';
-    }
-
-    async function readMamAttribute() {
-        const partition = parseInt(document.getElementById('mamPartition').value);
-        const attributeId = document.getElementById('mamAttributeId').value;
-        const resultDiv = document.getElementById('mamReadResult');
-        const resultContent = document.getElementById('mamReadResultContent');
-        
-        resultDiv.classList.add('d-none');
-        resultContent.innerHTML = '<div class="spinner-border spinner-border-sm me-2" role="status"></div>正在读取...';
-        resultDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
-        resultDiv.classList.add('alert-info');
-        
-        logToConsole(`正在读取MAM属性 (分区: ${partition}, 属性ID: ${attributeId})...`, 'info');
+    async function mtEOD() {
+        logToConsole('正在定位到数据末尾...', 'info');
         showLoading(true);
-        
         try {
-            const response = await axios.get('/api/tools/itdt/mam', {
-                params: {
-                    partition: partition,
-                    attribute_id: attributeId
-                }
-            });
-            
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            
+            var response = await axios.post('/api/tools/linux/eod');
             if (response.data.success) {
-                let html = '';
-                
-                // 显示文本数据
-                if (response.data.mam_data_text) {
-                    const textValue = response.data.mam_data_text.trim();
-                    document.getElementById('mamAttributeValue').value = textValue;
-                    html += `<p class="mb-1"><strong>属性值:</strong> <code>${textValue}</code></p>`;
-                }
-                
-                // 显示原始十六进制数据（用于调试）
-                if (response.data.mam_data_raw_hex) {
-                    html += `<p class="mb-1 text-secondary small"><strong>原始数据(hex):</strong> <code>${response.data.mam_data_raw_hex}</code></p>`;
-                }
-                
-                // 如果解析失败，显示提示
-                if (response.data.mam_data_parse_error) {
-                    html += `<p class="mb-1 text-warning small">⚠️ ${response.data.mam_data_parse_error}</p>`;
-                }
-                
-                // 显示关键属性
-                if (response.data.serial_number) {
-                    html += `<p class="mb-1"><strong>序列号:</strong> ${response.data.serial_number}</p>`;
-                }
-                if (response.data.barcode) {
-                    html += `<p class="mb-1"><strong>二维码:</strong> ${response.data.barcode}</p>`;
-                }
-                if (response.data.manufacturer) {
-                    html += `<p class="mb-1"><strong>制造商:</strong> ${response.data.manufacturer}</p>`;
-                }
-                
-                // 显示数据信息
-                if (response.data.mam_data_length !== undefined) {
-                    html += `<p class="mb-1 text-secondary small">数据长度: ${response.data.mam_data_length} 字节</p>`;
-                }
-                
-                if (!html) {
-                    html = '<p class="text-warning">未解析到MAM属性数据</p>';
-                    if (response.data.mam_data_length === 0) {
-                        html += '<p class="text-secondary small">原因: 输出文件为空</p>';
-                    }
-                }
-                
-                resultContent.innerHTML = html;
-                resultDiv.classList.remove('alert-info', 'alert-danger');
-                resultDiv.classList.add('alert-success');
-                
-                logToConsole('MAM属性读取成功', 'success');
+                logToConsole('已定位到数据末尾', 'success');
             } else {
-                const errorMsg = response.data.error_detail || response.data.stderr || response.data.error || '未知错误';
-                resultContent.innerHTML = `<p class="text-danger mb-0">读取失败: ${errorMsg}</p>`;
-                resultDiv.classList.remove('alert-info', 'alert-success');
-                resultDiv.classList.add('alert-danger');
-                
-                logToConsole('MAM属性读取失败: ' + errorMsg, 'error');
+                logToConsole('定位失败: ' + (response.data.stderr || response.data.error), 'error');
             }
         } catch (error) {
-            const errorMsg = error.response?.data?.detail || error.message;
-            resultContent.innerHTML = `<p class="text-danger mb-0">读取失败: ${errorMsg}</p>`;
-            resultDiv.classList.remove('alert-info', 'alert-success');
-            resultDiv.classList.add('alert-danger');
-            
-            logToConsole('读取MAM属性失败: ' + errorMsg, 'error');
+            logToConsole('定位失败: ' + error.message, 'error');
         } finally {
             showLoading(false);
         }
     }
 
-    async function readTapeLabel() {
-        const resultDiv = document.getElementById('tapeLabelResult');
-        const resultContent = document.getElementById('tapeLabelResultContent');
-        
-        resultDiv.classList.add('d-none');
-        resultContent.innerHTML = '<div class="spinner-border spinner-border-sm me-2" role="status"></div>正在读取卷标...';
-        resultDiv.classList.remove('d-none');
-        
-        logToConsole('正在读取磁带卷标...', 'info');
+    async function mtTell() {
+        logToConsole('正在获取当前位置...', 'info');
         showLoading(true);
-        
         try {
-            const response = await axios.get('/api/tools/label/read');
-            
+            var response = await axios.get('/api/tools/linux/tell');
             if (response.data.success) {
-                let html = '';
-                
-                if (response.data.volume_name) {
-                    html += `<p class="mb-1"><strong>卷标名称:</strong> <code class="text-primary">${response.data.volume_name}</code></p>`;
-                }
-                
-                if (response.data.serial_number) {
-                    html += `<p class="mb-1"><strong>序列号:</strong> <code>${response.data.serial_number}</code></p>`;
-                }
-                
-                if (response.data.file_system) {
-                    html += `<p class="mb-1 text-secondary small"><strong>文件系统:</strong> ${response.data.file_system}</p>`;
-                }
-                
-                if (response.data.volume_info) {
-                    const volInfo = response.data.volume_info;
-                    if (volInfo.total_bytes) {
-                        const totalGB = (volInfo.total_bytes / (1024 * 1024 * 1024)).toFixed(2);
-                        html += `<p class="mb-1 text-secondary small"><strong>总容量:</strong> ${totalGB} GB</p>`;
-                    }
-                    if (volInfo.free_bytes) {
-                        const freeGB = (volInfo.free_bytes / (1024 * 1024 * 1024)).toFixed(2);
-                        html += `<p class="mb-1 text-secondary small"><strong>可用空间:</strong> ${freeGB} GB</p>`;
-                    }
-                }
-                
-                if (!html) {
-                    html = '<p class="text-warning mb-0">未读取到卷标信息</p>';
-                }
-                
-                resultContent.innerHTML = html;
-                logToConsole(`卷标读取成功: ${response.data.volume_name || 'N/A'}`, 'success');
+                logToConsole('当前位置: 块 ' + response.data.block, 'success');
             } else {
-                const errorMsg = response.data.error || '未知错误';
-                resultContent.innerHTML = `<p class="text-danger mb-0">读取失败: ${errorMsg}</p>`;
-                logToConsole('卷标读取失败: ' + errorMsg, 'error');
+                logToConsole('获取位置失败: ' + (response.data.stderr || response.data.error), 'error');
             }
         } catch (error) {
-            const errorMsg = error.response?.data?.detail || error.message;
-            resultContent.innerHTML = `<p class="text-danger mb-0">读取失败: ${errorMsg}</p>`;
-            logToConsole('读取卷标失败: ' + errorMsg, 'error');
+            logToConsole('获取位置失败: ' + error.message, 'error');
         } finally {
             showLoading(false);
         }
     }
 
-    async function writeMamAttribute() {
-        const partition = parseInt(document.getElementById('mamPartition').value);
-        const attributeId = document.getElementById('mamAttributeId').value;
-        const attributeValue = document.getElementById('mamAttributeValue').value.trim();
-        
-        if (!attributeValue) {
-            alert('请输入要写入的属性值');
-            return;
-        }
-        
-        if (!confirm(`确定要将以下值写入MAM属性？\n\n分区: ${partition}\n属性ID: ${attributeId}\n属性值: ${attributeValue}\n\n此操作将覆盖现有值！`)) {
-            return;
-        }
-        
-        const resultDiv = document.getElementById('mamWriteResult');
-        const resultContent = document.getElementById('mamWriteResultContent');
-        
-        resultDiv.classList.add('d-none');
-        resultContent.innerHTML = '<div class="spinner-border spinner-border-sm me-2" role="status"></div>正在写入...';
-        resultDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
-        resultDiv.classList.add('alert-info');
-        
-        logToConsole(`正在写入MAM属性 (分区: ${partition}, 属性ID: ${attributeId}, 值: ${attributeValue})...`, 'warning');
+    async function mtSetCompression() {
+        logToConsole('正在启用压缩...', 'info');
         showLoading(true);
-        
         try {
-            const response = await axios.post('/api/tools/itdt/mam', {
-                partition: partition,
-                attribute_id: attributeId,
-                attribute_value: attributeValue
-            });
-            
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            
+            var response = await axios.post('/api/tools/linux/compression', { enable: true });
             if (response.data.success) {
-                resultContent.innerHTML = `<p class="text-success mb-0">✓ MAM属性写入成功</p>`;
-                resultDiv.classList.remove('alert-info', 'alert-danger');
-                resultDiv.classList.add('alert-success');
-                
-                logToConsole('MAM属性写入成功', 'success');
-                
-                // 写入成功后，自动读取一次以确认
-                setTimeout(() => {
-                    readMamAttribute();
-                }, 1000);
+                logToConsole('压缩已启用', 'success');
             } else {
-                const errorMsg = response.data.error_detail || response.data.stderr || response.data.error || '未知错误';
-                resultContent.innerHTML = `<p class="text-danger mb-0">写入失败: ${errorMsg}</p>`;
-                resultDiv.classList.remove('alert-info', 'alert-success');
-                resultDiv.classList.add('alert-danger');
-                
-                logToConsole('MAM属性写入失败: ' + errorMsg, 'error');
+                logToConsole('设置压缩失败: ' + (response.data.stderr || response.data.error), 'error');
             }
         } catch (error) {
-            const errorMsg = error.response?.data?.detail || error.message;
-            resultContent.innerHTML = `<p class="text-danger mb-0">写入失败: ${errorMsg}</p>`;
-            resultDiv.classList.remove('alert-info', 'alert-success');
-            resultDiv.classList.add('alert-danger');
-            
-            logToConsole('写入MAM属性失败: ' + errorMsg, 'error');
+            logToConsole('设置压缩失败: ' + error.message, 'error');
+        } finally {
+            showLoading(false);
+        }
+    }
+
+    async function mtSetBlock() {
+        logToConsole('正在设置变长块模式...', 'info');
+        showLoading(true);
+        try {
+            var response = await axios.post('/api/tools/linux/setblk', { block_size: 0 });
+            if (response.data.success) {
+                logToConsole('变长块模式已设置', 'success');
+            } else {
+                logToConsole('设置块大小失败: ' + (response.data.stderr || response.data.error), 'error');
+            }
+        } catch (error) {
+            logToConsole('设置块大小失败: ' + error.message, 'error');
         } finally {
             showLoading(false);
         }
     }
 
     // LTFS 工具函数
-    async function ltfsListDrives() {
-        logToConsole('正在列出LTFS驱动器...', 'info');
+    function showScanDevicesModal() {
+        var modal = new bootstrap.Modal(document.getElementById('scanDevicesModal'));
+        modal.show();
+    }
+
+    async function scanDevices() {
+        logToConsole('正在扫描磁带设备...', 'info');
         showLoading(true);
         try {
-            const response = await axios.get('/api/tools/ltfs/drives');
-            
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            
-            if (response.data.success) {
-                // 显示原始输出（如果有）
-                if (response.data.stdout && response.data.stdout.trim()) {
-                    logToConsole('LTFS输出:\n' + response.data.stdout, 'success');
-                } else {
-                    logToConsole('LTFS输出: (命令执行成功，但无输出)', 'info');
-                }
-                
-                // 如果有解析后的驱动器信息，显示格式化输出
-                if (response.data.drives && response.data.drives.length > 0) {
-                    logToConsole(`\n找到 ${response.data.drive_count} 个驱动器:`, 'success');
-                    response.data.drives.forEach((drive, index) => {
-                        logToConsole(`${index + 1}. 盘符: ${drive.assigned} | 地址: ${drive.address} | 序列号: ${drive.serial} | 状态: ${drive.status}`, 'info');
-                    });
-                } else {
-                    logToConsole('\n没有找到已分配的驱动器', 'warning');
-                    if (response.data.stderr && response.data.stderr.trim()) {
-                        logToConsole('错误信息: ' + response.data.stderr, 'error');
+            var response = await axios.get('/api/tools/linux/devices');
+            bootstrap.Modal.getInstance(document.getElementById('scanDevicesModal')).hide();
+
+            if (response.data.success && response.data.devices) {
+                logToConsole('找到 ' + response.data.devices.length + ' 个设备:', 'success');
+                response.data.devices.forEach(function(device, index) {
+                    logToConsole((index + 1) + '. ' + device.path + ' - ' + device.vendor + ' ' + device.model, 'info');
+                    if (device.scsi_addr) {
+                        logToConsole('   SCSI地址: ' + device.scsi_addr, 'info');
                     }
-                }
+                    if (device.generic_path) {
+                        logToConsole('   Generic设备: ' + device.generic_path, 'info');
+                    }
+                });
             } else {
-                // 命令执行失败
-                const errorMsg = response.data.stderr && response.data.stderr.trim() 
-                    ? response.data.stderr 
-                    : (response.data.error || '未知错误');
-                logToConsole('LTFS命令执行失败:', 'error');
-                logToConsole('返回码: ' + (response.data.returncode !== undefined ? response.data.returncode : 'N/A'), 'error');
-                if (response.data.stdout && response.data.stdout.trim()) {
-                    logToConsole('输出:\n' + response.data.stdout, 'error');
-                }
-                logToConsole('错误信息: ' + errorMsg, 'error');
+                logToConsole('未找到磁带设备', 'warning');
             }
         } catch (error) {
-            logToConsole('列出驱动器失败: ' + error.message, 'error');
-            if (error.response && error.response.data) {
-                logToConsole('详细信息: ' + JSON.stringify(error.response.data), 'error');
-            }
+            logToConsole('扫描设备失败: ' + error.message, 'error');
         } finally {
             showLoading(false);
         }
     }
 
-    function showLtfsLoadModal() {
-        const modal = new bootstrap.Modal(document.getElementById('ltfsLoadModal'));
+    function showMkltfsModal() {
+        var modal = new bootstrap.Modal(document.getElementById('mkltfsModal'));
         modal.show();
     }
 
-    async function ltfsLoadTape() {
-        const driveId = document.getElementById('ltfsLoadDriveId').value.trim();
-        if (!driveId) {
-            alert('请输入驱动器地址（如：0.0.24.0）');
+    async function mkltfsFormat() {
+        var devicePath = document.getElementById('mkltfsDevicePath').value.trim();
+        if (!devicePath) {
+            alert('请输入设备路径');
             return;
         }
-        
-        logToConsole(`====== 物理加载磁带 ======`, 'info');
-        logToConsole(`驱动器地址: ${driveId}`, 'info');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post('/api/tools/ltfs/load', { drive_id: driveId });
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            logToConsole('LTFS输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
-            bootstrap.Modal.getInstance(document.getElementById('ltfsLoadModal')).hide();
-        } catch (error) {
-            logToConsole('物理加载失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
 
-    function showLtfsEjectModal() {
-        const modal = new bootstrap.Modal(document.getElementById('ltfsEjectModal'));
-        modal.show();
-    }
+        var volumeLabel = document.getElementById('mkltfsVolumeLabel').value.trim();
+        var serial = document.getElementById('mkltfsSerial').value.trim();
 
-    async function ltfsEjectTape() {
-        const driveId = document.getElementById('ltfsEjectDriveId').value.trim();
-        if (!driveId) {
-            alert('请输入驱动器地址（如：0.0.24.0）');
+        if (!confirm('确定要格式化 ' + devicePath + ' 吗？\n\n警告：这将清除磁带上的所有数据！')) {
             return;
         }
-        
-        logToConsole(`====== 物理弹出磁带 ======`, 'info');
-        logToConsole(`驱动器地址: ${driveId}`, 'info');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post('/api/tools/ltfs/eject', { drive_id: driveId });
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            logToConsole('LTFS输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
-            bootstrap.Modal.getInstance(document.getElementById('ltfsEjectModal')).hide();
-        } catch (error) {
-            logToConsole('物理弹出失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
 
-    function showFormatModal() {
-        const modal = new bootstrap.Modal(document.getElementById('formatModal'));
-        modal.show();
-    }
-
-    async function ltfsFormatTape() {
-        const driveLetter = document.getElementById('formatDriveLetter').value.trim().toUpperCase();
-        if (!driveLetter || driveLetter.length !== 1) {
-            alert('请输入单个盘符字母（如：O）');
-            return;
-        }
-        
-        const volumeLabel = document.getElementById('formatVolumeLabel').value.trim();
-        const serial = document.getElementById('formatSerial').value.trim();
-        const ejectAfter = document.getElementById('formatEjectAfter').checked;
-        
-        logToConsole('====== 使用 LtfsCmdFormat.exe 格式化 ======', 'warning');
-        logToConsole(`盘符: ${driveLetter}`, 'info');
-        if (volumeLabel) logToConsole(`卷标: ${volumeLabel}`, 'info');
-        if (serial) logToConsole(`序列号: ${serial}`, 'info');
+        logToConsole('====== 开始 LTFS 格式化 ======', 'warning');
+        logToConsole('设备: ' + devicePath, 'info');
+        if (volumeLabel) logToConsole('卷标: ' + volumeLabel, 'info');
+        if (serial) logToConsole('序列号: ' + serial, 'info');
         showLoading(true);
-        
+
         try {
-            const response = await axios.post('/api/tools/ltfs/format', {
-                drive_letter: driveLetter,
+            var response = await axios.post('/api/tools/linux/mkltfs', {
+                device_path: devicePath,
                 volume_label: volumeLabel || null,
-                serial: serial || null,
+                serial_number: serial || null
+            });
+
+            if (response.data.stdout) {
+                logToConsole('输出:\n' + response.data.stdout, 'info');
+            }
+
+            if (response.data.success) {
+                logToConsole('====== LTFS 格式化成功 ======', 'success');
+                bootstrap.Modal.getInstance(document.getElementById('mkltfsModal')).hide();
+            } else {
+                logToConsole('====== LTFS 格式化失败 ======', 'error');
+                if (response.data.stderr) {
+                    logToConsole('错误: ' + response.data.stderr, 'error');
+                }
+            }
+        } catch (error) {
+            logToConsole('格式化失败: ' + error.message, 'error');
+        } finally {
+            showLoading(false);
+        }
+    }
+
+    function showLtfsMountModal() {
+        var modal = new bootstrap.Modal(document.getElementById('ltfsMountModal'));
+        modal.show();
+    }
+
+    async function ltfsMount() {
+        var devicePath = document.getElementById('ltfsDevicePath').value.trim();
+        var mountPoint = document.getElementById('ltfsMountPoint').value.trim();
+        var syncMode = document.getElementById('ltfsSyncMode').checked;
+
+        if (!devicePath || !mountPoint) {
+            alert('请输入设备路径和挂载点');
+            return;
+        }
+
+        logToConsole('====== 开始挂载 LTFS ======', 'info');
+        logToConsole('设备: ' + devicePath, 'info');
+        logToConsole('挂载点: ' + mountPoint, 'info');
+        showLoading(true);
+
+        try {
+            var response = await axios.post('/api/tools/linux/ltfs-mount', {
+                device_path: devicePath,
+                mount_point: mountPoint,
+                sync_mode: syncMode
+            });
+
+            if (response.data.stdout) {
+                logToConsole('输出:\n' + response.data.stdout, 'info');
+            }
+
+            if (response.data.success) {
+                logToConsole('====== LTFS 已挂载到 ' + mountPoint + ' ======', 'success');
+                bootstrap.Modal.getInstance(document.getElementById('ltfsMountModal')).hide();
+            } else {
+                logToConsole('====== 挂载失败 ======', 'error');
+                if (response.data.stderr) {
+                    logToConsole('错误: ' + response.data.stderr, 'error');
+                }
+            }
+        } catch (error) {
+            logToConsole('挂载失败: ' + error.message, 'error');
+        } finally {
+            showLoading(false);
+        }
+    }
+
+    function showLtfsUnmountModal() {
+        var modal = new bootstrap.Modal(document.getElementById('ltfsUnmountModal'));
+        modal.show();
+    }
+
+    async function ltfsUnmount() {
+        var mountPoint = document.getElementById('ltfsUnmountPoint').value.trim();
+        var ejectAfter = document.getElementById('ltfsEjectAfter').checked;
+
+        if (!mountPoint) {
+            alert('请输入挂载点');
+            return;
+        }
+
+        logToConsole('====== 开始卸载 LTFS ======', 'info');
+        logToConsole('挂载点: ' + mountPoint, 'info');
+        if (ejectAfter) logToConsole('卸载后弹出: 是', 'info');
+        showLoading(true);
+
+        try {
+            var response = await axios.post('/api/tools/linux/ltfs-unmount', {
+                mount_point: mountPoint,
                 eject_after: ejectAfter
             });
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
+
+            if (response.data.stdout) {
+                logToConsole('输出:\n' + response.data.stdout, 'info');
             }
-            logToConsole('LTFS输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
+
             if (response.data.success) {
-                logToConsole('====== 格式化完成 ======', 'success');
+                logToConsole('====== LTFS 已卸载 ======', 'success');
+                bootstrap.Modal.getInstance(document.getElementById('ltfsUnmountModal')).hide();
+            } else {
+                logToConsole('====== 卸载失败 ======', 'error');
+                if (response.data.stderr) {
+                    logToConsole('错误: ' + response.data.stderr, 'error');
+                }
             }
-            bootstrap.Modal.getInstance(document.getElementById('formatModal')).hide();
-        } catch (error) {
-            logToConsole('格式化失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    function showMkltfsFormatModal() {
-        const modal = new bootstrap.Modal(document.getElementById('mkltfsFormatModal'));
-        modal.show();
-    }
-
-    async function mkltfsFormatTape() {
-        const deviceId = document.getElementById('mkltfsDeviceId').value.trim();
-        if (!deviceId) {
-            alert('请输入设备地址');
-            return;
-        }
-        
-        const volumeLabel = document.getElementById('mkltfsVolumeLabel').value.trim();
-        
-        logToConsole('====== 使用 mkltfs.exe 格式化 ======', 'warning');
-        logToConsole(`设备地址: ${deviceId}`, 'info');
-        if (volumeLabel) logToConsole(`卷标: ${volumeLabel}`, 'info');
-        logToConsole('此方式速度较慢，请耐心等待...', 'warning');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post('/api/tools/mkltfs/format', {
-                device_id: deviceId,
-                volume_label: volumeLabel || null
-            });
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            logToConsole('mkltfs输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
-            if (response.data.success) {
-                logToConsole('====== 格式化完成 ======', 'success');
-            }
-            bootstrap.Modal.getInstance(document.getElementById('mkltfsFormatModal')).hide();
-        } catch (error) {
-            logToConsole('格式化失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    function showAssignModal() {
-        const modal = new bootstrap.Modal(document.getElementById('assignModal'));
-        modal.show();
-    }
-
-    async function ltfsAssignTape() {
-        const driveId = document.getElementById('assignDriveId').value.trim();
-        if (!driveId) {
-            alert('请输入驱动器地址（如：0.0.24.0）');
-            return;
-        }
-        
-        const driveLetter = document.getElementById('assignDriveLetter').value.trim() || 'O';
-        
-        logToConsole(`====== 分配磁带到盘符 ======`, 'info');
-        logToConsole(`驱动器地址: ${driveId}`, 'info');
-        logToConsole(`盘符: ${driveLetter}`, 'info');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post('/api/tools/ltfs/assign', { drive_id: driveId });
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            logToConsole('LTFS输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
-            if (response.data.success) {
-                logToConsole(`\n✓ 磁带已成功分配到 ${driveLetter} 盘`, 'success');
-            }
-            bootstrap.Modal.getInstance(document.getElementById('assignModal')).hide();
-        } catch (error) {
-            logToConsole('分配失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    function showUnassignModal() {
-        const modal = new bootstrap.Modal(document.getElementById('unassignModal'));
-        modal.show();
-    }
-
-    async function ltfsUnassignTape() {
-        const driveId = document.getElementById('unassignDriveId').value.trim();
-        if (!driveId) {
-            alert('请输入驱动器地址（如：0.0.24.0）');
-            return;
-        }
-        
-        logToConsole(`====== 从盘符卸载磁带 ======`, 'info');
-        logToConsole(`驱动器地址: ${driveId}`, 'info');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post('/api/tools/ltfs/unassign', { drive_id: driveId });
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
-            }
-            logToConsole('LTFS输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
-            bootstrap.Modal.getInstance(document.getElementById('unassignModal')).hide();
         } catch (error) {
             logToConsole('卸载失败: ' + error.message, 'error');
         } finally {
@@ -1596,30 +752,23 @@
         }
     }
 
-    function showCheckModal() {
-        const modal = new bootstrap.Modal(document.getElementById('checkModal'));
-        modal.show();
-    }
-
-    async function ltfsCheckTape() {
-        const driveId = document.getElementById('checkDriveId').value.trim();
-        if (!driveId) {
-            alert('请输入驱动器地址（如：0.0.24.0）');
-            return;
-        }
-        
-        logToConsole(`====== 检查磁带完整性 ======`, 'info');
-        logToConsole(`驱动器地址: ${driveId}`, 'info');
-        logToConsole('此操作可能需要较长时间（最长2小时），请耐心等待...', 'warning');
+    async function checkLtfsMount() {
+        logToConsole('正在检查 LTFS 挂载状态...', 'info');
         showLoading(true);
-        
         try {
-            const response = await axios.post('/api/tools/ltfs/check', { drive_id: driveId });
-            if (response.data.command) {
-                logToConsole(`执行命令: ${response.data.command}`, 'info');
+            var response = await axios.get('/api/tools/linux/ltfs-check');
+            if (response.data.success) {
+                if (response.data.mounted) {
+                    logToConsole('LTFS 已挂载: ' + response.data.mount_point, 'success');
+                    if (response.data.volume_name) {
+                        logToConsole('卷标: ' + response.data.volume_name, 'info');
+                    }
+                } else {
+                    logToConsole('LTFS 未挂载', 'warning');
+                }
+            } else {
+                logToConsole('检查失败: ' + (response.data.error || '未知错误'), 'error');
             }
-            logToConsole('LTFS输出:\n' + response.data.stdout, response.data.success ? 'success' : 'error');
-            bootstrap.Modal.getInstance(document.getElementById('checkModal')).hide();
         } catch (error) {
             logToConsole('检查失败: ' + error.message, 'error');
         } finally {
@@ -1628,94 +777,53 @@
     }
 
     // 组合流程函数
-    function showMountCompleteModal() {
-        const modal = new bootstrap.Modal(document.getElementById('mountCompleteModal'));
+    function showPrepareTapeModal() {
+        var modal = new bootstrap.Modal(document.getElementById('prepareTapeModal'));
         modal.show();
     }
 
-    async function mountTapeComplete() {
-        const driveId = document.getElementById('mountDriveId').value.trim();
-        if (!driveId) {
-            alert('请输入驱动器地址（如：0.0.24.0）');
+    async function prepareTape() {
+        var devicePath = document.getElementById('prepareDevicePath').value.trim();
+        var ltfsDevice = document.getElementById('prepareLtfsDevice').value.trim();
+        var volumeLabel = document.getElementById('prepareVolumeLabel').value.trim();
+        var forceErase = document.getElementById('prepareForceErase').checked;
+
+        if (!devicePath) {
+            alert('请输入设备路径');
             return;
         }
-        
-        const formatTape = document.getElementById('mountFormatTape').checked;
-        const volumeLabel = document.getElementById('mountVolumeLabel').value.trim();
-        
-        logToConsole('====== 开始完整挂载流程 ======', 'info');
-        logToConsole(`驱动器地址: ${driveId}`, 'info');
-        logToConsole(`盘符: O`, 'info');
-        logToConsole(`是否格式化: ${formatTape ? '是' : '否'}`, 'info');
-        if (formatTape && volumeLabel) {
-            logToConsole(`卷标: ${volumeLabel}`, 'info');
-        }
+
+        logToConsole('====== 开始准备磁带 ======', 'info');
+        logToConsole('设备: ' + devicePath, 'info');
+        if (ltfsDevice) logToConsole('LTFS设备: ' + ltfsDevice, 'info');
+        if (volumeLabel) logToConsole('卷标: ' + volumeLabel, 'info');
+        logToConsole('强制格式化: ' + (forceErase ? '是' : '否'), 'info');
         showLoading(true);
-        
+
         try {
-            const response = await axios.post('/api/tools/mount/complete', {
-                drive_id: driveId,
-                format_tape: formatTape,
-                volume_label: volumeLabel || null
+            var response = await axios.post('/api/tools/linux/prepare', {
+                device_path: devicePath,
+                ltfs_device: ltfsDevice || null,
+                volume_label: volumeLabel || null,
+                force_erase: forceErase
             });
-            
-            if (response.data.steps) {
-                logToConsole('\n流程步骤:', 'info');
-                response.data.steps.forEach((step, index) => {
-                    const status = step.success ? '✓' : '✗';
-                    const type = step.success ? 'success' : 'error';
-                    logToConsole(`${index + 1}. ${status} ${step.message}`, type);
-                });
+
+            if (response.data.stdout) {
+                logToConsole('输出:\n' + response.data.stdout, 'info');
             }
-            
+
             if (response.data.success) {
-                logToConsole('\n====== 挂载流程完成 ======', 'success');
+                logToConsole('====== 磁带准备完成 ======', 'success');
+                logToConsole(response.data.message, 'success');
+                bootstrap.Modal.getInstance(document.getElementById('prepareTapeModal')).hide();
             } else {
-                logToConsole(`\n====== 挂载流程失败: ${response.data.error} ======`, 'error');
+                logToConsole('====== 准备失败 ======', 'error');
+                if (response.data.stderr) {
+                    logToConsole('错误: ' + response.data.stderr, 'error');
+                }
             }
-            
-            bootstrap.Modal.getInstance(document.getElementById('mountCompleteModal')).hide();
         } catch (error) {
-            logToConsole('完整挂载流程失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    function showUnmountCompleteModal() {
-        const modal = new bootstrap.Modal(document.getElementById('unmountCompleteModal'));
-        modal.show();
-    }
-
-    async function unmountTapeComplete() {
-        const driveId = document.getElementById('unmountDriveId').value.trim();
-        if (!driveId) {
-            alert('请输入驱动器地址（如：0.0.24.0）');
-            return;
-        }
-        
-        logToConsole('====== 开始完整卸载流程 ======', 'info');
-        logToConsole(`驱动器地址: ${driveId}`, 'info');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post('/api/tools/unmount/complete', {
-                drive_id: driveId
-            });
-            
-            if (response.data.steps) {
-                logToConsole('\n流程步骤:', 'info');
-                response.data.steps.forEach((step, index) => {
-                    const status = step.success ? '✓' : '✗';
-                    const type = step.success ? 'success' : 'error';
-                    logToConsole(`${index + 1}. ${status} ${step.message}`, type);
-                });
-            }
-            
-            logToConsole('\n====== 卸载流程完成 ======', 'success');
-            bootstrap.Modal.getInstance(document.getElementById('unmountCompleteModal')).hide();
-        } catch (error) {
-            logToConsole('完整卸载流程失败: ' + error.message, 'error');
+            logToConsole('准备磁带失败: ' + error.message, 'error');
         } finally {
             showLoading(false);
         }
@@ -1724,17 +832,22 @@
     async function readTapeLabel() {
         logToConsole('====== 读取磁带卷标 ======', 'info');
         showLoading(true);
-        
+
         try {
-            const response = await axios.get('/api/tools/label/read');
+            var response = await axios.get('/api/tools/linux/label');
             if (response.data.success) {
-                logToConsole('\n✓ 磁带卷标信息:', 'success');
-                logToConsole(`  卷标名称: ${response.data.volume_name || '(无)'}`, 'info');
-                logToConsole(`  序列号: ${response.data.serial_number || '(无)'}`, 'info');
-                logToConsole(`  文件系统: ${response.data.file_system || '(无)'}`, 'info');
-                
-                if (response.data.ltfs_label) {
-                    logToConsole(`  LTFS卷标: ${response.data.ltfs_label}`, 'info');
+                logToConsole('卷标信息:', 'success');
+                if (response.data.volume_name) {
+                    logToConsole('  卷标名称: ' + response.data.volume_name, 'info');
+                }
+                if (response.data.serial_number) {
+                    logToConsole('  序列号: ' + response.data.serial_number, 'info');
+                }
+                if (response.data.barcode) {
+                    logToConsole('  条码: ' + response.data.barcode, 'info');
+                }
+                if (response.data.raw_output) {
+                    logToConsole('\n原始输出:\n' + response.data.raw_output, 'info');
                 }
             } else {
                 logToConsole('读取卷标失败: ' + (response.data.error || '未知错误'), 'error');
@@ -1746,394 +859,11 @@
         }
     }
 
-    async function getVolumeInfo() {
-        logToConsole('====== 获取详细卷信息 ======', 'info');
-        showLoading(true);
-        
-        try {
-            const response = await axios.get('/api/tools/volume/info');
-            if (response.data.success && response.data.volume_info) {
-                logToConsole('\n磁带卷详细信息:', 'success');
-                for (const [key, value] of Object.entries(response.data.volume_info)) {
-                    logToConsole(`  ${key}: ${value}`, 'info');
-                }
-                
-                if (response.data.raw_output) {
-                    logToConsole('\nfsutil原始输出:', 'info');
-                    logToConsole(response.data.raw_output, 'info');
-                }
-            } else {
-                logToConsole('获取卷信息失败: ' + (response.data.error || '未知错误'), 'error');
-            }
-        } catch (error) {
-            logToConsole('获取卷信息失败: ' + error.message, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
     // 页面加载时自动检查工具
     document.addEventListener('DOMContentLoaded', function() {
-        logToConsole('欢迎使用磁带工具管理', 'success');
+        logToConsole('欢迎使用磁带工具管理 (Linux)', 'success');
         logToConsole('正在自动检查工具可用性...', 'info');
         checkToolsAvailability();
     });
-    // libltfs.dll 管理
-    function showLibltfsModal() {
-        const modal = new bootstrap.Modal(document.getElementById('libltfsModal'));
-        modal.show();
-        // 重置结果区域
-        document.getElementById('libltfsVolumeLabelResult').classList.add('d-none');
-        document.getElementById('libltfsSerialNumberResult').classList.add('d-none');
-        document.getElementById('libltfsBarcodeResult').classList.add('d-none');
-        document.getElementById('libltfsDriveStatus').classList.add('d-none');
-        // 清空输入框
-        document.getElementById('libltfsDriveLetter').value = '';
-        document.getElementById('libltfsVolumeLabel').value = '';
-        document.getElementById('libltfsSerialNumber').value = '';
-        document.getElementById('libltfsBarcode').value = '';
-    }
-
-    async function detectLtfsDrive() {
-        logToConsole('正在检测LTFS驱动器...', 'info');
-        showLoading(true);
-        
-        const statusDiv = document.getElementById('libltfsDriveStatus');
-        const statusText = document.getElementById('libltfsDriveStatusText');
-        
-        try {
-            // 方法1: 尝试从LTFS驱动器列表获取（优先使用）
-            try {
-                const drivesResponse = await axios.get('/api/tools/ltfs/drives');
-                if (drivesResponse.data && drivesResponse.data.drives && drivesResponse.data.drives.length > 0) {
-                    const drive = drivesResponse.data.drives[0];
-                    // 优先使用SCSI地址
-                    const driveId = drive.scsi_address || drive.drive_id || '0.0.24.0';
-                    document.getElementById('libltfsDriveLetter').value = driveId;
-                    
-                    statusText.innerHTML = `<i class="bi bi-check-circle text-success me-1"></i>检测到驱动器: <strong>${driveId}</strong>`;
-                    statusDiv.classList.remove('d-none', 'alert-danger', 'alert-warning');
-                    statusDiv.classList.add('alert-success');
-                    
-                    logToConsole(`从驱动器列表检测到: ${driveId}`, 'success');
-                    showLoading(false);
-                    return;
-                }
-            } catch (e) {
-                logToConsole('从驱动器列表检测失败: ' + (e.message || '未知错误'), 'warning');
-            }
-            
-            // 方法2: 尝试读取卷标来检测驱动器（需要已挂载的磁带）
-            try {
-                const response = await axios.get('/api/tools/label/read');
-                
-                if (response.data.success && response.data.volume_name) {
-                    // 从配置或响应中获取驱动器盘符
-                    // 通常LTFS驱动器盘符是固定的（如O:）
-                    const driveLetter = 'O'; // 默认驱动器盘符
-                    document.getElementById('libltfsDriveLetter').value = driveLetter;
-                    
-                    statusText.innerHTML = `<i class="bi bi-check-circle text-success me-1"></i>检测到驱动器: <strong>${driveLetter}:</strong><br><small class="text-secondary">如需使用SCSI地址，请手动输入（如：0.0.24.0）</small>`;
-                    statusDiv.classList.remove('d-none', 'alert-danger', 'alert-warning');
-                    statusDiv.classList.add('alert-success');
-                    
-                    logToConsole(`检测到LTFS驱动器: ${driveLetter}:`, 'success');
-                    showLoading(false);
-                    return;
-                }
-            } catch (e) {
-                logToConsole('从卷标检测失败: ' + (e.message || '未知错误'), 'warning');
-            }
-            
-            // 如果都失败，提示用户手动输入
-            statusText.innerHTML = '<i class="bi bi-exclamation-triangle text-warning me-1"></i>未检测到LTFS驱动器，请手动输入盘符（如：O）或SCSI地址（如：0.0.24.0）';
-            statusDiv.classList.remove('d-none', 'alert-success', 'alert-danger');
-            statusDiv.classList.add('alert-warning');
-            
-            logToConsole('未检测到LTFS驱动器，请手动输入', 'warning');
-            
-        } catch (error) {
-            const errorMsg = error.response?.data?.detail || error.message || '连接失败';
-            statusText.innerHTML = `<i class="bi bi-x-circle text-danger me-1"></i>检测失败: ${errorMsg}<br><small class="text-secondary">请手动输入驱动器标识（盘符或SCSI地址）</small>`;
-            statusDiv.classList.remove('d-none', 'alert-success', 'alert-warning');
-            statusDiv.classList.add('alert-danger');
-            
-            logToConsole('检测驱动器失败: ' + errorMsg, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    function formatDriveIdentifier(input) {
-        const value = input.value.trim();
-        // 如果是单个字母，转换为大写；如果是SCSI地址，保持不变
-        if (/^[A-Za-z]$/.test(value)) {
-            input.value = value.toUpperCase();
-        } else if (/^\d+\.\d+\.\d+\.\d+/.test(value)) {
-            // SCSI地址格式，保持原样
-            input.value = value;
-        }
-    }
-
-    function getLibltfsDriveLetter() {
-        const drive = document.getElementById('libltfsDriveLetter').value.trim();
-        if (!drive) {
-            alert('请输入驱动器标识（盘符或SCSI地址）');
-            return null;
-        }
-        // 验证格式：单个字母（盘符）或SCSI地址格式（如0.0.24.0）
-        const isDriveLetter = /^[A-Z]$/i.test(drive);
-        const isScsiAddress = /^\d+\.\d+\.\d+\.\d+$/.test(drive);
-        
-        if (!isDriveLetter && !isScsiAddress) {
-            alert('请输入有效的驱动器标识：\n- 单个字母盘符（如：O）\n- 或SCSI地址（如：0.0.24.0）');
-            return null;
-        }
-        // 盘符转换为大写，SCSI地址保持原样
-        return isDriveLetter ? drive.toUpperCase() : drive;
-    }
-
-    async function libltfsGetVolumeLabel() {
-        const drive = getLibltfsDriveLetter();
-        if (!drive) return;
-        
-        const resultDiv = document.getElementById('libltfsVolumeLabelResult');
-        const resultContent = document.getElementById('libltfsVolumeLabelResultContent');
-        
-        resultDiv.classList.add('d-none');
-        resultContent.innerHTML = '<div class="spinner-border spinner-border-sm me-2" role="status"></div>正在读取...';
-        resultDiv.classList.remove('d-none');
-        
-        logToConsole(`正在通过libltfs.dll读取卷标 (驱动器: ${drive})...`, 'info');
-        showLoading(true);
-        
-        try {
-            const response = await axios.get(`/api/tools/libltfs/volume-label/${drive}`);
-            
-            if (response.data.success && response.data.volume_label) {
-                document.getElementById('libltfsVolumeLabel').value = response.data.volume_label;
-                resultContent.innerHTML = `<p class="text-success mb-0">✓ 卷标: <code>${response.data.volume_label}</code></p>`;
-                logToConsole(`卷标读取成功: ${response.data.volume_label}`, 'success');
-            } else {
-                const errorMsg = response.data.error || '未读取到卷标';
-                resultContent.innerHTML = `<p class="text-danger mb-0">读取失败: ${errorMsg}</p>`;
-                logToConsole('卷标读取失败: ' + errorMsg, 'error');
-            }
-        } catch (error) {
-            const errorMsg = error.response?.data?.detail || error.message;
-            resultContent.innerHTML = `<p class="text-danger mb-0">读取失败: ${errorMsg}</p>`;
-            logToConsole('读取卷标失败: ' + errorMsg, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    async function libltfsSetVolumeLabel() {
-        const drive = getLibltfsDriveLetter();
-        if (!drive) return;
-        
-        const label = document.getElementById('libltfsVolumeLabel').value.trim();
-        if (!label) {
-            alert('请输入卷标名称');
-            return;
-        }
-        
-        if (!confirm(`确定要将卷标设置为 "${label}"？`)) {
-            return;
-        }
-        
-        const resultDiv = document.getElementById('libltfsVolumeLabelResult');
-        const resultContent = document.getElementById('libltfsVolumeLabelResultContent');
-        
-        resultDiv.classList.add('d-none');
-        resultContent.innerHTML = '<div class="spinner-border spinner-border-sm me-2" role="status"></div>正在设置...';
-        resultDiv.classList.remove('d-none');
-        
-        logToConsole(`正在通过libltfs.dll设置卷标 (驱动器: ${drive}, 卷标: ${label})...`, 'warning');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post(`/api/tools/libltfs/volume-label/${drive}`, {
-                volume_label: label
-            });
-            
-            if (response.data.success) {
-                resultContent.innerHTML = `<p class="text-success mb-0">✓ 卷标设置成功: <code>${label}</code></p>`;
-                logToConsole('卷标设置成功', 'success');
-            } else {
-                const errorMsg = response.data.error || '设置失败';
-                resultContent.innerHTML = `<p class="text-danger mb-0">设置失败: ${errorMsg}</p>`;
-                logToConsole('卷标设置失败: ' + errorMsg, 'error');
-            }
-        } catch (error) {
-            const errorMsg = error.response?.data?.detail || error.message;
-            resultContent.innerHTML = `<p class="text-danger mb-0">设置失败: ${errorMsg}</p>`;
-            logToConsole('设置卷标失败: ' + errorMsg, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    async function libltfsGetSerialNumber() {
-        const drive = getLibltfsDriveLetter();
-        if (!drive) return;
-        
-        const resultDiv = document.getElementById('libltfsSerialNumberResult');
-        const resultContent = document.getElementById('libltfsSerialNumberResultContent');
-        
-        resultDiv.classList.add('d-none');
-        resultContent.innerHTML = '<div class="spinner-border spinner-border-sm me-2" role="status"></div>正在读取...';
-        resultDiv.classList.remove('d-none');
-        
-        logToConsole(`正在通过libltfs.dll读取序列号 (驱动器: ${drive})...`, 'info');
-        showLoading(true);
-        
-        try {
-            const response = await axios.get(`/api/tools/libltfs/serial-number/${drive}`);
-            
-            if (response.data.success && response.data.serial_number) {
-                document.getElementById('libltfsSerialNumber').value = response.data.serial_number;
-                resultContent.innerHTML = `<p class="text-success mb-0">✓ 序列号: <code>${response.data.serial_number}</code></p>`;
-                logToConsole(`序列号读取成功: ${response.data.serial_number}`, 'success');
-            } else {
-                const errorMsg = response.data.error || '未读取到序列号';
-                resultContent.innerHTML = `<p class="text-danger mb-0">读取失败: ${errorMsg}</p>`;
-                logToConsole('序列号读取失败: ' + errorMsg, 'error');
-            }
-        } catch (error) {
-            const errorMsg = error.response?.data?.detail || error.message;
-            resultContent.innerHTML = `<p class="text-danger mb-0">读取失败: ${errorMsg}</p>`;
-            logToConsole('读取序列号失败: ' + errorMsg, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    async function libltfsSetSerialNumber() {
-        const drive = getLibltfsDriveLetter();
-        if (!drive) return;
-        
-        const serial = document.getElementById('libltfsSerialNumber').value.trim();
-        if (!serial) {
-            alert('请输入序列号');
-            return;
-        }
-        
-        if (!confirm(`确定要将序列号设置为 "${serial}"？`)) {
-            return;
-        }
-        
-        const resultDiv = document.getElementById('libltfsSerialNumberResult');
-        const resultContent = document.getElementById('libltfsSerialNumberResultContent');
-        
-        resultDiv.classList.add('d-none');
-        resultContent.innerHTML = '<div class="spinner-border spinner-border-sm me-2" role="status"></div>正在设置...';
-        resultDiv.classList.remove('d-none');
-        
-        logToConsole(`正在通过libltfs.dll设置序列号 (驱动器: ${drive}, 序列号: ${serial})...`, 'warning');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post(`/api/tools/libltfs/serial-number/${drive}`, {
-                serial_number: serial
-            });
-            
-            if (response.data.success) {
-                resultContent.innerHTML = `<p class="text-success mb-0">✓ 序列号设置成功: <code>${serial}</code></p>`;
-                logToConsole('序列号设置成功', 'success');
-            } else {
-                const errorMsg = response.data.error || '设置失败';
-                resultContent.innerHTML = `<p class="text-danger mb-0">设置失败: ${errorMsg}</p>`;
-                logToConsole('序列号设置失败: ' + errorMsg, 'error');
-            }
-        } catch (error) {
-            const errorMsg = error.response?.data?.detail || error.message;
-            resultContent.innerHTML = `<p class="text-danger mb-0">设置失败: ${errorMsg}</p>`;
-            logToConsole('设置序列号失败: ' + errorMsg, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    async function libltfsGetBarcode() {
-        const drive = getLibltfsDriveLetter();
-        if (!drive) return;
-        
-        const resultDiv = document.getElementById('libltfsBarcodeResult');
-        const resultContent = document.getElementById('libltfsBarcodeResultContent');
-        
-        resultDiv.classList.add('d-none');
-        resultContent.innerHTML = '<div class="spinner-border spinner-border-sm me-2" role="status"></div>正在读取...';
-        resultDiv.classList.remove('d-none');
-        
-        logToConsole(`正在通过libltfs.dll读取条码 (驱动器: ${drive})...`, 'info');
-        showLoading(true);
-        
-        try {
-            const response = await axios.get(`/api/tools/libltfs/barcode/${drive}`);
-            
-            if (response.data.success && response.data.barcode) {
-                document.getElementById('libltfsBarcode').value = response.data.barcode;
-                resultContent.innerHTML = `<p class="text-success mb-0">✓ 条码: <code>${response.data.barcode}</code></p>`;
-                logToConsole(`条码读取成功: ${response.data.barcode}`, 'success');
-            } else {
-                const errorMsg = response.data.error || '未读取到条码';
-                resultContent.innerHTML = `<p class="text-danger mb-0">读取失败: ${errorMsg}</p>`;
-                logToConsole('条码读取失败: ' + errorMsg, 'error');
-            }
-        } catch (error) {
-            const errorMsg = error.response?.data?.detail || error.message;
-            resultContent.innerHTML = `<p class="text-danger mb-0">读取失败: ${errorMsg}</p>`;
-            logToConsole('读取条码失败: ' + errorMsg, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
-
-    async function libltfsSetBarcode() {
-        const drive = getLibltfsDriveLetter();
-        if (!drive) return;
-        
-        const barcode = document.getElementById('libltfsBarcode').value.trim();
-        if (!barcode) {
-            alert('请输入条码');
-            return;
-        }
-        
-        if (!confirm(`确定要将条码设置为 "${barcode}"？`)) {
-            return;
-        }
-        
-        const resultDiv = document.getElementById('libltfsBarcodeResult');
-        const resultContent = document.getElementById('libltfsBarcodeResultContent');
-        
-        resultDiv.classList.add('d-none');
-        resultContent.innerHTML = '<div class="spinner-border spinner-border-sm me-2" role="status"></div>正在设置...';
-        resultDiv.classList.remove('d-none');
-        
-        logToConsole(`正在通过libltfs.dll设置条码 (驱动器: ${drive}, 条码: ${barcode})...`, 'warning');
-        showLoading(true);
-        
-        try {
-            const response = await axios.post(`/api/tools/libltfs/barcode/${drive}`, {
-                barcode: barcode
-            });
-            
-            if (response.data.success) {
-                resultContent.innerHTML = `<p class="text-success mb-0">✓ 条码设置成功: <code>${barcode}</code></p>`;
-                logToConsole('条码设置成功', 'success');
-            } else {
-                const errorMsg = response.data.error || '设置失败';
-                resultContent.innerHTML = `<p class="text-danger mb-0">设置失败: ${errorMsg}</p>`;
-                logToConsole('条码设置失败: ' + errorMsg, 'error');
-            }
-        } catch (error) {
-            const errorMsg = error.response?.data?.detail || error.message;
-            resultContent.innerHTML = `<p class="text-danger mb-0">设置失败: ${errorMsg}</p>`;
-            logToConsole('设置条码失败: ' + errorMsg, 'error');
-        } finally {
-            showLoading(false);
-        }
-    }
 </script>
 {% endblock %}

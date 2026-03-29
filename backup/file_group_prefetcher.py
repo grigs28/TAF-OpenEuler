@@ -41,7 +41,7 @@ class FileGroupPrefetcher:
         # 获取并行批次数量（默认从配置读取）
         if parallel_batches is None:
             settings = get_settings()
-            parallel_batches = getattr(settings, 'COMPRESSION_PARALLEL_BATCHES', 2)
+            parallel_batches = getattr(settings, 'COMPRESSION_PARALLEL_BATCHES', 3)
         
         self.parallel_batches = parallel_batches
         # 文件组队列：容量为 parallel_batches + 1（N个正在压缩的 + 1个待压缩的）

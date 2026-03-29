@@ -17,7 +17,6 @@ from config.database import db_manager
 from sqlalchemy import select, and_
 from utils.log_utils import log_system, LogLevel, LogCategory, log_operation, OperationType
 from .db_utils import is_opengauss, is_redis, get_opengauss_connection
-from .sqlite_utils import is_sqlite
 import json
 
 logger = logging.getLogger(__name__)

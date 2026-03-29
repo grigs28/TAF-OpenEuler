@@ -483,7 +483,6 @@ async def get_notification_users(request: Request):
     try:
         # 检查是否为Redis数据库
         from utils.scheduler.db_utils import is_redis
-        from utils.scheduler.sqlite_utils import is_sqlite
         
         if is_redis():
             # Redis模式下返回空列表（暂未实现Redis查询通知人员）

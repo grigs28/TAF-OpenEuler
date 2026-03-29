@@ -14,7 +14,7 @@ from enum import Enum
 
 from models.system_log import OperationLog, SystemLog, LogLevel, LogCategory, OperationType
 from config.database import db_manager
-from .scheduler.db_utils import is_opengauss, get_opengauss_connection
+from .scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +79,6 @@ async def log_operation(
     try:
         # 检查是否为Redis数据库
         from utils.scheduler.db_utils import is_redis
-        from utils.scheduler.sqlite_utils import is_sqlite
         
         if is_redis():
             # Redis模式：使用Redis存储操作日志
@@ -323,7 +322,6 @@ async def log_system(
                 return True
             
             # 使用原生 SQL 插入系统日志（SQLite 版本，避免 RETURNING 子句问题）
-            from utils.scheduler.sqlite_utils import get_sqlite_connection, is_sqlite
             import json
             
             # 再次检查是否为SQLite

@@ -58,10 +58,12 @@ class CompressionWorker:
         # 并行批次设置（基础值，会在异步方法中根据扫描状态动态调整）
         if self.use_prefetcher:
             settings = get_settings()
-            self.base_parallel_batches = getattr(settings, 'COMPRESSION_PARALLEL_BATCHES', 2)
+            self.base_parallel_batches = getattr(settings, 'COMPRESSION_PARALLEL_BATCHES', 3)
+            self.batches_reduction = getattr(settings, 'COMPRESSION_BATCHES_REDUCTION', 1)  # 扫描时减少的批次数
             self.parallel_batches = self.base_parallel_batches  # 初始值，会在异步方法中调整
         else:
             self.base_parallel_batches = 1
+            self.batches_reduction = 0  # 非预取模式不减少
             self.parallel_batches = 1  # 非openGauss模式，顺序执行
         
         # 存储每个压缩任务的进度（用于实时查询）
@@ -204,11 +206,12 @@ class CompressionWorker:
             
             # 如果扫描未完成，减少并行批次数量（降低同时运行的压缩任务数）
             if scan_status not in (None, "completed"):
-                adjusted_batches = max(1, self.base_parallel_batches - 1)
+                adjusted_batches = max(0, self.base_parallel_batches - self.batches_reduction)
                 if adjusted_batches != self.parallel_batches:
                     logger.info(
                         f"[压缩配置] 扫描阶段（scan_status={scan_status}），"
-                        f"将并行批次数量从 {self.base_parallel_batches} 降为 {adjusted_batches}"
+                        f"将并行批次数量从 {self.base_parallel_batches} 降为 {adjusted_batches} "
+                        f"(减少 {self.batches_reduction} 批)"
                     )
                     self.parallel_batches = adjusted_batches
             else:

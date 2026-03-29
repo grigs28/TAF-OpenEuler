@@ -32,16 +32,18 @@ class FinalDirMonitor:
     4. 支持任务完成判断
     """
     
-    def __init__(self, tape_handler: TapeHandler, settings=None):
+    def __init__(self, tape_handler: TapeHandler, settings=None, dingtalk_notifier=None):
         """
         初始化Final目录监控器
-        
+
         Args:
             tape_handler: TapeHandler实例，用于实际移动文件
             settings: 系统设置
+            dingtalk_notifier: 钉钉通知器（可选）
         """
         self.tape_handler = tape_handler
         self.settings = settings or get_settings()
+        self.dingtalk_notifier = dingtalk_notifier
         self._worker_thread: Optional[threading.Thread] = None
         self._running = False
         self._lock = threading.Lock()
@@ -83,7 +85,32 @@ class FinalDirMonitor:
         compress_dir = Path(self.settings.BACKUP_COMPRESS_DIR)
         final_dir = compress_dir / "final"
         return final_dir
-    
+
+    def _send_failure_notification(self, error_msg: str):
+        """发送失败通知到钉钉"""
+        logger.error(f"[Final监控] 准备发送失败通知: {error_msg}")
+        if self.dingtalk_notifier:
+            try:
+                # 在新的事件循环中运行异步通知
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(
+                        self.dingtalk_notifier.send_backup_notification(
+                            "磁带写入",
+                            "failed",
+                            {'error': error_msg}
+                        )
+                    )
+                    logger.info("[Final监控] 失败通知已发送到钉钉")
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
+            except Exception as notify_error:
+                logger.warning(f"[Final监控] 发送钉钉通知失败: {str(notify_error)}")
+        else:
+            logger.warning("[Final监控] 未配置钉钉通知器，无法发送失败通知")
+
     def _extract_backup_set_id_from_path(self, file_path: Path) -> Optional[str]:
         """从文件路径提取backup_set.set_id
         
@@ -109,14 +136,14 @@ class FinalDirMonitor:
         except Exception as e:
             logger.debug(f"[Final监控] 提取backup_set_id失败: {file_path}, 错误: {str(e)}")
             return None
-    
+
     def _move_file_to_tape(self, file_path: Path) -> bool:
         """
         移动单个文件到磁带
-        
+
         Args:
             file_path: 源文件路径
-            
+
         Returns:
             bool: 是否成功
         """
@@ -125,11 +152,11 @@ class FinalDirMonitor:
             if not source_file.exists():
                 logger.warning(f"[Final监控] 文件不存在: {source_file}")
                 return False
-            
+
             # 获取源文件大小（用于验证）
             source_size = source_file.stat().st_size
             logger.info(f"[Final监控] 开始移动文件到磁带: {source_file.name} (大小: {format_bytes(source_size)})")
-            
+
             # 从路径提取backup_set_id
             backup_set_id = self._extract_backup_set_id_from_path(source_file)
             if not backup_set_id:
@@ -140,19 +167,14 @@ class FinalDirMonitor:
             else:
                 backup_set = BackupSet()
                 backup_set.set_id = backup_set_id
-            
-            # 目标路径：磁带盘符（通过LTFS挂载）
-            tape_drive = self.settings.TAPE_DRIVE_LETTER.upper() + ":\\"
-            tape_backup_dir = Path(tape_drive) / backup_set.set_id
-            tape_backup_dir.mkdir(parents=True, exist_ok=True)
-            
-            # 目标文件路径
-            target_file = tape_backup_dir / source_file.name
-            
+
+            # 目标路径由 tape_handler 处理（Linux 用 tar 写磁带设备，Windows 用 LTFS 盘符）
+            # 这里不需要预先创建目录
+
             # 在工作线程中运行异步操作
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
+
             try:
                 # 调用tape_handler的write_to_tape_drive方法
                 tape_file_path = loop.run_until_complete(
@@ -162,14 +184,17 @@ class FinalDirMonitor:
                         0  # group_idx，这里不需要，传0
                     )
                 )
-                
+
                 if tape_file_path:
                     logger.info(f"[Final监控] ✅ 文件已成功移动到磁带: {source_file.name} -> {tape_file_path}")
                     return True
                 else:
-                    logger.error(f"[Final监控] ❌ 文件移动到磁带失败: {source_file.name}")
+                    error_msg = f"文件移动到磁带失败: {source_file.name}"
+                    logger.error(f"[Final监控] ❌ {error_msg}")
+                    # 发送钉钉通知
+                    self._send_failure_notification(error_msg)
                     return False
-                    
+
             finally:
                 # 确保关闭事件循环，释放资源
                 try:
@@ -183,7 +208,7 @@ class FinalDirMonitor:
                 finally:
                     loop.close()
                     asyncio.set_event_loop(None)
-                    
+
         except Exception as e:
             logger.error(f"[Final监控] 移动文件到磁带失败: {file_path}, 错误: {str(e)}", exc_info=True)
             return False

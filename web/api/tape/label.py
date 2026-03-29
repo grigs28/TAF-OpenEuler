@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from .models import WriteTapeLabelRequest, UpdateTapeRequest
 from models.system_log import OperationType, LogCategory, LogLevel
 from utils.log_utils import log_operation, log_system
+from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -155,7 +156,6 @@ async def write_tape_label(request: WriteTapeLabelRequest, http_request: Request
         
         # 从数据库中获取磁带的过期时间等信息
         from config.settings import get_settings
-        from utils.scheduler.sqlite_utils import is_sqlite
         from utils.db_connection_helper import get_psycopg_connection_from_url
         
         settings = get_settings()

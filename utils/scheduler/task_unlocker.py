@@ -54,8 +54,6 @@ async def unlock_task_and_reset_status(task_id: int) -> bool:
                         logger.info(f"任务 {task_id} 当前状态为 {current_status}，无需重置")
         else:
             # SQLite 版本：使用 SQLite 实现文件
-            from utils.scheduler.sqlite_task_storage import get_task_by_id_sqlite
-            from utils.scheduler.sqlite_task_storage import update_task_sqlite
             
             task = await get_task_by_id_sqlite(task_id)
             if task:
@@ -103,8 +101,6 @@ async def unlock_all_tasks_and_reset_status() -> int:
                 logger.info(f"已解锁所有任务并重置 {count} 个 RUNNING 状态的任务")
         else:
             # SQLite 版本：使用 SQLite 实现文件
-            from utils.scheduler.sqlite_task_storage import get_all_tasks_sqlite
-            from utils.scheduler.sqlite_task_storage import update_task_sqlite
             
             all_tasks = await get_all_tasks_sqlite(enabled_only=False)
             for task in all_tasks:

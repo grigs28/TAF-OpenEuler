@@ -112,25 +112,83 @@ export class FormManager {
      * 验证表单
      */
     static validateForm() {
+        console.log('=== validateForm start ===');
         const taskName = safeGetValue('taskName');
         const scheduleType = safeGetValue('scheduleType');
         const actionType = safeGetValue('actionType');
-        
+        console.log('Form values:', { taskName, scheduleType, actionType });
+
         if (!taskName) {
             showMessage('任务名称不能为空', 'error');
             return false;
         }
-        
+
         if (!scheduleType) {
             showMessage('请选择调度类型', 'error');
             return false;
         }
-        
+
         if (!actionType) {
             showMessage('请选择任务动作类型', 'error');
             return false;
         }
-        
+
+        // 验证调度配置
+        const scheduleConfig = ScheduleConfigManager.getScheduleConfig();
+        console.log('scheduleConfig:', scheduleConfig);
+        if (!scheduleConfig || Object.keys(scheduleConfig).length === 0) {
+            showMessage('请设置调度配置', 'error');
+            return false;
+        }
+
+        // 针对不同调度类型进行特定验证
+        switch (scheduleType) {
+            case 'once':
+                if (!scheduleConfig.datetime) {
+                    showMessage('请选择一次性任务的执行时间', 'error');
+                    return false;
+                }
+                break;
+            case 'interval':
+                if (!scheduleConfig.interval || scheduleConfig.interval <= 0) {
+                    showMessage('请设置有效的间隔时间', 'error');
+                    return false;
+                }
+                break;
+            case 'daily':
+                if (!scheduleConfig.time) {
+                    showMessage('请设置每日任务的执行时间', 'error');
+                    return false;
+                }
+                break;
+            case 'weekly':
+                if (!scheduleConfig.time || scheduleConfig.day_of_week === undefined) {
+                    showMessage('请设置每周任务的执行时间和日期', 'error');
+                    return false;
+                }
+                break;
+            case 'monthly':
+                console.log('Validating monthly:', { time: scheduleConfig.time, day_of_month: scheduleConfig.day_of_month });
+                if (!scheduleConfig.time || !scheduleConfig.day_of_month) {
+                    console.error('Monthly validation failed:', { time: scheduleConfig.time, day_of_month: scheduleConfig.day_of_month });
+                    showMessage('请设置每月任务的执行时间和日期', 'error');
+                    return false;
+                }
+                break;
+            case 'yearly':
+                if (!scheduleConfig.time || !scheduleConfig.month || !scheduleConfig.day) {
+                    showMessage('请设置每年任务的执行时间、月份和日期', 'error');
+                    return false;
+                }
+                break;
+            case 'cron':
+                if (!scheduleConfig.cron) {
+                    showMessage('请输入有效的Cron表达式', 'error');
+                    return false;
+                }
+                break;
+        }
+
         return true;
     }
     

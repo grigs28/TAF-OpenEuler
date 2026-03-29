@@ -8,8 +8,7 @@ Backup Management API - Backup Sets Query
 import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException
-from utils.scheduler.db_utils import is_redis, is_opengauss
-from utils.scheduler.sqlite_utils import is_sqlite
+from utils.scheduler.db_utils import is_redis, is_opengauss, is_sqlite, get_sqlite_connection
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -87,7 +86,6 @@ async def get_backup_sets(
                 }
         elif is_sqlite():
             # SQLite 模式：使用原生 SQL 查询
-            from utils.scheduler.sqlite_utils import get_sqlite_connection
             async with get_sqlite_connection() as conn:
                 # 构建 WHERE 子句
                 where_clauses = []
@@ -219,7 +217,6 @@ async def delete_backup_set(set_id: str):
                     raise HTTPException(status_code=500, detail="删除备份集失败")
         elif is_sqlite():
             # SQLite 模式：使用原生 SQL 删除
-            from utils.scheduler.sqlite_utils import get_sqlite_connection
             
             async with get_sqlite_connection() as conn:
                 # 先查询备份集是否存在

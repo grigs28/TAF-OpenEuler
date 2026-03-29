@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>磁带备份管理 - TAF</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: #f5f5f5;
+            padding: 20px;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .card h2 {
+            color: #555;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            color: #666;
+            font-weight: 500;
+        }
+        input[type="text"],
+        input[type="number"],
+        input[type="password"],
+        select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button.secondary {
+            background: #2196F3;
+        }
+        button.secondary:hover {
+            background: #1976D2;
+        }
+        button.danger {
+            background: #f44336;
+        }
+        button.danger:hover {
+            background: #d32f2f;
+        }
+        .status {
+            padding: 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+        }
+        .status.success {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .status.info {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #4CAF50;
+            transition: width 0.3s ease;
+        }
+        .task-list {
+            list-style: none;
+        }
+        .task-item {
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 10px;
+            background: #fafafa;
+        }
+        .task-item .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .task-item .name {
+            font-weight: bold;
+            color: #333;
+        }
+        .task-item .status-badge {
+            padding: 3px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .status-badge.running { background: #fff3cd; color: #856404; }
+        .status-badge.completed { background: #d4edda; color: #155724; }
+        .status-badge.failed { background: #f8d7da; color: #721c24; }
+        .status-badge.pending { background: #e2e3e5; color: #383d41; }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-top: 10px;
+        }
+        .stat-item {
+            text-align: center;
+            padding: 10px;
+            background: #f9f9f9;
+            border-radius: 4px;
+        }
+        .stat-item .value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+        .stat-item .label {
+            font-size: 12px;
+            color: #666;
+        }
+        .tabs {
+            display: flex;
+            border-bottom: 2px solid #ddd;
+            margin-bottom: 20px;
+        }
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            margin-bottom: -2px;
+        }
+        .tab.active {
+            border-bottom-color: #4CAF50;
+            color: #4CAF50;
+            font-weight: 500;
+        }
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📼 磁带备份管理</h1>
+        
+        <div class="tabs">
+            <div class="tab active" data-tab="backup">创建备份</div>
+            <div class="tab" data-tab="tasks">任务列表</div>
+            <div class="tab" data-tab="wechat">微信配置</div>
+        </div>
+        
+        <!-- 创建备份 -->
+        <div id="backup" class="tab-content active">
+            <div class="card">
+                <h2>创建一次性磁带备份</h2>
+                <form id="backup-form">
+                    <div class="form-group">
+                        <label for="smb_path">SMB 共享路径</label>
+                        <input type="text" id="smb_path" 
+                               value="\\192.168.0.79\bak\sysbak\192.168.0.50\D" 
+                               placeholder="\\server\share\path">
+                    </div>
+                    <div class="form-group">
+                        <label for="task_name">任务名称（可选）</label>
+                        <input type="text" id="task_name" placeholder="自动生成">
+                    </div>
+                    <div class="form-group">
+                        <label for="tape_device">磁带设备</label>
+                        <input type="text" id="tape_device" value="/dev/nst0">
+                    </div>
+                    <div class="form-group">
+                        <label for="smb_username">SMB 用户名（可选）</label>
+                        <input type="text" id="smb_username">
+                    </div>
+                    <div class="form-group">
+                        <label for="smb_password">SMB 密码（可选）</label>
+                        <input type="password" id="smb_password">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="notify_wechat" checked>
+                            启用微信通知
+                        </label>
+                    </div>
+                    <button type="submit">🚀 开始备份</button>
+                </form>
+                <div id="backup-status"></div>
+            </div>
+        </div>
+        
+        <!-- 任务列表 -->
+        <div id="tasks" class="tab-content">
+            <div class="card">
+                <h2>备份任务列表</h2>
+                <button class="secondary" onclick="refreshTasks()">🔄 刷新</button>
+                <ul id="task-list" class="task-list">
+                    <li class="task-item">加载中...</li>
+                </ul>
+            </div>
+        </div>
+        
+        <!-- 微信配置 -->
+        <div id="wechat" class="tab-content">
+            <div class="card">
+                <h2>微信通知配置</h2>
+                <form id="wechat-form">
+                    <div class="form-group">
+                        <label for="webhook_url">企业微信机器人 Webhook URL</label>
+                        <input type="text" id="webhook_url" 
+                               placeholder="https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=xxx">
+                    </div>
+                    <div class="form-group">
+                        <label for="report_interval">汇报间隔（分钟）</label>
+                        <input type="number" id="report_interval" value="30" min="1" max="1440">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="wechat_enabled" checked>
+                            启用微信通知
+                        </label>
+                    </div>
+                    <button type="submit">💾 保存配置</button>
+                    <button type="button" class="secondary" onclick="testWechat()">📤 发送测试消息</button>
+                </form>
+                <div id="wechat-status"></div>
+            </div>
+            
+            <div class="card">
+                <h2>当前状态</h2>
+                <div id="wechat-current-status">加载中...</div>
+                <div style="margin-top: 15px;">
+                    <button class="secondary" onclick="startReporter()">▶️ 启动定时汇报</button>
+                    <button class="danger" onclick="stopReporter()">⏹️ 停止定时汇报</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // API 基础路径
+        const API_BASE = '/api';
+        
+        // 标签页切换
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById(tab.dataset.tab).classList.add('active');
+            });
+        });
+        
+        // 创建备份表单
+        document.getElementById('backup-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const data = {
+                smb_path: document.getElementById('smb_path').value,
+                task_name: document.getElementById('task_name').value || null,
+                tape_device: document.getElementById('tape_device').value,
+                smb_username: document.getElementById('smb_username').value || null,
+                smb_password: document.getElementById('smb_password').value || null,
+                notify_wechat: document.getElementById('notify_wechat').checked
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE}/backup/one-time/create`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                document.getElementById('backup-status').innerHTML = `
+                    <div class="status success">
+                        ✅ 备份任务已创建！任务ID: ${result.task_id}
+                    </div>
+                `;
+                
+                // 跳转到任务列表
+                setTimeout(() => {
+                    document.querySelector('[data-tab="tasks"]').click();
+                    refreshTasks();
+                }, 1000);
+                
+            } catch (error) {
+                document.getElementById('backup-status').innerHTML = `
+                    <div class="status error">
+                        ❌ 创建失败: ${error.message}
+                    </div>
+                `;
+            }
+        });
+        
+        // 刷新任务列表
+        async function refreshTasks() {
+            try {
+                const response = await fetch(`${API_BASE}/backup/one-time/list`);
+                const tasks = await response.json();
+                
+                const list = document.getElementById('task-list');
+                
+                if (tasks.length === 0) {
+                    list.innerHTML = '<li class="task-item">暂无备份任务</li>';
+                    return;
+                }
+                
+                list.innerHTML = tasks.map(task => `
+                    <li class="task-item">
+                        <div class="header">
+                            <span class="name">${task.task_name}</span>
+                            <span class="status-badge ${task.status}">${task.status}</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${task.progress}%"></div>
+                        </div>
+                        <div class="stats">
+                            <div class="stat-item">
+                                <div class="value">${task.progress.toFixed(1)}%</div>
+                                <div class="label">进度</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="value">${task.files_processed}</div>
+                                <div class="label">文件数</div>
+                            </div>
+                            <div class="stat-item">
+                                <div class="value">${formatBytes(task.bytes_processed)}</div>
+                                <div class="label">数据量</div>
+                            </div>
+                            ${task.speed ? `
+                            <div class="stat-item">
+                                <div class="value">${task.speed.toFixed(2)}</div>
+                                <div class="label">文件/秒</div>
+                            </div>
+                            ` : ''}
+                        </div>
+                        ${task.error ? `<div class="status error" style="margin-top:10px">${task.error}</div>` : ''}
+                    </li>
+                `).join('');
+                
+            } catch (error) {
+                document.getElementById('task-list').innerHTML = `
+                    <li class="task-item">
+                        <div class="status error">加载失败: ${error.message}</div>
+                    </li>
+                `;
+            }
+        }
+        
+        // 格式化字节
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+        
+        // 微信配置
+        document.getElementById('wechat-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const data = {
+                webhook_url: document.getElementById('webhook_url').value,
+                report_interval: parseInt(document.getElementById('report_interval').value),
+                enabled: document.getElementById('wechat_enabled').checked
+            };
+            
+            try {
+                const response = await fetch(`${API_BASE}/wechat/config`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+                
+                const result = await response.json();
+                
+                document.getElementById('wechat-status').innerHTML = `
+                    <div class="status success">✅ ${result.message}</div>
+                `;
+                
+                loadWechatStatus();
+                
+            } catch (error) {
+                document.getElementById('wechat-status').innerHTML = `
+                    <div class="status error">❌ 配置失败: ${error.message}</div>
+                `;
+            }
+        });
+        
+        // 测试微信
+        async function testWechat() {
+            const message = `测试消息 - ${new Date().toLocaleString()}`;
+            
+            try {
+                const response = await fetch(`${API_BASE}/wechat/test`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message })
+                });
+                
+                const result = await response.json();
+                
+                document.getElementById('wechat-status').innerHTML = `
+                    <div class="status success">✅ ${result.message}</div>
+                `;
+                
+            } catch (error) {
+                document.getElementById('wechat-status').innerHTML = `
+                    <div class="status error">❌ 发送失败: ${error.message}</div>
+                `;
+            }
+        }
+        
+        // 加载微信状态
+        async function loadWechatStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/wechat/status`);
+                const status = await response.json();
+                
+                document.getElementById('wechat-current-status').innerHTML = `
+                    <div class="stats">
+                        <div class="stat-item">
+                            <div class="value">${status.configured ? '✅' : '❌'}</div>
+                            <div class="label">已配置</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="value">${status.enabled ? '✅' : '❌'}</div>
+                            <div class="label">已启用</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="value">${status.reporter_running ? '✅' : '❌'}</div>
+                            <div class="label">汇报器运行中</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="value">${status.report_interval}分钟</div>
+                            <div class="label">汇报间隔</div>
+                        </div>
+                    </div>
+                `;
+                
+            } catch (error) {
+                document.getElementById('wechat-current-status').innerHTML = `
+                    <div class="status error">加载失败: ${error.message}</div>
+                `;
+            }
+        }
+        
+        // 启动/停止汇报器
+        async function startReporter() {
+            try {
+                const response = await fetch(`${API_BASE}/wechat/reporter/start`, { method: 'POST' });
+                const result = await response.json();
+                document.getElementById('wechat-status').innerHTML = `
+                    <div class="status success">✅ ${result.message}</div>
+                `;
+                loadWechatStatus();
+            } catch (error) {
+                document.getElementById('wechat-status').innerHTML = `
+                    <div class="status error">❌ ${error.message}</div>
+                `;
+            }
+        }
+        
+        async function stopReporter() {
+            try {
+                const response = await fetch(`${API_BASE}/wechat/reporter/stop`, { method: 'POST' });
+                const result = await response.json();
+                document.getElementById('wechat-status').innerHTML = `
+                    <div class="status success">✅ ${result.message}</div>
+                `;
+                loadWechatStatus();
+            } catch (error) {
+                document.getElementById('wechat-status').innerHTML = `
+                    <div class="status error">❌ ${error.message}</div>
+                `;
+            }
+        }
+        
+        // 初始化
+        refreshTasks();
+        loadWechatStatus();
+        
+        // 定时刷新任务列表
+        setInterval(refreshTasks, 10000);
+    </script>

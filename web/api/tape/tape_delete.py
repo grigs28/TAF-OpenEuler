@@ -20,7 +20,7 @@ from .models import CreateTapeRequest, UpdateTapeRequest
 from .tape_utils import normalize_tape_label, check_tape_exists_sqlite, count_serial_numbers_sqlite, parse_expiry_date_for_inventory
 from models.system_log import OperationType, LogCategory, LogLevel
 from utils.log_utils import log_operation, log_system
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
+from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
 from utils.tape_tools import tape_tools_manager
 from config.database import db_manager
 
@@ -46,7 +46,6 @@ def parse_expiry_date_for_inventory(expiry_date):
 
 async def check_tape_exists_sqlite(db_manager, tape_id: str, label: str) -> tuple[bool, bool]:
     """检查磁带是否存在（SQLite版本）"""
-    from utils.scheduler.sqlite_utils import get_sqlite_connection
     
     async with get_sqlite_connection() as conn:
         # 检查 tape_id
@@ -64,7 +63,6 @@ async def check_tape_exists_sqlite(db_manager, tape_id: str, label: str) -> tupl
 
 async def count_serial_numbers_sqlite(db_manager, pattern: str) -> int:
     """统计序列号数量（SQLite版本）"""
-    from utils.scheduler.sqlite_utils import get_sqlite_connection, is_sqlite
     from utils.scheduler.db_utils import is_redis
     
     # 检查数据库类型
@@ -142,7 +140,6 @@ async def delete_tape(tape_id: str, http_request: Request):
             raise HTTPException(status_code=501, detail="Redis模式下暂不支持删除磁带功能")
         
         # 检查是否为 SQLite
-        from utils.scheduler.sqlite_utils import is_sqlite
         if is_sqlite():
             # SQLite 版本暂不支持删除磁带（需要实现）
             logger.warning(f"[SQLite模式] 删除磁带暂未实现: {tape_id}")

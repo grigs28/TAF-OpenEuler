@@ -75,12 +75,12 @@ async def test_tape_connection(config: TapeConfig, request: Request):
         from config.settings import get_settings
         settings = get_settings()
         
-        # 使用 ITDT 测试设备连接（优先使用缓存）
+        # 使用 LinuxTapeOperator 测试设备连接（优先使用缓存）
         try:
             system = request.app.state.system
             if not system:
                 raise HTTPException(status_code=500, detail="系统未初始化")
-            
+
             # 优先使用缓存设备
             devices = await system.tape_manager.get_cached_devices()
             
@@ -90,10 +90,14 @@ async def test_tape_connection(config: TapeConfig, request: Request):
             if devices and len(devices) > 0:
                 device = devices[0]
                 device_path = device.get('path', '')
-                
+
                 # 测试设备就绪状态
                 try:
-                    ready = await system.tape_manager.itdt_interface.test_unit_ready(device_path)
+                    if system.tape_manager.linux_tape_operator:
+                        status = await system.tape_manager.linux_tape_operator.status()
+                        ready = status.get('online', False)
+                    else:
+                        ready = True  # 如果没有操作器，假设设备就绪
                     status_msg = "设备已就绪" if ready else "设备已检测到但未就绪"
                 except Exception as e:
                     logger.warning(f"测试设备就绪状态失败: {str(e)}")
@@ -148,9 +152,9 @@ async def test_tape_connection(config: TapeConfig, request: Request):
                     "error": "请检查设备是否连接"
                 }
                 
-        except Exception as itdt_error:
+        except Exception as tape_error:
             duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            error_msg = f"ITDT接口测试失败: {str(itdt_error)}"
+            error_msg = f"磁带设备测试失败: {str(tape_error)}"
             logger.error(error_msg, exc_info=True)
             device_path = config.tape_device_path if config.tape_device_path else settings.TAPE_DEVICE_PATH
             await log_operation(
@@ -160,7 +164,7 @@ async def test_tape_connection(config: TapeConfig, request: Request):
                 operation_description=f"测试磁带机连接失败",
                 category="tape",
                 success=False,
-                error_message=str(itdt_error),
+                error_message=str(tape_error),
                 ip_address=ip_address,
                 request_method=request_method,
                 request_url=request_url,
@@ -172,15 +176,15 @@ async def test_tape_connection(config: TapeConfig, request: Request):
                 message=error_msg,
                 module="web.api.system.tape_config",
                 function="test_tape_connection",
-                exception_type=type(itdt_error).__name__,
+                exception_type=type(tape_error).__name__,
                 stack_trace=traceback.format_exc(),
                 duration_ms=duration_ms
             )
             return {
                 "success": False,
-                "message": f"连接测试失败: {str(itdt_error)}",
+                "message": f"连接测试失败: {str(tape_error)}",
                 "connected": False,
-                "error": str(itdt_error)
+                "error": str(tape_error)
             }
         
     except Exception as e:
@@ -345,16 +349,17 @@ async def update_tape_config(config: TapeConfig, request: Request):
 @router.get("/tape/scan")
 async def scan_tape_devices(request: Request, force_generic: bool = True, show_all_paths: bool = True, force_rescan: bool = False):
     """扫描磁带设备（默认使用缓存，force_rescan=true时强制重新扫描）"""
+    import platform
     start_time = datetime.now()
     ip_address = request.client.host if request.client else None
     request_method = "GET"
     request_url = str(request.url)
-    
+
     try:
         system = request.app.state.system
         if not system:
             raise HTTPException(status_code=500, detail="系统未初始化")
-        
+
         # 如果不需要强制重新扫描，优先使用缓存
         if not force_rescan:
             cached_devices = await system.tape_manager.get_cached_devices()
@@ -368,114 +373,108 @@ async def scan_tape_devices(request: Request, force_generic: bool = True, show_a
                     "cached": True,
                     "message": "使用缓存设备列表"
                 }
-        
-        # 强制重新扫描或缓存为空
-        try:
-            from tape.itdt_interface import ITDTInterface
-            itdt = ITDTInterface()
-            await itdt.initialize()
-            # 根据参数临时调整扫描行为
-            settings = None
+        else:
+            # 强制重新扫描时清除缓存
+            system.tape_manager.cached_devices = []
+            logger.info("强制重新扫描，已清除设备缓存")
+
+        # Linux 系统：使用原生 Linux 扫描
+        if platform.system() == 'Linux':
             try:
-                from config.settings import get_settings
-                settings = get_settings()
-                settings.ITDT_FORCE_GENERIC_DD = bool(force_generic)
-                settings.ITDT_SCAN_SHOW_ALL_PATHS = bool(show_all_paths)
-            except Exception:
-                pass
-            # 扫描设备（ITDT 不需要 -f，60秒超时）
-            try:
+                from utils.linux_tape import LinuxTapeOperator
                 import asyncio
                 devices = await asyncio.wait_for(
-                    itdt.scan_devices(),
+                    LinuxTapeOperator.scan_devices(),
                     timeout=60.0
                 )
+
+                # 更新缓存
+                if devices:
+                    system.tape_manager._save_cached_devices(devices)
+                    system.tape_manager.cached_devices = devices
+
+                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+
+                if devices and len(devices) > 0:
+                    device_info = f"检测到 {len(devices)} 个设备"
+                    await log_operation(
+                        operation_type=OperationType.TAPE_SCAN,
+                        resource_type="tape_drive",
+                        operation_name="扫描磁带设备",
+                        operation_description="扫描磁带设备 (Linux原生)",
+                        category="tape",
+                        success=True,
+                        result_message=device_info,
+                        ip_address=ip_address,
+                        request_method=request_method,
+                        request_url=request_url,
+                        duration_ms=duration_ms
+                    )
+                    return {
+                        "success": True,
+                        "devices": devices,
+                        "count": len(devices)
+                    }
+                else:
+                    await log_operation(
+                        operation_type=OperationType.TAPE_SCAN,
+                        resource_type="tape_drive",
+                        operation_name="扫描磁带设备",
+                        operation_description="扫描磁带设备 (Linux原生)",
+                        category="tape",
+                        success=True,
+                        result_message="未检测到磁带设备",
+                        ip_address=ip_address,
+                        request_method=request_method,
+                        request_url=request_url,
+                        duration_ms=duration_ms
+                    )
+                    return {
+                        "success": True,
+                        "devices": [],
+                        "count": 0,
+                        "message": "未检测到磁带设备"
+                    }
             except asyncio.TimeoutError:
                 logger.error("设备扫描超时（60秒）")
-                devices = []
-            
-            # 更新缓存
-            if devices:
-                system.tape_manager._save_cached_devices(devices)
-                system.tape_manager.cached_devices = devices
-            
-            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            
-            if devices and len(devices) > 0:
-                device_info = f"检测到 {len(devices)} 个设备"
-                await log_operation(
-                    operation_type=OperationType.TAPE_SCAN,
-                    resource_type="tape_drive",
-                    operation_name="扫描磁带设备",
-                    operation_description="扫描磁带设备",
-                    category="tape",
-                    success=True,
-                    result_message=device_info,
-                    ip_address=ip_address,
-                    request_method=request_method,
-                    request_url=request_url,
-                    duration_ms=duration_ms
-                )
                 return {
-                    "success": True,
-                    "devices": devices,
-                    "count": len(devices)
-                }
-            else:
-                await log_operation(
-                    operation_type=OperationType.TAPE_SCAN,
-                    resource_type="tape_drive",
-                    operation_name="扫描磁带设备",
-                    operation_description="扫描磁带设备",
-                    category="tape",
-                    success=True,
-                    result_message="未检测到磁带设备",
-                    ip_address=ip_address,
-                    request_method=request_method,
-                    request_url=request_url,
-                    duration_ms=duration_ms
-                )
-                return {
-                    "success": True,
+                    "success": False,
                     "devices": [],
                     "count": 0,
-                    "message": "未检测到磁带设备"
+                    "message": "扫描超时"
                 }
-                
-        except Exception as itdt_error:
-            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            error_msg = f"扫描磁带设备失败: {str(itdt_error)}"
-            logger.error(error_msg, exc_info=True)
-            await log_operation(
-                operation_type=OperationType.TAPE_SCAN,
-                resource_type="tape_drive",
-                operation_name="扫描磁带设备",
-                operation_description="扫描磁带设备",
-                category="tape",
-                success=False,
-                error_message=str(itdt_error),
-                ip_address=ip_address,
-                request_method=request_method,
-                request_url=request_url,
-                duration_ms=duration_ms
-            )
-            await log_system(
-                level=LogLevel.ERROR,
-                category=LogCategory.TAPE,
-                message=error_msg,
-                module="web.api.system.tape_config",
-                function="scan_tape_devices",
-                exception_type=type(itdt_error).__name__,
-                stack_trace=traceback.format_exc(),
-                duration_ms=duration_ms
-            )
-            return {
-                "success": False,
-                "devices": [],
-                "count": 0,
-                "message": f"扫描失败: {str(itdt_error)}"
-            }
-        
+            except Exception as linux_error:
+                logger.error(f"Linux 原生扫描失败: {str(linux_error)}")
+                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+                await log_operation(
+                    operation_type=OperationType.TAPE_SCAN,
+                    resource_type="tape_drive",
+                    operation_name="扫描磁带设备",
+                    operation_description="扫描磁带设备失败",
+                    category="tape",
+                    success=False,
+                    error_message=str(linux_error),
+                    ip_address=ip_address,
+                    request_method=request_method,
+                    request_url=request_url,
+                    duration_ms=duration_ms
+                )
+                return {
+                    "success": False,
+                    "devices": [],
+                    "count": 0,
+                    "message": f"扫描失败: {str(linux_error)}"
+                }
+
+        # 非 Linux 系统暂不支持
+        duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+        return {
+            "success": False,
+            "devices": [],
+            "count": 0,
+            "message": "仅支持 Linux 系统的磁带设备扫描"
+        }
+
     except Exception as e:
         duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
         error_msg = f"扫描磁带设备失败: {str(e)}"

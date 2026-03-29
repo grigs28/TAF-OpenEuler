@@ -10,8 +10,7 @@ import json
 from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from models.backup import BackupTaskType, BackupTaskStatus
-from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-from utils.scheduler.sqlite_utils import is_sqlite, get_sqlite_connection
+from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection, is_sqlite, get_sqlite_connection
 from .models import BackupTaskResponse
 from .utils import _normalize_status_value, _build_stage_info
 
@@ -37,7 +36,6 @@ async def get_backup_tasks(
     try:
         # 在函数开头导入所有需要的函数，避免在条件分支中导入导致作用域问题
         from utils.scheduler.db_utils import is_redis as _is_redis
-        from utils.scheduler.sqlite_utils import is_sqlite as _is_sqlite
         
         if is_opengauss():
             def _decode_json_field(value, default=None):
@@ -948,7 +946,6 @@ async def get_backup_task(task_id: int, http_request: Request):
         else:
             # 检查是否为Redis数据库
             from utils.scheduler.db_utils import is_redis
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             if is_redis():
                 logger.warning("[Redis模式] 查询备份任务详情暂未实现，抛出HTTPException")
@@ -1155,7 +1152,6 @@ async def get_backup_templates(
         else:
             # 检查是否为Redis数据库
             from utils.scheduler.db_utils import is_redis
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             if is_redis():
                 # Redis模式下返回空列表（暂未实现Redis查询备份任务模板）

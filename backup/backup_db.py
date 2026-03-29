@@ -4111,7 +4111,7 @@ class BackupDB:
                 update_values.append(current_time)
             
             # 使用原生 openGauss SQL（仅支持 openGauss）
-            from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
+            from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_redis
             
             if is_redis():
                 # Redis 版本
@@ -4205,7 +4205,6 @@ class BackupDB:
 
             # 使用原生 openGauss SQL
             from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-            from utils.scheduler.sqlite_utils import is_sqlite
 
             current_time = datetime.now()
 
@@ -4440,7 +4439,6 @@ class BackupDB:
         try:
             # 使用原生 openGauss SQL
             from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             if is_redis():
                 # Redis 版本
@@ -4551,7 +4549,6 @@ class BackupDB:
         """
         try:
             from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             if is_redis():
                 # Redis 版本
@@ -4578,7 +4575,6 @@ class BackupDB:
                         return row['total_files'] or 0
             elif is_sqlite():
                 # SQLite 版本：使用原生 SQL
-                from utils.scheduler.sqlite_utils import get_sqlite_connection
                 async with get_sqlite_connection() as conn:
                     cursor = await conn.execute("SELECT total_files FROM backup_tasks WHERE id = ?", (task_id,))
                     row = await cursor.fetchone()
@@ -4606,7 +4602,6 @@ class BackupDB:
             
             # 更新数据库
             from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             if is_redis():
                 # Redis 版本

@@ -84,67 +84,14 @@ class DatabaseManager:
             # 根据数据库类型创建引擎
             # 对于openGauss，需要特殊处理以避免版本解析错误
             is_opengauss = self.is_opengauss_database()
-            is_sqlite = raw_database_url.startswith("sqlite:///") or raw_database_url.startswith("sqlite+aiosqlite:///")
-            is_redis = raw_database_url.startswith("redis://") or raw_database_url.startswith("rediss://")
-            
-            # 对于Redis，不创建SQLAlchemy引擎，使用原生Redis客户端
-            if is_redis:
-                logger.info("检测到Redis数据库，跳过SQLAlchemy引擎创建，将使用原生Redis客户端")
-                self.engine = None
-                self.async_engine = None
-                self.AsyncSessionLocal = None
-                self.SessionLocal = None
-                
-                # 初始化Redis管理器
-                from config.redis_db import get_redis_manager
-                redis_manager = get_redis_manager()
-                if redis_manager:
-                    await redis_manager.initialize()
-                    logger.info("Redis连接初始化成功")
-                else:
-                    logger.warning("Redis管理器创建失败，请检查DATABASE_URL配置")
-                
-                # Redis不需要创建表
-                self._initialized = True
-                logger.info("Redis数据库初始化完成（跳过表创建）")
-                return
+
             # 对于openGauss，完全不创建SQLAlchemy引擎，避免版本解析错误
-            elif is_opengauss:
-                logger.warning("检测到openGauss数据库，跳过SQLAlchemy引擎创建，将使用原生SQL查询")
+            if is_opengauss:
+                logger.info("检测到openGauss数据库，跳过SQLAlchemy引擎创建，将使用原生SQL查询")
                 self.engine = None
                 self.async_engine = None
                 self.AsyncSessionLocal = None
                 self.SessionLocal = None
-            elif is_sqlite:
-                # SQLite 需要特殊处理
-                logger.info("检测到SQLite数据库，创建SQLAlchemy异步引擎")
-                # 为避免单连接被多个协程共享导致游标重置，SQLite 使用 NullPool（每次请求新连接）
-                connect_args = {"check_same_thread": False}
-                pool_class = NullPool
-                # 同步引擎（用于创建表等操作）
-                self.engine = create_engine(
-                    database_url,
-                    echo=self.settings.DEBUG,
-                    poolclass=pool_class,
-                    connect_args=connect_args
-                )
-                # 异步引擎（使用 aiosqlite）
-                self.async_engine = create_async_engine(
-                    async_database_url,
-                    echo=self.settings.DEBUG,
-                    poolclass=pool_class,
-                    connect_args=connect_args
-                )
-                self.AsyncSessionLocal = async_sessionmaker(
-                    self.async_engine,
-                    class_=AsyncSession,
-                    expire_on_commit=False
-                )
-                self.SessionLocal = sessionmaker(
-                    autocommit=False,
-                    autoflush=False,
-                    bind=self.engine
-                )
             else:
                 # PostgreSQL支持连接池
                 connect_args = {}
@@ -191,25 +138,15 @@ class DatabaseManager:
         # 将opengauss URL转换为postgresql URL（兼容）
         if url.startswith("opengauss://"):
             return url.replace("opengauss://", "postgresql://")
-        # 将 SQLite 异步 URL 转换为同步 URL（用于同步引擎）
-        if url.startswith("sqlite+aiosqlite:///"):
-            return url.replace("sqlite+aiosqlite:///", "sqlite:///")
         return url
 
     def _build_async_database_url(self) -> str:
         """构建异步数据库URL"""
-        # 将同步URL转换为异步URL
         url = self.settings.DATABASE_URL
         if url.startswith("postgresql://"):
             return url.replace("postgresql://", "postgresql+asyncpg://")
         elif url.startswith("opengauss://"):
             return url.replace("opengauss://", "postgresql+asyncpg://")
-        elif url.startswith("sqlite:///"):
-            # SQLite 需要使用 aiosqlite 作为异步驱动
-            return url.replace("sqlite:///", "sqlite+aiosqlite:///")
-        elif url.startswith("sqlite+aiosqlite:///"):
-            # 已经是异步 URL，直接返回
-            return url
         else:
             return url
 
@@ -218,25 +155,11 @@ class DatabaseManager:
         try:
             # 导入所有模型以确保它们被注册
             from models import backup, tape, user, system_log, system_config, scheduled_task
-            
+
             database_url = self.settings.DATABASE_URL
-            
-            # Redis不需要创建表，它是键值存储
-            is_redis = database_url.startswith("redis://") or database_url.startswith("rediss://")
-            if is_redis:
-                logger.info("检测到Redis数据库，跳过表创建（Redis是键值存储）")
-                return
-            
-            # 检查是否为 SQLite
-            if database_url.startswith("sqlite:///") or database_url.startswith("sqlite+aiosqlite:///"):
-                # SQLite 使用专门的初始化器
-                from config.sqlite_init import SQLiteInitializer
-                sqlite_init = SQLiteInitializer()
-                logger.info("检测到 SQLite 数据库，使用 SQLite 初始化器创建表...")
-                await sqlite_init.create_tables()
-            elif self.is_opengauss_database():
+
+            if self.is_opengauss_database():
                 # 对于openGauss，使用psycopg3（优先）或psycopg2（回退）直接创建表，避免版本检查问题
-                # 检查实际可用的驱动
                 try:
                     import psycopg
                     driver_name = "psycopg3"
@@ -246,14 +169,14 @@ class DatabaseManager:
                         driver_name = "psycopg2"
                     except ImportError:
                         driver_name = "psycopg2/psycopg3（未安装）"
-                logger.info(f"检测到openGauss数据库，将使用{driver_name}创建表（优先psycopg3，失败则回退到psycopg2）...")
+                logger.info(f"检测到openGauss数据库，将使用{driver_name}创建表...")
                 await self._create_tables_with_psycopg2()
             else:
                 # PostgreSQL使用SQLAlchemy引擎来创建表
                 with self.engine.begin() as conn:
                     Base.metadata.create_all(conn)
                 logger.info("数据库表创建完成")
-                
+
                 # 检查并添加缺失的字段（字段迁移）
                 await self._migrate_missing_columns_postgresql()
                 # 关键修复：确保路径、文件名字段是 TEXT 类型（对于已存在的表）
@@ -1420,26 +1343,6 @@ class DatabaseManager:
     async def health_check(self) -> bool:
         """数据库健康检查"""
         try:
-            # Redis使用专门的健康检查
-            raw_database_url = self.settings.DATABASE_URL
-            is_redis = raw_database_url.startswith("redis://") or raw_database_url.startswith("rediss://")
-            if is_redis:
-                # 使用全局Redis管理器进行健康检查，而不是创建临时实例
-                from config.redis_db import get_redis_manager
-                redis_manager = get_redis_manager()
-                if not redis_manager:
-                    logger.warning("Redis管理器未初始化，无法进行健康检查")
-                    return False
-                try:
-                    # 如果未初始化，先初始化
-                    if not redis_manager._initialized:
-                        await redis_manager.initialize()
-                    # 使用管理器的健康检查方法（只ping，不关闭连接）
-                    return await redis_manager.health_check()
-                except Exception as e:
-                    logger.error(f"Redis健康检查失败: {str(e)}")
-                    return False
-            
             if self.is_opengauss_database():
                 import asyncpg
                 import re

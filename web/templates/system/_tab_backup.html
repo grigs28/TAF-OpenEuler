@@ -89,8 +89,13 @@
                     </div>
                     <div class="mb-3">
                         <label class="form-label">压缩并行批次数量</label>
-                        <input type="number" class="form-control" id="compressionParallelBatches" value="2" min="1" step="1">
-                        <small class="text-muted">压缩并行批次数量（默认2），预读取程序队列数为该值+1。例如：设置为2时，队列大小为3（2个正在压缩的+1个待压缩的）</small>
+                        <input type="number" class="form-control" id="compressionParallelBatches" value="3" min="1" step="1">
+                        <small class="text-muted">压缩并行批次数量（默认3），预读取程序队列数为该值+1。例如：设置为3时，队列大小为4（3个正在压缩的+1个待压缩的）</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">扫描时减少批次数</label>
+                        <input type="number" class="form-control" id="compressionBatchesReduction" value="1" min="0" step="1">
+                        <small class="text-muted">扫描时减少的并行批次数（默认1），0表示不减少。例如：批次数为3，减少1，则扫描时实际批次数为2</small>
                     </div>
                 </div>
             </div>

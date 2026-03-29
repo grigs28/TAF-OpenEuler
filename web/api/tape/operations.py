@@ -288,9 +288,9 @@ async def check_tape_format(request: Request):
                 "message": "系统未初始化"
             }
         
-        # 检查是否有磁带设备（ITDT 扫描）
+        # 检查是否有磁带设备
         try:
-            devices = await system.tape_manager.itdt_interface.scan_devices()
+            devices = await system.tape_manager.get_cached_devices()
         except Exception:
             devices = []
         if not devices:
@@ -299,12 +299,12 @@ async def check_tape_format(request: Request):
                 "formatted": None,  # 无法确定
                 "message": "未检测到磁带设备"
             }
-        
-        # 使用ITDT qrypart命令检查格式化状态
+
+        # 使用 LTFS 检查格式化状态
         try:
-            # 使用ITDT qrypart命令检查格式化状态
+            # 使用 LTFS 检查格式化状态
             is_formatted = await system.tape_manager.tape_operations._is_tape_formatted()
-            
+
             # 尝试读取磁带标签（用于获取标签信息，60秒超时）
             try:
                 metadata = await asyncio.wait_for(
@@ -314,9 +314,9 @@ async def check_tape_format(request: Request):
             except asyncio.TimeoutError:
                 logger.warning("读取磁带卷标超时（60秒）")
                 metadata = None
-            
+
             if is_formatted:
-                # ITDT确认已格式化（有分区信息）
+                # LTFS 确认已格式化
                 if metadata and metadata.get('tape_id'):
                     return {
                         "success": True,
@@ -333,12 +333,12 @@ async def check_tape_format(request: Request):
                         "message": "磁带已格式化（但无标签文件）"
                     }
             else:
-                # ITDT确认未格式化（无分区信息）
+                # LTFS 确认未格式化
                 return {
                     "success": True,
                     "formatted": False,
                     "metadata": None,
-                    "message": "磁带未格式化（无分区信息）"
+                    "message": "磁带未格式化（非 LTFS 格式）"
                 }
         except Exception as e:
             # 检测失败，认为未格式化
@@ -476,10 +476,19 @@ async def format_tape(request: Request, format_request: FormatRequest = FormatRe
                 "message": f"无法确定磁带格式化状态，拒绝格式化。如需强制格式化请使用force=true参数"
             }
         
-        # 使用 ITDT 执行擦除代替格式化（长擦除）
+        # 使用 LTFS 格式化代替 ITDT 擦除
         try:
-            success = await system.tape_manager.itdt_interface.erase(None, short=False)
+            from backup.tape_handler import TapeHandler
+            tape_handler = TapeHandler(
+                tape_manager=system.tape_manager,
+                settings=system.tape_manager.settings,
+                dingtalk_notifier=system.dingtalk_notifier
+            )
+            success, msg = await tape_handler.format_as_ltfs()
+            if not success:
+                logger.error(f"LTFS 格式化失败: {msg}")
         except Exception as _e:
+            logger.error(f"LTFS 格式化异常: {str(_e)}")
             success = False
         duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
         
@@ -623,7 +632,7 @@ async def rewind_tape(request: Request, tape_id: str = None):
         if not system:
             raise HTTPException(status_code=500, detail="系统未初始化")
 
-        # 使用 ITDT 倒带
+        # 使用 LinuxTapeOperator 倒带
         success = await system.tape_manager.tape_operations._rewind()
         if success:
             return {"success": True, "message": "磁带倒带成功"}
@@ -643,8 +652,8 @@ async def space_tape_blocks(request: Request, blocks: int = 1, direction: str = 
         if not system:
             raise HTTPException(status_code=500, detail="系统未初始化")
 
-        # ITDT 尚未实现通用按块定位，返回不支持
-        raise HTTPException(status_code=501, detail="磁带按块定位暂不支持（ITDT）")
+        # LTFS 模式下按块定位暂不支持
+        raise HTTPException(status_code=501, detail="磁带按块定位暂不支持（LTFS 模式）")
 
     except Exception as e:
         logger.error(f"磁带定位失败: {str(e)}")

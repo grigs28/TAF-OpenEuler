@@ -36,8 +36,9 @@ async def get_database_config():
         }
 
         # 优先使用 DB_FLAVOR 配置获取数据库类型
-        if settings.DB_FLAVOR and settings.DB_FLAVOR.lower() in ("sqlite", "opengauss"):
-            db_info["db_type"] = settings.DB_FLAVOR.lower()
+        db_flavor = getattr(settings, 'DB_FLAVOR', None)
+        if db_flavor and db_flavor.lower() in ("sqlite", "opengauss"):
+            db_info["db_type"] = db_flavor.lower()
         # 否则从 DATABASE_URL 推断数据库类型
         elif db_url.startswith("opengauss://"):
             db_info["db_type"] = "opengauss"
@@ -385,7 +386,7 @@ async def get_database_status(request: Request):
         
         # 解析数据库类型
         db_url = settings.DATABASE_URL
-        db_flavor = settings.DB_FLAVOR
+        db_flavor = getattr(settings, 'DB_FLAVOR', None)
         if db_flavor and db_flavor.lower() == "redis":
             db_info["db_type"] = "Redis"
         elif db_url.startswith("redis://") or db_url.startswith("rediss://"):

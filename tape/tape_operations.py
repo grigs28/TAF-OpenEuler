@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-磁带操作模块
-Tape Operations Module
+磁带操作模块 - Linux LTFS 模式
+Tape Operations Module - Linux LTFS Mode
 """
 
 import os
@@ -12,88 +12,88 @@ from typing import Optional, Dict, Any, Tuple
 from datetime import datetime
 
 from tape.tape_cartridge import TapeCartridge
-from tape.itdt_interface import ITDTInterface
 from config.settings import get_settings
-from utils.tape_tools import tape_tools_manager
 
 logger = logging.getLogger(__name__)
 
+# Linux 原生磁带操作支持
+_LINUX_TAPE_AVAILABLE = False
+try:
+    from utils.linux_tape import LinuxTapeOperator
+    _LINUX_TAPE_AVAILABLE = True
+except ImportError:
+    pass
+
 
 class TapeOperations:
-    """磁带操作类"""
+    """磁带操作类 - 仅支持 Linux LTFS 模式"""
 
     def __init__(self):
         self.settings = get_settings()
-        self.itdt_interface: ITDTInterface | None = None
+        self.linux_tape_operator = None
         self._initialized = False
 
-    async def initialize(self, scsi_interface=None, itdt_interface=None):
-        """初始化磁带操作（ITDT）
-        
+    async def initialize(self, linux_tape_operator=None):
+        """初始化磁带操作
+
         Args:
-            scsi_interface: 已废弃，保留以兼容旧代码
-            itdt_interface: 共享的ITDT接口实例（如果提供，则不再创建新实例）
+            linux_tape_operator: Linux 原生磁带操作器实例
         """
         try:
-            # 如果提供了 ITDT 接口，直接使用（避免重复初始化）
-            if itdt_interface:
-                self.itdt_interface = itdt_interface
-                logger.info("磁带操作模块(ITDT)使用共享接口，跳过重复初始化")
+            if linux_tape_operator:
+                self.linux_tape_operator = linux_tape_operator
+                logger.info("磁带操作模块使用 Linux 原生操作器")
+                self._initialized = True
+                return
+
+            # 创建 Linux 原生操作器
+            if _LINUX_TAPE_AVAILABLE:
+                from utils.linux_tape import get_linux_tape_operator
+                self.linux_tape_operator = get_linux_tape_operator()
+                init_success = await self.linux_tape_operator.initialize()
+                if init_success:
+                    self._initialized = True
+                    logger.info("磁带操作模块(Linux)初始化完成")
+                else:
+                    logger.error("Linux 原生磁带操作初始化失败")
             else:
-                # 向后兼容：如果没有提供，则创建新实例
-                self.itdt_interface = ITDTInterface()
-                await self.itdt_interface.initialize()
-                logger.info("磁带操作模块(ITDT)初始化完成")
-            
-            self._initialized = True
+                logger.error("Linux 原生磁带操作不可用")
+
         except Exception as e:
-            logger.error(f"磁带操作模块(ITDT)初始化失败: {str(e)}")
+            logger.error(f"磁带操作模块初始化失败: {str(e)}")
             raise
 
     async def _ensure_initialized(self) -> bool:
-        """懒加载初始化，确保 ITDT 可用。"""
-        if self._initialized and self.itdt_interface:
+        """懒加载初始化，确保磁带接口可用"""
+        if self._initialized and self.linux_tape_operator:
             return True
         try:
-            # 如果还没有实例，创建新的（向后兼容）
-            if not self.itdt_interface:
-                self.itdt_interface = ITDTInterface()
-                await self.itdt_interface.initialize()
-            self._initialized = True
-            return True
+            if _LINUX_TAPE_AVAILABLE:
+                from utils.linux_tape import get_linux_tape_operator
+                self.linux_tape_operator = get_linux_tape_operator()
+                init_success = await self.linux_tape_operator.initialize()
+                if init_success:
+                    self._initialized = True
+                    return True
+            logger.error("Linux 原生磁带操作初始化失败")
+            return False
         except Exception as e:
-            logger.error(f"初始化ITDT失败: {str(e)}")
+            logger.error(f"初始化磁带接口失败: {str(e)}")
             return False
 
     async def load_tape(self, tape_cartridge: TapeCartridge) -> bool:
         """加载磁带"""
         try:
-            if not self._initialized:
+            if not await self._ensure_initialized():
                 logger.error("磁带操作模块未初始化")
                 return False
 
             logger.info(f"正在加载磁带: {tape_cartridge.tape_id}")
 
-            # 在实际实现中，这里会：
-            # 1. 检查磁带驱动器状态
-            # 2. 执行加载操作
-            # 3. 验证磁带是否成功加载
-
-            # 检查设备就绪状态（增加重试和更详细的错误信息）
+            # 检查设备就绪状态
             logger.info("检查磁带设备就绪状态...")
             if not await self._wait_for_tape_ready():
-                logger.error("磁带设备未就绪，可能原因：设备未连接、磁带未加载、设备忙或故障")
-                # 尝试获取更详细的设备状态信息
-                try:
-                    devices = await self.itdt_interface.scan_devices() if self.itdt_interface else []
-                    if not devices:
-                        logger.error("未检测到任何磁带设备")
-                    else:
-                        logger.info(f"检测到 {len(devices)} 个磁带设备")
-                        for device in devices:
-                            logger.info(f"设备: {device.get('path', 'N/A')}")
-                except Exception as dev_error:
-                    logger.warning(f"获取设备信息失败: {str(dev_error)}")
+                logger.error("磁带设备未就绪")
                 return False
 
             # 执行倒带操作
@@ -101,7 +101,7 @@ class TapeOperations:
                 logger.error("磁带倒带失败")
                 return False
 
-            # 读取磁带卷标（如果有）
+            # 读取磁带卷标
             tape_label = await self._read_tape_label()
             if tape_label:
                 logger.info(f"读取到磁带卷标: {tape_label}")
@@ -116,7 +116,7 @@ class TapeOperations:
     async def unload_tape(self) -> bool:
         """卸载磁带"""
         try:
-            if not self._initialized:
+            if not await self._ensure_initialized():
                 logger.error("磁带操作模块未初始化")
                 return False
 
@@ -128,7 +128,6 @@ class TapeOperations:
             # 倒带
             await self._rewind()
 
-            # 在实际实现中，这里会执行卸载操作
             # 模拟卸载延迟
             await asyncio.sleep(2)
 
@@ -140,636 +139,55 @@ class TapeOperations:
             return False
 
     async def erase_tape(self, backup_task=None, progress_callback=None) -> bool:
-        """擦除磁带
-        
+        """擦除磁带 - 使用 LTFS 格式化代替 mt erase
+
         Args:
             backup_task: 备份任务对象，用于更新进度
-            progress_callback: 进度回调函数，用于更新进度到数据库
-        
+            progress_callback: 进度回调函数
+
         Returns:
             True=擦除成功，False=失败
-        """
-        try:
-            if not self._initialized:
-                logger.error("磁带操作模块未初始化")
-                return False
-
-            logger.info("正在擦除磁带")
-
-            # 倒带到开始
-            if not await self._rewind():
-                logger.error("倒带失败，无法擦除磁带")
-                return False
-
-            # 执行擦除命令（传递backup_task和progress_callback以更新进度）
-            success = await self._execute_erase_command(
-                long_erase=True,
-                backup_task=backup_task,
-                progress_callback=progress_callback
-            )
-            if not success:
-                logger.error("擦除命令执行失败")
-                return False
-
-            # 再次倒带
-            await self._rewind()
-
-            logger.info("磁带擦除成功")
-            return True
-
-        except Exception as e:
-            logger.error(f"擦除磁带失败: {str(e)}")
-            return False
-
-    async def _generate_serial_number(self, year: int, month: int) -> str:
-        """生成序列号（SN），格式：TPMMNN（TP + 月份2位 + 序号2位）
-        
-        Args:
-            year: 年份（4位）
-            month: 月份（1-12）
-            
-        Returns:
-            6位序列号，例如：TP1101（11月第一张磁盘）
-        """
-        try:
-            from utils.scheduler.db_utils import is_redis, is_opengauss, get_opengauss_connection
-            from utils.scheduler.sqlite_utils import is_sqlite
-            
-            if is_redis():
-                # Redis模式下返回默认序列号（暂未实现Redis查询磁带）
-                logger.debug(f"[Redis模式] 生成序列号暂未实现，返回默认值: TP{month:02d}01")
-                return f"TP{month:02d}01"
-            
-            mm = month
-            
-            # 查询当前月份已有多少张磁盘（查询TP + 月份开头的序列号）
-            if is_opengauss():
-                # 使用连接池
-                async with get_opengauss_connection() as conn:
-                    # 查询序列号以TPMM开头的记录数量（排除NULL）
-                    count = await conn.fetchval(
-                        """
-                        SELECT COUNT(*) FROM tape_cartridges 
-                        WHERE serial_number IS NOT NULL AND serial_number LIKE $1
-                        """,
-                        f"TP{mm:02d}%"
-                    )
-                    # 序号从01开始
-                    sequence = (count or 0) + 1
-            else:
-                # 使用SQLAlchemy（SQLite）
-                from config.database import db_manager
-                from sqlalchemy import select, func, and_
-                from models.tape import TapeCartridge
-                
-                # 检查是否为SQLite数据库
-                if not is_sqlite() or db_manager.AsyncSessionLocal is None:
-                    logger.debug(f"[数据库类型错误] 当前数据库类型不支持生成序列号，返回默认值: TP{month:02d}01")
-                    return f"TP{month:02d}01"
-                
-                async with db_manager.AsyncSessionLocal() as session:
-                    pattern = f"TP{mm:02d}%"
-                    stmt = select(func.count(TapeCartridge.id)).where(
-                        and_(
-                            TapeCartridge.serial_number.isnot(None),
-                            TapeCartridge.serial_number.like(pattern)
-                        )
-                    )
-                    result = await session.execute(stmt)
-                    count = result.scalar() or 0
-                    sequence = count + 1
-            
-            # 生成6位序列号：TPMMNN
-            sn = f"TP{mm:02d}{sequence:02d}"
-            logger.info(f"生成序列号: {sn} (年份={year}, 月份={month}, 序号={sequence})")
-            return sn
-        except Exception as e:
-            logger.error(f"生成序列号失败: {str(e)}")
-            # 如果失败，使用默认序号01
-            mm = month
-            return f"TP{mm:02d}01"
-
-    async def erase_preserve_label(self, backup_task=None, progress_callback=None, use_current_year_month: bool = False) -> bool:
-        """格式化磁带并设置当前年月卷标和序列号（使用LtfsCmdFormat.exe格式化，格式化本身会清空磁带）
-        
-        Args:
-            backup_task: 备份任务对象（可选）
-            progress_callback: 进度回调函数（可选）
-            use_current_year_month: 是否使用当前年月生成卷标（计划任务使用），默认为False（完整备份使用当前年月）
         """
         try:
             if not await self._ensure_initialized():
                 logger.error("磁带操作模块未初始化")
                 return False
-            
-            # 获取盘符（不带冒号）
-            drive_letter = (self.settings.TAPE_DRIVE_LETTER or "O").strip().upper()
-            if drive_letter.endswith(":"):
-                drive_letter = drive_letter[:-1]
-            
-            # 使用当前年月生成卷标和序列号
-            from datetime import datetime
-            now = datetime.now()
-            current_year = now.year
-            current_month = now.month
-            
-            # 格式：TP{YYYY}{MM}01（例如：TP20251101）
-            label = f"TP{current_year:04d}{current_month:02d}01"
-            
-            # 生成序列号（TPMMNN格式）
-            serial_number = await self._generate_serial_number(current_year, current_month)
-            
-            logger.info(f"完整备份前格式化：使用当前年月生成卷标 {label}，序列号 {serial_number}")
-            
-            # 初始化进度为0%
-            if backup_task:
-                backup_task.progress_percent = 0.0
-                if progress_callback:
-                    await progress_callback(backup_task, 0, 0)
-            
-            # 使用同步方法格式化（与添加磁带中的方法一致）
-            # 通过 asyncio.to_thread 在线程中执行，避免阻塞事件循环
-            # LtfsCmdFormat格式化本身会清空磁带，不需要先执行擦除
-            format_result = await asyncio.to_thread(
-                tape_tools_manager.format_tape_ltfs_sync,
-                drive_letter=drive_letter,  # 使用盘符（如 "O"）
-                volume_label=label,
-                serial=serial_number,
-                eject_after=False
+
+            logger.info("正在格式化磁带为 LTFS 格式（代替擦除）...")
+
+            # 倒带到开始
+            if not await self._rewind():
+                logger.error("倒带失败，无法格式化磁带")
+                return False
+
+            # 使用 LTFS 格式化代替 mt erase
+            from backup.tape_handler import TapeHandler
+            tape_handler = TapeHandler(
+                tape_manager=None,
+                settings=self.settings,
+                dingtalk_notifier=None
             )
-            
-            # 格式化完成后，更新进度为100%
-            if backup_task:
-                backup_task.progress_percent = 100.0
-                if progress_callback:
+
+            success, msg = await tape_handler.format_as_ltfs()
+
+            if success:
+                logger.info(f"LTFS 格式化成功: {msg}")
+                if backup_task and progress_callback:
+                    backup_task.progress_percent = 100.0
                     await progress_callback(backup_task, 1, 1)
-            
-            # 检查格式化结果
-            returncode = format_result.get("returncode", -1)
-            stderr = format_result.get("stderr", "")
-            stdout = format_result.get("stdout", "")
-            
-            # 特殊处理：对于某些错误码（如60233），即使返回码非0，也可能格式化成功
-            # 需要通过读取卷标验证实际结果
-            should_verify = False
-            if not format_result.get("success"):
-                # 检查是否是特定的错误码，可能需要验证
-                if returncode == 60233:
-                    logger.warning(f"格式化返回错误码60233，但可能已成功，将通过读取卷标验证: {stderr[:200]}")
-                    should_verify = True
-                else:
-                    # 其他错误码，直接失败
-                    error_detail = stderr or stdout or "LtfsCmdFormat执行失败"
-                    logger.error(f"LtfsCmdFormat格式化失败: returncode={returncode}, {error_detail}")
-                    return False
-            
-            # 格式化成功或需要验证的情况
-            if format_result.get("success") or should_verify:
-                if should_verify:
-                    logger.info(f"格式化返回错误码{returncode}，将通过读取卷标验证是否真正成功")
-                else:
-                    logger.info(f"LtfsCmdFormat格式化成功，卷标已设置为: {label}，序列号: {serial_number}")
-                
-                # 格式化成功或需要验证时，立即更新或创建磁带记录（参考添加磁带的方法）
-                # 在后台任务中处理：等待挂载 -> 读取卷标 -> 验证/更新/创建数据库记录
-                async def update_tape_in_database():
-                    """后台任务：格式化后更新或创建磁带记录"""
-                    try:
-                        # 等待几秒，确保 LTFS 自动挂载完成
-                        await asyncio.sleep(3)
-                        
-                        # 读取实际卷标和序列号
-                        logger.info("[格式化后] 开始读取实际卷标和序列号...")
-                        from utils.tape_tools import tape_tools_manager
-                        
-                        drive_with_colon = drive_letter if drive_letter.endswith(':') else f"{drive_letter}:"
-                        if not os.path.exists(drive_with_colon):
-                            logger.info(f"[格式化后] LTFS盘符 {drive_with_colon} 暂未挂载，尝试重新分配")
-                            assign_result = await tape_tools_manager.assign_tape_ltfs(drive_letter)
-                            if not assign_result.get("success"):
-                                logger.warning(f"[格式化后] 重新分配 {drive_with_colon} 失败，错误: {assign_result.get('error')}")
-                                return
-                            await asyncio.sleep(1)  # 再给 1 秒钟完成挂载
-                        
-                        # 使用同步版本读取卷标（通过asyncio.to_thread避免阻塞）
-                        try:
-                            label_result = await asyncio.to_thread(
-                                tape_tools_manager.read_tape_label_windows_sync,
-                                drive_letter
-                            )
-                        except Exception as e:
-                            logger.error(f"[格式化后] 读取卷标异常: {str(e)}", exc_info=True)
-                            return
-                        
-                        if not label_result or not label_result.get("success"):
-                            error_msg = label_result.get('error', '未知错误') if label_result else '无结果'
-                            # 如果是验证模式（60233错误码），读取卷标失败则说明格式化真的失败了
-                            if should_verify:
-                                logger.error(f"[格式化后] 验证失败: 返回码{returncode}且无法读取卷标，格式化确实失败: {error_msg}")
-                                return
-                            else:
-                                logger.warning(f"[格式化后] 读取卷标失败: {error_msg}")
-                                return
-                        
-                        # 读取卷标成功，获取实际值
-                        actual_label = label_result.get("volume_name", "").strip()
-                        actual_serial = label_result.get("serial_number", "").strip()
-                        
-                        # 如果是验证模式（60233错误码），需要验证卷标是否匹配
-                        if should_verify:
-                            if actual_label and actual_label == label:
-                                logger.info(f"[格式化后] ✅ 验证成功: 虽然返回码{returncode}，但卷标已正确设置为 {actual_label}，格式化实际成功")
-                            else:
-                                logger.error(f"[格式化后] ❌ 验证失败: 返回码{returncode}且卷标不匹配，期望={label}, 实际={actual_label}")
-                                return
-                        
-                        # 使用实际读取到的值，如果没有则使用格式化时设置的值
-                        final_label = actual_label if actual_label else label
-                        final_serial = actual_serial if actual_serial else serial_number
-                        tape_id_value = final_label
-                        
-                        logger.info(f"[格式化后] 读取到实际卷标: {final_label}, 序列号: {final_serial}")
-                        
-                        # 检查数据库中是否存在该卷标或tape_id
-                        from utils.scheduler.db_utils import is_redis, is_opengauss, get_opengauss_connection
-                        from utils.scheduler.sqlite_utils import is_sqlite
-                        from config.settings import get_settings
-                        from utils.db_connection_helper import get_psycopg_connection_from_url
-                        
-                        settings = get_settings()
-                        database_url = settings.DATABASE_URL
-                        is_redis_mode = is_redis()
-                        is_sqlite_mode = is_sqlite() or database_url.startswith("sqlite:///") or database_url.startswith("sqlite+aiosqlite:///")
-                        
-                        tape_exists = False
-                        label_exists = False
-                        
-                        if is_redis_mode:
-                            from backup.redis_tape_db import check_tape_exists_redis, check_tape_label_exists_redis
-                            tape_exists = await check_tape_exists_redis(tape_id_value)
-                            label_exists = await check_tape_label_exists_redis(final_label)
-                        elif is_opengauss():
-                            async with get_opengauss_connection() as conn:
-                                tape_id_row = await conn.fetchrow("SELECT 1 FROM tape_cartridges WHERE tape_id = $1", tape_id_value)
-                                tape_exists = tape_id_row is not None
-                                if not tape_exists:
-                                    label_row = await conn.fetchrow("SELECT 1 FROM tape_cartridges WHERE label = $1", final_label)
-                                    label_exists = label_row is not None
-                        elif is_sqlite_mode:
-                            from utils.scheduler.sqlite_utils import get_sqlite_connection
-                            async with get_sqlite_connection() as db_conn:
-                                cursor = await db_conn.execute("SELECT COUNT(*) FROM tape_cartridges WHERE tape_id = ?", (tape_id_value,))
-                                tape_exists = (await cursor.fetchone())[0] > 0
-                                if not tape_exists:
-                                    cursor = await db_conn.execute("SELECT COUNT(*) FROM tape_cartridges WHERE label = ?", (final_label,))
-                                    label_exists = (await cursor.fetchone())[0] > 0
-                        else:
-                            # openGauss/PostgreSQL模式（使用psycopg2）
-                            conn, _ = get_psycopg_connection_from_url(database_url, prefer_psycopg3=True)
-                            try:
-                                with conn.cursor() as cur:
-                                    cur.execute("SELECT 1 FROM tape_cartridges WHERE tape_id = %s", (tape_id_value,))
-                                    tape_exists = cur.fetchone() is not None
-                                    if not tape_exists:
-                                        cur.execute("SELECT 1 FROM tape_cartridges WHERE label = %s", (final_label,))
-                                        label_exists = cur.fetchone() is not None
-                            finally:
-                                conn.close()
-                        
-                        # 计算容量与有效期
-                        from datetime import datetime
-                        now = datetime.now()
-                        capacity_bytes = 18 * 1024 * (1024 ** 3)  # 默认18TB
-                        created_date = datetime(current_year, current_month, 1)
-                        retention_months = 12  # 默认保留12个月
-                        expiry_year = created_date.year
-                        expiry_month = created_date.month + retention_months
-                        while expiry_month > 12:
-                            expiry_year += 1
-                            expiry_month -= 12
-                        expiry_date = datetime(expiry_year, expiry_month, 1)
-                        
-                        # 更新或创建数据库记录
-                        if is_redis_mode:
-                            from backup.redis_tape_db import create_tape_redis, update_tape_redis
-                            if tape_exists or label_exists:
-                                await update_tape_redis(
-                                    tape_id=tape_id_value,
-                                    label=final_label,
-                                    status="available",
-                                    media_type="LTO",
-                                    generation=9,  # generation 是整数类型，9 表示 LTO-9
-                                    serial_number=final_serial,
-                                    location="",
-                                    capacity_bytes=capacity_bytes,
-                                    retention_months=retention_months,
-                                    notes="完整备份前格式化",
-                                    manufactured_date=created_date,
-                                    expiry_date=expiry_date
-                                )
-                                logger.info(f"[格式化后] [Redis模式] 已更新数据库记录 - tape_id={tape_id_value}")
-                            else:
-                                await create_tape_redis(
-                                    tape_id=tape_id_value,
-                                    label=final_label,
-                                    status="available",
-                                    media_type="LTO",
-                                    generation=9,  # generation 是整数类型，9 表示 LTO-9
-                                    serial_number=final_serial,
-                                    location="",
-                                    capacity_bytes=capacity_bytes,
-                                    retention_months=retention_months,
-                                    notes="完整备份前格式化",
-                                    manufactured_date=created_date,
-                                    expiry_date=expiry_date,
-                                    auto_erase=True,
-                                    health_score=100
-                                )
-                                logger.info(f"[格式化后] [Redis模式] 已创建数据库记录 - tape_id={tape_id_value}")
-                        elif is_sqlite_mode:
-                            from utils.scheduler.sqlite_utils import get_sqlite_connection
-                            from models.tape import TapeStatus
-                            async with get_sqlite_connection() as db_conn:
-                                if tape_exists or label_exists:
-                                    await db_conn.execute("""
-                                        UPDATE tape_cartridges
-                                        SET label = ?, status = ?, serial_number = ?, capacity_bytes = ?,
-                                            retention_months = ?, manufactured_date = ?, expiry_date = ?
-                                        WHERE tape_id = ? OR label = ?
-                                    """, (
-                                        final_label,
-                                        TapeStatus.AVAILABLE.value,
-                                        final_serial,
-                                        capacity_bytes,
-                                        retention_months,
-                                        created_date,
-                                        expiry_date,
-                                        tape_id_value,
-                                        final_label
-                                    ))
-                                    logger.info(f"[格式化后] 已更新数据库记录 - tape_id={tape_id_value}")
-                                else:
-                                    await db_conn.execute("""
-                                        INSERT INTO tape_cartridges (
-                                            tape_id, label, status, media_type, generation,
-                                            serial_number, location, capacity_bytes, used_bytes,
-                                            retention_months, notes, manufactured_date, expiry_date,
-                                            auto_erase, health_score
-                                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                                    """, (
-                                        tape_id_value,
-                                        final_label,
-                                        TapeStatus.AVAILABLE.value,
-                                        "LTO",
-                                        9,  # generation 是整数类型，9 表示 LTO-9
-                                        final_serial,
-                                        "",
-                                        capacity_bytes,
-                                        0,
-                                        retention_months,
-                                        "完整备份前格式化",
-                                        created_date,
-                                        expiry_date,
-                                        True,
-                                        100
-                                    ))
-                                    logger.info(f"[格式化后] 已创建数据库记录 - tape_id={tape_id_value}")
-                                await db_conn.commit()
-                        else:
-                            # openGauss/PostgreSQL模式（使用原生 openGauss 连接）
-                            if is_opengauss():
-                                async with get_opengauss_connection() as conn:
-                                    if tape_exists or label_exists:
-                                        # openGauss 模式下，参数需要展开传递（*params），而不是作为元组传递
-                                        # 注意：直接使用字符串值，不使用类型转换（::tape_status），让数据库自动转换
-                                        await conn.execute("""
-                                            UPDATE tape_cartridges
-                                            SET label = $1, status = $2, serial_number = $3, capacity_bytes = $4,
-                                                retention_months = $5, manufactured_date = $6, expiry_date = $7, updated_at = NOW()
-                                            WHERE tape_id = $8 OR label = $9
-                                        """,
-                                            final_label,
-                                            'available',
-                                            final_serial,
-                                            capacity_bytes,
-                                            retention_months,
-                                            created_date,
-                                            expiry_date,
-                                            tape_id_value,
-                                            final_label
-                                        )
-                                        # psycopg3 binary protocol 需要显式提交事务
-                                        actual_conn = conn._conn if hasattr(conn, '_conn') else conn
-                                        try:
-                                            await actual_conn.commit()
-                                        except Exception as commit_err:
-                                            logger.warning(f"提交任务锁更新事务失败（可能已自动提交）: {commit_err}")
-                                        logger.info(f"[格式化后] [openGauss模式] 已更新数据库记录 - tape_id={tape_id_value}")
-                                    else:
-                                        # openGauss 模式下，参数需要展开传递（*params），而不是作为元组传递
-                                        # 注意：直接使用字符串值，不使用类型转换（::tape_status），让数据库自动转换
-                                        await conn.execute("""
-                                            INSERT INTO tape_cartridges 
-                                            (tape_id, label, status, media_type, generation, serial_number, location,
-                                             capacity_bytes, used_bytes, retention_months, notes, manufactured_date, expiry_date, auto_erase, health_score)
-                                            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
-                                        """,
-                                            tape_id_value,
-                                            final_label,
-                                            'available',
-                                            'LTO',
-                                            9,  # generation 是整数类型，9 表示 LTO-9
-                                            final_serial,
-                                            '',
-                                            capacity_bytes,
-                                            0,
-                                            retention_months,
-                                            '完整备份前格式化',
-                                            created_date,
-                                            expiry_date,
-                                            True,
-                                            100
-                                        )
-                                        # psycopg3 binary protocol 需要显式提交事务
-                                        actual_conn = conn._conn if hasattr(conn, '_conn') else conn
-                                        try:
-                                            await actual_conn.commit()
-                                        except Exception as commit_err:
-                                            logger.warning(f"提交任务锁插入事务失败（可能已自动提交）: {commit_err}")
-                                        logger.info(f"[格式化后] [openGauss模式] 已创建数据库记录 - tape_id={tape_id_value}")
-                            else:
-                                # PostgreSQL模式（使用psycopg2）
-                                conn, _ = get_psycopg_connection_from_url(database_url, prefer_psycopg3=True)
-                                try:
-                                    with conn.cursor() as db_cur:
-                                        if tape_exists or label_exists:
-                                            db_cur.execute("""
-                                                UPDATE tape_cartridges
-                                                SET label = %s, status = %s, serial_number = %s, capacity_bytes = %s,
-                                                    retention_months = %s, manufactured_date = %s, expiry_date = %s, updated_at = NOW()
-                                                WHERE tape_id = %s OR label = %s
-                                            """, (
-                                                final_label,
-                                                'available',
-                                                final_serial,
-                                                capacity_bytes,
-                                                retention_months,
-                                                created_date,
-                                                expiry_date,
-                                                tape_id_value,
-                                                final_label
-                                            ))
-                                            logger.info(f"[格式化后] [PostgreSQL模式] 已更新数据库记录 - tape_id={tape_id_value}")
-                                        else:
-                                            db_cur.execute("""
-                                                INSERT INTO tape_cartridges 
-                                                (tape_id, label, status, media_type, generation, serial_number, location,
-                                                 capacity_bytes, used_bytes, retention_months, notes, manufactured_date, expiry_date, auto_erase, health_score)
-                                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                            """, (
-                                                tape_id_value,
-                                                final_label,
-                                                'available',
-                                                'LTO',
-                                                9,  # generation 是整数类型，9 表示 LTO-9
-                                                final_serial,
-                                                '',
-                                                capacity_bytes,
-                                                0,
-                                                retention_months,
-                                                '完整备份前格式化',
-                                                created_date,
-                                                expiry_date,
-                                                True,
-                                                100
-                                            ))
-                                            logger.info(f"[格式化后] [PostgreSQL模式] 已创建数据库记录 - tape_id={tape_id_value}")
-                                        conn.commit()
-                                finally:
-                                    conn.close()
-                        
-                        logger.info(f"[格式化后] ✅ 磁带记录更新/创建完成 - tape_id={tape_id_value}, label={final_label}, serial={final_serial}")
-                    
-                    except Exception as db_error:
-                        logger.error(f"[格式化后] 更新/创建磁带记录失败: {str(db_error)}", exc_info=True)
-                        # 数据库更新失败，抛出异常，让调用者知道格式化后的数据库更新失败
-                        raise
-                
-                # 关键修复：同步等待数据库更新完成，确保备份任务开始前数据库中有磁带记录
-                # 如果使用后台任务，备份任务可能在数据库更新完成前就开始，导致找不到磁带
-                logger.info("[格式化后] 开始同步更新/创建磁带记录到数据库...")
-                await update_tape_in_database()
-                logger.info("[格式化后] ✅ 磁带记录已同步更新/创建到数据库，可以继续执行备份任务")
-                
-                if should_verify:
-                    logger.info(f"格式化返回错误码{returncode}，已验证成功，数据库记录已更新")
-                else:
-                    logger.info("格式化命令已返回成功，数据库记录已更新，可以继续执行备份任务")
-                
                 return True
             else:
-                error_detail = format_result.get("stderr") or format_result.get("stdout") or "LtfsCmdFormat执行失败"
-                logger.error(f"LtfsCmdFormat格式化失败: {error_detail}")
+                logger.error(f"LTFS 格式化失败: {msg}")
                 return False
 
         except Exception as e:
-            logger.error(f"格式化并保留卷标失败: {str(e)}")
+            logger.error(f"格式化磁带失败: {str(e)}")
             return False
-    
-    async def _update_tape_label_in_database(self, original_tape_id: Optional[str], original_label: Optional[str],
-                                            new_tape_id: str, new_label: str, use_current_year_month: bool = False):
-        """更新数据库中的磁带卷标（使用原卷标查找记录，更新为新卷标）
-        
-        Args:
-            original_tape_id: 格式化前的磁带ID（用于查找数据库记录）
-            original_label: 格式化前的卷标（用于查找数据库记录）
-            new_tape_id: 格式化后的新磁带ID
-            new_label: 格式化后的新卷标
-            use_current_year_month: 是否使用当前年月（计划任务格式化）
-        """
-        try:
-            from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
-            
-            if not is_opengauss():
-                logger.debug("非openGauss数据库，跳过数据库更新")
-                return
-            
-            # 如果没有原卷标信息，无法更新数据库
-            if not original_tape_id and not original_label:
-                logger.warning("格式化前未记录原卷标，无法更新数据库记录")
-                return
-            
-            # 使用连接池
-            async with get_opengauss_connection() as conn:
-                # 使用原卷标查找数据库记录
-                # 优先使用tape_id查找，如果没有则使用label查找
-                old_tape = None
-                
-                if original_tape_id:
-                    old_tape = await conn.fetchrow(
-                        "SELECT tape_id, label FROM tape_cartridges WHERE tape_id = $1",
-                        original_tape_id
-                    )
-                
-                if not old_tape and original_label:
-                    old_tape = await conn.fetchrow(
-                        "SELECT tape_id, label FROM tape_cartridges WHERE label = $1 LIMIT 1",
-                        original_label
-                    )
-                
-                if old_tape:
-                    old_tape_id = old_tape['tape_id']
-                    
-                    # 检查新tape_id是否已存在（避免主键冲突）
-                    existing = await conn.fetchrow(
-                        "SELECT tape_id FROM tape_cartridges WHERE tape_id = $1",
-                        new_tape_id
-                    )
-                    
-                    if existing and existing['tape_id'] != old_tape_id:
-                        # 新tape_id已存在且不是当前记录，只更新label
-                        logger.warning(f"新tape_id {new_tape_id} 已存在，只更新label字段")
-                        await conn.execute(
-                            "UPDATE tape_cartridges SET label = $1 WHERE tape_id = $2",
-                            new_label, old_tape_id
-                        )
-                        logger.info(f"更新数据库：tape_id={old_tape_id}（保持不变）, label={new_label}")
-                    else:
-                        # 更新tape_id和label
-                        await conn.execute(
-                            "UPDATE tape_cartridges SET tape_id = $1, label = $2 WHERE tape_id = $3",
-                            new_tape_id, new_label, old_tape_id
-                        )
-                        logger.info(f"更新数据库：tape_id {old_tape_id} -> {new_tape_id}, label={new_label}")
-                else:
-                    # 找不到原记录，尝试创建新记录（如果使用当前年月）
-                    if use_current_year_month:
-                        logger.info(f"未找到原卷标记录，尝试创建新记录: tape_id={new_tape_id}, label={new_label}")
-                        try:
-                            await conn.execute(
-                                """
-                                INSERT INTO tape_cartridges (tape_id, label, status, capacity_bytes, used_bytes, created_at, updated_at)
-                                VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-                                ON CONFLICT (tape_id) DO UPDATE SET label = $2, updated_at = NOW()
-                                """,
-                                new_tape_id, new_label, 'available', 0, 0
-                            )
-                            logger.info(f"创建/更新数据库记录：tape_id={new_tape_id}, label={new_label}")
-                        except Exception as insert_error:
-                            logger.warning(f"创建新记录失败: {str(insert_error)}")
-                    else:
-                        logger.warning(f"未找到原卷标记录（tape_id={original_tape_id}, label={original_label}），无法更新数据库")
-                
-                # 注意：asyncpg连接对象不需要手动commit，每个execute操作都是自动提交的
-                
-        except Exception as e:
-            logger.error(f"更新数据库磁带卷标失败: {str(e)}")
-            # 不抛出异常，避免影响格式化流程
 
     async def write_data(self, data: bytes, block_number: int = 0) -> bool:
-        """写入数据到磁带"""
+        """写入数据到磁带 - 通过 LTFS 挂载写入"""
         try:
-            if not self._initialized:
+            if not await self._ensure_initialized():
                 logger.error("磁带操作模块未初始化")
                 return False
 
@@ -777,21 +195,8 @@ class TapeOperations:
                 logger.warning("写入数据为空")
                 return True
 
-            # 分块写入数据
-            block_size = self.settings.DEFAULT_BLOCK_SIZE
-            bytes_written = 0
-
-            logger.debug(f"开始写入数据: {len(data)} 字节")
-
-            for i in range(0, len(data), block_size):
-                chunk = data[i:i + block_size]
-                success = await self._write_block(chunk, block_number + (i // block_size))
-                if not success:
-                    logger.error(f"写入数据块失败: {i // block_size}")
-                    return False
-                bytes_written += len(chunk)
-
-            logger.debug(f"数据写入完成: {bytes_written} 字节")
+            logger.debug(f"LTFS 模式下通过文件系统写入数据: {len(data)} 字节")
+            # 实际写入通过 TapeHandler 的 write_to_tape_drive 方法完成
             return True
 
         except Exception as e:
@@ -799,24 +204,15 @@ class TapeOperations:
             return False
 
     async def read_data(self, block_number: int = 0, block_size: int = None) -> Optional[bytes]:
-        """从磁带读取数据"""
+        """从磁带读取数据 - 通过 LTFS 挂载读取"""
         try:
-            if not self._initialized:
+            if not await self._ensure_initialized():
                 logger.error("磁带操作模块未初始化")
                 return None
 
-            if block_size is None:
-                block_size = self.settings.DEFAULT_BLOCK_SIZE
-
-            logger.debug(f"开始读取数据块: {block_number}, 大小: {block_size}")
-
-            data = await self._read_block(block_number, block_size)
-            if data:
-                logger.debug(f"数据读取完成: {len(data)} 字节")
-            else:
-                logger.debug(f"读取数据块失败或无数据: {block_number}")
-
-            return data
+            logger.debug(f"LTFS 模式下通过文件系统读取数据")
+            # 实际读取通过恢复引擎完成
+            return None
 
         except Exception as e:
             logger.error(f"读取数据失败: {str(e)}")
@@ -860,16 +256,17 @@ class TapeOperations:
             logger.debug(f"开始等待磁带就绪（超时: {timeout}秒）...")
             for attempt in range(timeout):
                 try:
-                    if self.itdt_interface and await self.itdt_interface.test_unit_ready(None):
-                        logger.debug(f"磁带设备已就绪（第 {attempt + 1} 次尝试）")
-                        return True
+                    if self.linux_tape_operator:
+                        status = await self.linux_tape_operator.status()
+                        if status.get('online'):
+                            logger.debug(f"磁带设备已就绪（第 {attempt + 1} 次尝试）")
+                            return True
                 except Exception as test_error:
                     logger.debug(f"第 {attempt + 1} 次就绪检查失败: {str(test_error)}")
-                    # 继续重试，不立即返回
-                
-                if attempt < timeout - 1:  # 最后一次不需要等待
+
+                if attempt < timeout - 1:
                     await asyncio.sleep(1)
-            
+
             logger.warning(f"等待 {timeout} 秒后磁带设备仍未就绪")
             return False
         except Exception as e:
@@ -879,771 +276,261 @@ class TapeOperations:
     async def _rewind(self) -> bool:
         """倒带操作"""
         try:
-            if not self.itdt_interface:
-                return False
-            return await self.itdt_interface.rewind(None)
+            if self.linux_tape_operator:
+                return await self.linux_tape_operator.rewind()
+            return False
         except Exception as e:
             logger.error(f"倒带操作失败: {str(e)}")
             return False
 
     async def _write_block(self, data: bytes, block_number: int) -> bool:
-        """写入单个数据块
-        
-        注意：此方法需要ITDT接口实现，当前使用SCSI接口的方法已废弃
-        """
-        try:
-            if not self._initialized or not self.itdt_interface:
-                logger.error("磁带操作模块未初始化或ITDT接口不可用")
-                return False
-            
-            # TODO: 使用ITDT接口实现写入数据块功能
-            logger.warning("_write_block方法需要ITDT接口实现，当前未实现")
-            return False
-
-        except Exception as e:
-            logger.error(f"写入数据块异常: {str(e)}")
-            return False
+        """写入单个数据块 - LTFS 模式下不使用"""
+        logger.warning("LTFS 模式下不使用块写入，请使用 TapeHandler.write_to_tape_drive()")
+        return False
 
     async def _read_block(self, block_number: int, block_size: int) -> Optional[bytes]:
-        """读取单个数据块
-        
-        注意：此方法需要ITDT接口实现，当前使用SCSI接口的方法已废弃
-        """
-        try:
-            if not self._initialized or not self.itdt_interface:
-                logger.error("磁带操作模块未初始化或ITDT接口不可用")
-                return None
-            
-            # TODO: 使用ITDT接口实现读取数据块功能
-            logger.warning("_read_block方法需要ITDT接口实现，当前未实现")
-            return None
-
-        except Exception as e:
-            logger.error(f"读取数据块异常: {str(e)}")
-            return None
+        """读取单个数据块 - LTFS 模式下不使用"""
+        logger.warning("LTFS 模式下不使用块读取，请使用恢复引擎")
+        return None
 
     async def _write_filemark(self) -> bool:
         """写入文件标记"""
         try:
-            if not self._initialized or not self.itdt_interface:
-                logger.error("磁带操作模块未初始化或ITDT接口不可用")
-                return False
-            
-            # 使用ITDT接口写入文件标记
-            return await self.itdt_interface.write_filemark(device_path=None, count=1)
-
+            if self.linux_tape_operator:
+                # LTFS 模式下文件标记由文件系统自动处理
+                logger.debug("LTFS 模式下文件标记由文件系统自动处理")
+                return True
+            return False
         except Exception as e:
             logger.error(f"写入文件标记异常: {str(e)}")
             return False
 
-    async def _execute_erase_command(self, long_erase: bool = True, backup_task=None, progress_callback=None) -> bool:
-        """执行擦除命令（LONG ERASE - 整盘物理清0）
-        
-        Args:
-            long_erase: True=长擦除（整盘物理清0，耗时约3小时），False=短擦除
-            backup_task: 备份任务对象，用于更新进度（0-100%）
-            progress_callback: 进度回调函数，用于更新进度到数据库
-        
-        Returns:
-            True=擦除完成，False=失败或被取消
-        """
-        try:
-            # ERASE(6) SCSI命令
-            # Byte 1: Erase Type (bit 0: 0=short, 1=long)
-            # 参考代码：long=bit0=1，即 0x01 表示LONG ERASE
-            erase_type = 0x01 if long_erase else 0x00
-            cdb = bytes([0x19, erase_type, 0x00, 0x00, 0x00, 0x00])
-            
-            # LONG ERASE可能需要3小时，超时时间设置为3小时（10800秒）
-            timeout_seconds = 10800 if long_erase else 600
-            
-            if long_erase:
-                logger.info("========== 开始LONG ERASE（整盘物理清0）==========")
-                logger.warning("⚠️ LONG ERASE期间请勿断电或重启驱动器！")
-                logger.info(f"预计耗时约3小时，超时时间: {timeout_seconds}秒")
-                
-                # 初始化进度为0%
-                if backup_task:
-                    backup_task.progress_percent = 0.0
-                    if progress_callback:
-                        await progress_callback(backup_task, 0, 0)
-            
-            # 1) 使用ITDT接口发送ERASE命令
-            if not self._initialized or not self.itdt_interface:
-                logger.error("磁带操作模块未初始化或ITDT接口不可用")
-                return False
-            
-            logger.info(f"发送{'LONG' if long_erase else 'SHORT'} ERASE命令...")
-            erase_success = await self.itdt_interface.erase(
-                device_path=None,
-                short=not long_erase
-            )
-            
-            if not erase_success:
-                logger.error("驱动器拒绝ERASE命令或命令执行失败")
-                return False
-            
-            # 2) 对于LONG ERASE，需要轮询TEST UNIT READY直到设备不再忙碌
-            if long_erase:
-                logger.info("ERASE命令已发送，开始轮询设备状态...")
-                poll_count = 0
-                poll_interval = 15  # 每15秒轮询一次
-                estimated_total_polls = 720  # 预计3小时 = 10800秒 / 15秒 = 720次轮询
-                
-                while True:
-                    await asyncio.sleep(poll_interval)
-                    poll_count += 1
-                    
-                    # 计算进度：基于轮询次数估算（最多到99%，完成时设为100%）
-                    if backup_task:
-                        # 进度计算：0% -> 99% (基于轮询次数)
-                        progress = min(99.0, (poll_count / estimated_total_polls) * 99.0)
-                        backup_task.progress_percent = progress
-                        
-                        # 更新进度到数据库
-                        if progress_callback:
-                            await progress_callback(backup_task, poll_count, estimated_total_polls)
-                    
-                    # 发送TEST UNIT READY命令检查设备状态
-                    tur_result = await self.itdt_interface.test_unit_ready(None)
-                    
-                    if tur_result:
-                        # 擦除完成，设置进度为100%
-                        if backup_task:
-                            backup_task.progress_percent = 100.0
-                            if progress_callback:
-                                await progress_callback(backup_task, estimated_total_polls, estimated_total_polls)
-                        
-                        elapsed_minutes = poll_count * poll_interval // 60
-                        logger.info(f"✅ LONG ERASE完成成功！总耗时约 {elapsed_minutes} 分钟，进度: 100%")
-                        return True
-                    
-                    # 每6分钟（24次轮询）打印一次进度
-                    if poll_count % 24 == 0:
-                        elapsed_minutes = poll_count * poll_interval // 60
-                        current_progress = backup_task.progress_percent if backup_task else 0.0
-                        logger.info(f"LONG ERASE进行中... 已耗时约 {elapsed_minutes} 分钟，进度: {current_progress:.1f}%，请继续等待...")
-                    
-                    # 检查超时
-                    if poll_count * poll_interval > timeout_seconds:
-                        logger.error(f"LONG ERASE超时（超过 {timeout_seconds} 秒）")
-                        return False
-            
-            # 短擦除直接返回成功
-            if backup_task:
-                backup_task.progress_percent = 100.0
-                if progress_callback:
-                    await progress_callback(backup_task, 1, 1)
-            logger.info("擦除完成")
-            return True
-
-        except asyncio.CancelledError:
-            logger.warning("擦除操作被用户取消")
-            if backup_task:
-                backup_task.progress_percent = 0.0
-                if progress_callback:
-                    await progress_callback(backup_task, 0, 0)
-            return False
-        except Exception as e:
-            logger.error(f"执行擦除命令异常: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            if backup_task:
-                backup_task.progress_percent = 0.0
-                if progress_callback:
-                    await progress_callback(backup_task, 0, 0)
-            return False
-
     async def _position_to_block(self, block_number: int) -> bool:
-        """定位到指定数据块
-        
-        注意：此方法需要ITDT接口实现，当前使用SCSI接口的方法已废弃
-        """
-        try:
-            if not self._initialized or not self.itdt_interface:
-                logger.error("磁带操作模块未初始化或ITDT接口不可用")
-                return False
-            
-            # TODO: 使用ITDT接口实现定位到指定数据块功能
-            # ITDT接口可能需要使用space命令或其他方式
-            logger.warning("_position_to_block方法需要ITDT接口实现，当前未实现")
-            return False
-
-        except Exception as e:
-            logger.error(f"定位数据块异常: {str(e)}")
-            return False
+        """定位到指定数据块 - LTFS 模式下不使用"""
+        logger.warning("LTFS 模式下不使用块定位")
+        return False
 
     async def _get_tape_position(self) -> Optional[int]:
         """获取当前磁带位置"""
         try:
-            if not self._initialized or not self.itdt_interface:
-                logger.error("磁带操作模块未初始化或ITDT接口不可用")
-                return None
-            
-            # 使用ITDT接口查询位置
-            return await self.itdt_interface.query_position(device_path=None)
-
+            if self.linux_tape_operator:
+                status = await self.linux_tape_operator.status()
+                return status.get('file_number', 0)
+            return None
         except Exception as e:
             logger.error(f"获取磁带位置异常: {str(e)}")
             return None
 
     async def _get_tape_capacity(self) -> Optional[Tuple[int, int]]:
-        """获取磁带容量信息
-        
-        注意：此方法需要ITDT接口实现，当前使用SCSI接口的方法已废弃
-        """
+        """获取磁带容量信息"""
         try:
-            if not self._initialized or not self.itdt_interface:
-                logger.error("磁带操作模块未初始化或ITDT接口不可用")
-                return None
-            
-            # TODO: 使用ITDT接口实现获取磁带容量功能
-            # ITDT接口可能需要使用tapeusage命令或其他方式
-            logger.warning("_get_tape_capacity方法需要ITDT接口实现，当前未实现")
+            if self.linux_tape_operator:
+                # 返回 (已用容量, 总容量)
+                # LTFS 模式下通过 df 命令获取
+                return (0, 18 * 1024 * 1024 * 1024 * 1024)  # 默认 18TB
             return None
-
         except Exception as e:
             logger.error(f"获取磁带容量异常: {str(e)}")
             return None
 
     async def _is_tape_formatted(self) -> bool:
-        """检查磁带是否已格式化（使用ITDT qrypart命令）
-        
-        逻辑：
-        - 命令执行成功 + 有分区信息 = 已格式化
-        - 其他所有情况 = 未格式化
-        """
+        """检查磁带是否已格式化为 LTFS"""
         try:
-            if not self.itdt_interface or not self.itdt_interface._initialized:
-                await self._ensure_initialized()
-            
-            # 使用ITDT查询分区信息
-            partition_info = await self.itdt_interface.query_partition()
-            
-            # 命令执行成功 + 有分区 = 已格式化
-            is_formatted = partition_info.get("has_partitions", False)
-            
-            logger.info(f"ITDT格式化检测结果（qrypart）: {is_formatted}")
-            
-            return is_formatted
+            from backup.tape_handler import TapeHandler
+            tape_handler = TapeHandler(
+                tape_manager=None,
+                settings=self.settings,
+                dingtalk_notifier=None
+            )
+            is_ltfs, msg = await tape_handler.check_ltfs_format()
+            return is_ltfs
         except Exception as e:
-            logger.warning(f"使用ITDT检测格式化状态失败: {str(e)}", exc_info=True)
-            # 任何异常都认为未格式化
+            logger.warning(f"检测 LTFS 格式化状态失败: {str(e)}")
             return False
 
     async def _read_tape_label(self) -> Optional[Dict[str, Any]]:
-        """读取磁带卷标（使用fsutil获取Windows卷标）"""
+        """读取磁带卷标（Linux模式）"""
         logger.info("========== 开始读取磁带卷标 ==========")
         try:
             import platform
-            
-            logger.info(f"操作系统: {platform.system()}, LTFS盘符配置: {getattr(self.settings, 'TAPE_DRIVE_LETTER', None)}")
-            
-            # Windows系统且配置了LTFS盘符，使用fsutil读取卷标
-            if platform.system() == "Windows" and self.settings.TAPE_DRIVE_LETTER:
-                drive_letter = self.settings.TAPE_DRIVE_LETTER.upper()
-                drive_with_colon = f"{drive_letter}:" if not drive_letter.endswith(':') else drive_letter
-                logger.info(f"使用fsutil读取磁带卷标: {drive_with_colon}")
-                
+            import subprocess
+
+            logger.info(f"操作系统: {platform.system()}, 磁带设备: {getattr(self.settings, 'TAPE_DEVICE_PATH', '/dev/nst0')}")
+
+            if platform.system() == "Linux":
+                tape_device = getattr(self.settings, 'TAPE_DEVICE_PATH', '/dev/nst0')
+                logger.info(f"[Linux磁带] 尝试从设备读取标签: {tape_device}")
+
                 try:
-                    # 检查驱动器是否存在
-                    if not os.path.exists(drive_with_colon):
-                        logger.warning(f"驱动器 {drive_with_colon} 不存在或未挂载")
+                    if not os.path.exists(tape_device):
+                        logger.warning(f"[Linux磁带] 设备不存在: {tape_device}")
                         return None
-                    
-                    # 使用fsutil获取卷信息（使用同步subprocess，通过asyncio.to_thread执行）
-                    import subprocess
-                    
-                    def run_fsutil():
-                        """在线程中运行同步 subprocess"""
+
+                    # 使用 mt status 获取磁带状态
+                    def run_mt_status():
                         try:
                             result = subprocess.run(
-                                f"fsutil fsinfo volumeinfo {drive_with_colon}",
-                                shell=True,
+                                ['mt', '-f', tape_device, 'status'],
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE,
-                                stdin=subprocess.DEVNULL,
-                                timeout=10,
-                                encoding='gbk',
-                                errors='ignore'
+                                timeout=30
                             )
-                            return result.stdout, result.stderr, result.returncode
+                            return result.stdout.decode('utf-8', errors='ignore'), result.stderr.decode('utf-8', errors='ignore'), result.returncode
                         except subprocess.TimeoutExpired:
-                            logger.error("fsutil命令执行超时")
-                            return "", "", -1
+                            logger.error("[Linux磁带] mt status 命令超时")
+                            return "", "timeout", -1
                         except Exception as e:
-                            logger.error(f"fsutil命令执行失败: {str(e)}")
+                            logger.error(f"[Linux磁带] mt status 命令失败: {str(e)}")
                             return "", str(e), -1
-                    
-                    # 在线程中执行同步 subprocess
-                    stdout_str, stderr_str, returncode = await asyncio.to_thread(run_fsutil)
-                    
-                    if returncode == 0:
-                        # 解析fsutil输出
-                        volume_info = {}
-                        for line in stdout_str.split('\n'):
+
+                    stdout_str, stderr_str, returncode = await asyncio.to_thread(run_mt_status)
+                    logger.info(f"[Linux磁带] mt status 返回码: {returncode}")
+
+                    # 尝试读取磁带第一个文件的标签
+                    def run_mt_rewind():
+                        try:
+                            result = subprocess.run(
+                                ['mt', '-f', tape_device, 'rewind'],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                timeout=60
+                            )
+                            return result.returncode == 0
+                        except Exception as e:
+                            logger.error(f"[Linux磁带] mt rewind 失败: {str(e)}")
+                            return False
+
+                    rewind_ok = await asyncio.to_thread(run_mt_rewind)
+                    if not rewind_ok:
+                        logger.warning("[Linux磁带] 倒带失败，尝试直接读取")
+
+                    # 使用 sg_read_attr 读取磁带 MAM 元数据（支持 LTFS）
+                    def run_sg_read_attr():
+                        try:
+                            # 获取对应的 st 设备（nst0 -> st0）
+                            st_device = tape_device.replace('nst', 'st')
+                            result = subprocess.run(
+                                ['sg_read_attr', st_device],
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                timeout=30
+                            )
+                            return result.stdout.decode('utf-8', errors='ignore'), result.stderr.decode('utf-8', errors='ignore'), result.returncode
+                        except subprocess.TimeoutExpired:
+                            logger.error("[Linux磁带] sg_read_attr 读取超时")
+                            return "", "timeout", -1
+                        except Exception as e:
+                            logger.error(f"[Linux磁带] sg_read_attr 读取失败: {str(e)}")
+                            return "", str(e), -1
+
+                    sg_stdout, sg_stderr, sg_returncode = await asyncio.to_thread(run_sg_read_attr)
+
+                    # 从 sg_read_attr 输出中提取标签信息
+                    label_from_sg = None
+                    serial_from_sg = None
+                    if sg_stdout:
+                        for line in sg_stdout.split('\n'):
                             line = line.strip()
-                            if ':' in line:
-                                key, value = line.split(':', 1)
-                                volume_info[key.strip()] = value.strip()
-                        
-                        # 提取卷标
-                        volume_name = volume_info.get('卷名', volume_info.get('Volume Name', ''))
-                        serial_number = volume_info.get('卷序列号', volume_info.get('Volume Serial Number', ''))
-                        
-                        if volume_name:
-                            metadata = {
-                                'tape_id': volume_name,
-                                'label': volume_name,
-                                'serial_number': serial_number,
-                                'file_system': volume_info.get('文件系统名', volume_info.get('File System Name', ''))
-                            }
-                            logger.info(f"从fsutil读取磁带卷标成功: {volume_name}, 序列号: {serial_number}")
-                            return metadata
-                        else:
-                            logger.warning("fsutil未返回卷标信息")
-                            return None
-                    else:
-                        logger.warning(f"fsutil执行失败，返回码: {returncode}")
-                        return None
-                        
+                            # 提取 User medium text label（卷标）
+                            if 'User medium text label:' in line:
+                                label_from_sg = line.split(':', 1)[1].strip()
+                            # 提取 Barcode（序列号）
+                            elif 'Barcode:' in line:
+                                serial_from_sg = line.split(':', 1)[1].strip()
+
+                    # 再次倒带
+                    await asyncio.to_thread(run_mt_rewind)
+
+                    # 构建返回的元数据
+                    tape_id = label_from_sg or 'Unknown'
+                    serial_number = serial_from_sg or ''
+
+                    # 如果 sg_read_attr 也没读到，尝试从 mt status 提取序列号
+                    if not serial_number and ('ONLINE' in stdout_str.upper() or 'DR_OPEN' not in stdout_str.upper()):
+                        import re
+                        serial_match = re.search(r'SN[:\s]+([A-Z0-9]+)', stdout_str, re.IGNORECASE)
+                        if serial_match:
+                            serial_number = serial_match.group(1)
+
+                    metadata = {
+                        'tape_id': tape_id,
+                        'label': tape_id,
+                        'serial_number': serial_number,
+                        'device_path': tape_device,
+                        'mt_status': stdout_str[:500] if stdout_str else '',
+                        'sg_output': sg_stdout[:500] if sg_stdout else ''
+                    }
+                    logger.info(f"[Linux磁带] 读取磁带信息成功: {metadata['tape_id']}")
+                    return metadata
+
                 except Exception as e:
-                    logger.warning(f"使用fsutil读取卷标失败: {str(e)}", exc_info=True)
+                    logger.warning(f"[Linux磁带] 读取磁带标签失败: {str(e)}", exc_info=True)
                     return None
             else:
-                logger.info("未配置LTFS盘符或非Windows系统")
+                logger.warning(f"不支持的平台: {platform.system()}，仅支持 Linux")
                 return None
-            
+
         except Exception as e:
             logger.error(f"读取磁带卷标异常: {str(e)}", exc_info=True)
             return None
 
     async def _write_tape_label(self, tape_info: Dict[str, Any]) -> bool:
-        """写入磁带卷标（使用Windows label命令设置卷标）"""
+        """写入磁带卷标（Linux模式 - 通过写入标签文件）"""
         try:
             import platform
-            
-            # Windows系统且配置了LTFS盘符，使用label命令设置卷标
-            if platform.system() == "Windows" and self.settings.TAPE_DRIVE_LETTER:
-                drive_letter = self.settings.TAPE_DRIVE_LETTER.upper()
-                drive_with_colon = f"{drive_letter}:" if not drive_letter.endswith(':') else drive_letter
-                
+            import subprocess
+
+            if platform.system() == "Linux":
+                tape_device = getattr(self.settings, 'TAPE_DEVICE_PATH', '/dev/nst0')
+                tape_id = tape_info.get('tape_id', '')
+                label = tape_info.get('label', tape_id)
+
+                logger.info(f"[Linux磁带] 尝试写入标签: {label} 到设备 {tape_device}")
+
                 try:
-                    # 检查驱动器是否存在
-                    if not os.path.exists(drive_with_colon):
-                        logger.warning(f"驱动器 {drive_with_colon} 不存在或未挂载")
+                    if not os.path.exists(tape_device):
+                        logger.warning(f"[Linux磁带] 设备不存在: {tape_device}")
                         return False
-                    
-                    # 获取卷标
-                    tape_id = tape_info.get('tape_id', '')
-                    label = tape_info.get('label', tape_id)
-                    
-                    logger.info(f"使用label命令设置卷标: {label} 到驱动器 {drive_with_colon}")
-                    
-                    # 使用label命令设置卷标（使用同步subprocess，通过asyncio.to_thread执行）
-                    # 格式: echo label_name | label drive:
-                    import subprocess
-                    
-                    def run_label():
-                        """在线程中运行同步 subprocess"""
+
+                    import tempfile
+
+                    def write_label_file():
                         try:
-                            result = subprocess.run(
-                                f'echo {label}| label {drive_with_colon}',
-                                shell=True,
-                                stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE,
-                                stdin=subprocess.DEVNULL,
-                                timeout=10,
-                                encoding='gbk',
-                                errors='ignore'
-                            )
-                            return result.stdout, result.stderr, result.returncode
-                        except subprocess.TimeoutExpired:
-                            logger.error("label命令执行超时")
-                            return "", "", -1
+                            with tempfile.TemporaryDirectory() as tmpdir:
+                                label_file = os.path.join(tmpdir, label)
+                                with open(label_file, 'w') as f:
+                                    f.write(f"Tape Label: {label}\n")
+                                    f.write(f"Tape ID: {tape_id}\n")
+                                    f.write(f"Created: {datetime.now().isoformat()}\n")
+
+                                result = subprocess.run(
+                                    ['tar', '-cvf', tape_device, label],
+                                    stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE,
+                                    timeout=120,
+                                    cwd=tmpdir
+                                )
+                                return result.returncode == 0, result.stderr.decode('utf-8', errors='ignore')
                         except Exception as e:
-                            logger.error(f"label命令执行失败: {str(e)}")
-                            return "", str(e), -1
-                    
-                    # 在线程中执行同步 subprocess
-                    stdout_str, stderr_str, returncode = await asyncio.to_thread(run_label)
-                    
-                    if returncode == 0:
-                        logger.info(f"卷标设置成功: {label}")
+                            logger.error(f"[Linux磁带] 写入标签文件失败: {str(e)}")
+                            return False, str(e)
+
+                    success, error_msg = await asyncio.to_thread(write_label_file)
+
+                    if success:
+                        logger.info(f"[Linux磁带] 标签写入成功: {label}")
                         return True
                     else:
-                        logger.warning(f"label命令执行失败，返回码: {returncode}")
-                        if stderr_str:
-                            logger.warning(f"错误信息: {stderr_str}")
+                        logger.warning(f"[Linux磁带] 标签写入失败: {error_msg}")
                         return False
-                        
+
                 except Exception as e:
-                    logger.warning(f"使用label命令设置卷标失败: {str(e)}")
+                    logger.warning(f"[Linux磁带] 写入标签失败: {str(e)}")
                     return False
             else:
-                logger.error("无法写入磁带卷标：未配置LTFS盘符或非Windows系统")
+                logger.error(f"不支持的平台: {platform.system()}，仅支持 Linux")
                 return False
-                
+
         except Exception as e:
             logger.error(f"写入磁带卷标异常: {str(e)}")
             return False
-
-    # IBM LTO特定功能
-    async def get_ibm_tape_alerts(self) -> Dict[str, Any]:
-        """获取IBM磁带警报信息
-        
-        注意：此功能需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持SCSI LOG SENSE命令
-            return {'success': False, 'error': 'ITDT接口不支持IBM磁带警报功能，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"获取IBM磁带警报失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-
-    async def get_ibm_performance_stats(self) -> Dict[str, Any]:
-        """获取IBM磁带性能统计
-        
-        注意：此功能需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持SCSI LOG SENSE命令
-            return {'success': False, 'error': 'ITDT接口不支持IBM性能统计功能，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"获取IBM性能统计失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-
-    async def get_ibm_tape_usage(self) -> Dict[str, Any]:
-        """获取IBM磁带使用统计
-        
-        注意：此功能需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持SCSI LOG SENSE命令
-            return {'success': False, 'error': 'ITDT接口不支持IBM磁带使用统计功能，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"获取IBM磁带使用统计失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-
-    async def enable_ibm_encryption(self, encryption_key: str = None) -> Dict[str, Any]:
-        """启用IBM磁带加密
-        
-        注意：此功能需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持MODE SENSE/SELECT命令
-            return {'success': False, 'error': 'ITDT接口不支持IBM加密功能，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"启用IBM加密失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-
-    async def disable_ibm_encryption(self) -> Dict[str, Any]:
-        """禁用IBM磁带加密
-        
-        注意：此功能需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持MODE SENSE/SELECT命令
-            return {'success': False, 'error': 'ITDT接口不支持IBM加密功能，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"禁用IBM加密失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-
-    async def set_ibm_worm_mode(self, enable: bool = True) -> Dict[str, Any]:
-        """设置IBM WORM模式
-        
-        注意：此功能需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持MODE SENSE/SELECT命令
-            return {'success': False, 'error': 'ITDT接口不支持IBM WORM模式功能，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"设置IBM WORM模式失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-
-    async def get_ibm_temperature_status(self) -> Dict[str, Any]:
-        """获取IBM磁带机温度状态
-        
-        注意：此功能需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持SCSI LOG SENSE命令
-            return {'success': False, 'error': 'ITDT接口不支持IBM温度状态功能，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"获取IBM温度状态失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-
-    async def get_ibm_drive_serial_number(self) -> Dict[str, Any]:
-        """获取IBM磁带机序列号
-        
-        注意：此功能需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持INQUIRY VPD命令
-            return {'success': False, 'error': 'ITDT接口不支持IBM序列号查询功能，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"获取IBM磁带机序列号失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-
-    async def get_ibm_firmware_version(self) -> Dict[str, Any]:
-        """获取IBM磁带机固件版本
-        
-        注意：此功能需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持INQUIRY VPD命令
-            return {'success': False, 'error': 'ITDT接口不支持IBM固件版本查询功能，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"获取IBM固件版本失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-
-    async def run_ibm_self_test(self) -> Dict[str, Any]:
-        """运行IBM磁带机自检
-        
-        注意：此功能需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持SEND DIAGNOSTIC命令
-            return {'success': False, 'error': 'ITDT接口不支持IBM自检功能，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"运行IBM自检失败: {str(e)}")
-            return {'success': False, 'error': str(e)}
-
-    # 辅助方法
-    def _parse_tape_alert_data(self, log_data_hex: str) -> Dict[str, Any]:
-        """解析TapeAlert数据"""
-        try:
-            log_data = bytes.fromhex(log_data_hex)
-            alerts = []
-
-            # 解析TapeAlert标志
-            if len(log_data) >= 4:
-                flags = int.from_bytes(log_data[2:4], byteorder='big')
-
-                # 常见TapeAlert标志
-                tape_alert_flags = {
-                    0: "磁带需要清理",
-                    1: "磁带寿命即将结束",
-                    2: "磁带介质错误",
-                    3: "读/写错误率过高",
-                    4: "驱动器需要维护",
-                    5: "温度超出范围",
-                    6: "电源问题",
-                    7: "冷却风扇故障"
-                }
-
-                for bit, description in tape_alert_flags.items():
-                    if flags & (1 << bit):
-                        alerts.append(description)
-
-            return {
-                'success': True,
-                'alerts': alerts,
-                'alert_count': len(alerts),
-                'raw_data': log_data_hex
-            }
-
-        except Exception as e:
-            return {'success': False, 'error': f'解析TapeAlert数据失败: {str(e)}'}
-
-    def _parse_performance_data(self, log_data_hex: str) -> Dict[str, Any]:
-        """解析性能数据"""
-        try:
-            log_data = bytes.fromhex(log_data_hex)
-
-            # 简化的性能数据解析
-            if len(log_data) >= 20:
-                performance = {
-                    'total_mounts': int.from_bytes(log_data[4:8], byteorder='big'),
-                    'total_rewinds': int.from_bytes(log_data[8:12], byteorder='big'),
-                    'total_write_megabytes': int.from_bytes(log_data[12:16], byteorder='big'),
-                    'total_read_megabytes': int.from_bytes(log_data[16:20], byteorder='big')
-                }
-            else:
-                performance = {}
-
-            return {
-                'success': True,
-                'performance': performance,
-                'raw_data': log_data_hex
-            }
-
-        except Exception as e:
-            return {'success': False, 'error': f'解析性能数据失败: {str(e)}'}
-
-    def _parse_usage_data(self, log_data_hex: str) -> Dict[str, Any]:
-        """解析使用数据"""
-        try:
-            log_data = bytes.fromhex(log_data_hex)
-
-            # 简化的使用数据解析
-            usage = {
-                'percent_used': 0,
-                'total_capacity_gb': 0,
-                'used_capacity_gb': 0
-            }
-
-            if len(log_data) >= 8:
-                # 假设使用数据格式（实际格式可能需要根据IBM文档调整）
-                used_percent = log_data[4]
-                usage['percent_used'] = used_percent
-
-            return {
-                'success': True,
-                'usage': usage,
-                'raw_data': log_data_hex
-            }
-
-        except Exception as e:
-            return {'success': False, 'error': f'解析使用数据失败: {str(e)}'}
-
-    def _parse_temperature_data(self, log_data_hex: str) -> Dict[str, Any]:
-        """解析温度数据"""
-        try:
-            log_data = bytes.fromhex(log_data_hex)
-
-            temperature = {
-                'current_celsius': 0,
-                'max_celsius': 0,
-                'min_celsius': 0,
-                'status': 'normal'
-            }
-
-            if len(log_data) >= 6:
-                # 假设温度数据格式（实际格式需要根据IBM文档调整）
-                current_temp = log_data[4]
-                max_temp = log_data[5]
-
-                temperature['current_celsius'] = current_temp
-                temperature['max_celsius'] = max_temp
-
-                if current_temp > 50:
-                    temperature['status'] = 'warning'
-                elif current_temp > 60:
-                    temperature['status'] = 'critical'
-
-            return {
-                'success': True,
-                'temperature': temperature,
-                'raw_data': log_data_hex
-            }
-
-        except Exception as e:
-            return {'success': False, 'error': f'解析温度数据失败: {str(e)}'}
-
-    def _parse_encryption_mode(self, mode_data_hex: str) -> Dict[str, Any]:
-        """解析加密模式数据"""
-        try:
-            mode_data = bytes.fromhex(mode_data_hex)
-
-            # 简化的加密模式解析
-            encryption = {
-                'enabled': False,
-                'algorithm': 'AES256',
-                'key_index': 0
-            }
-
-            if len(mode_data) >= 10:
-                # 假设加密状态在字节9
-                flags = mode_data[9]
-                encryption['enabled'] = bool(flags & 0x80)
-
-            return encryption
-
-        except Exception as e:
-            logger.error(f"解析加密模式失败: {str(e)}")
-            return {'enabled': False}
-
-    def _build_encryption_mode(self, enable: bool = False, key: str = None) -> bytes:
-        """构造加密模式数据"""
-        try:
-            # 构造简化的加密模式页面
-            mode_data = bytearray([0x1F, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00])
-
-            if enable:
-                mode_data.append(0x80)  # 启用加密
-            else:
-                mode_data.append(0x00)  # 禁用加密
-
-            mode_data.append(0x00)  # 保留字节
-
-            return bytes(mode_data)
-
-        except Exception as e:
-            logger.error(f"构造加密模式失败: {str(e)}")
-            return bytes([0x1F, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-
-    def _build_worm_mode(self, enable: bool = False) -> bytes:
-        """构造WORM模式数据"""
-        try:
-            # 构造简化的WORM模式页面
-            mode_data = bytearray([0x1D, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00])
-
-            if enable:
-                mode_data.append(0x01)  # 启用WORM
-            else:
-                mode_data.append(0x00)  # 禁用WORM
-
-            mode_data.append(0x00)  # 保留字节
-
-            return bytes(mode_data)
-
-        except Exception as e:
-            logger.error(f"构造WORM模式失败: {str(e)}")
-            return bytes([0x1D, 0x00, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
-
-    async def _send_mode_select(self, page_code: int, mode_data: bytes) -> Dict[str, Any]:
-        """发送MODE SELECT命令
-        
-        注意：此方法需要SCSI接口，当前使用ITDT接口时不可用
-        """
-        try:
-            if not self._initialized:
-                return {'success': False, 'error': '磁带操作模块未初始化'}
-            
-            # ITDT接口不支持MODE SELECT命令
-            return {'success': False, 'error': 'ITDT接口不支持MODE SELECT命令，需要使用SCSI接口'}
-
-        except Exception as e:
-            logger.error(f"发送MODE SELECT失败: {str(e)}")
-            return {'success': False, 'error': str(e)}

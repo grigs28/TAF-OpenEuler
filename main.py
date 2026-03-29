@@ -82,23 +82,11 @@ class TapeBackupSystem:
                 db_init = DatabaseInitializer()
                 print("   ├─ 检查数据库是否存在...")
                 await db_init.ensure_database_exists()
-                
+
+
                 print("   ├─ 初始化数据库连接池...")
                 await self.db_manager.initialize()
-                
-                # 如果是 SQLite 模式，启动 SQLite 操作队列管理器（Redis模式不需要）
-                from utils.scheduler.db_utils import is_opengauss, is_redis
-                from utils.scheduler.sqlite_utils import is_sqlite
-                
-                if not is_opengauss() and not is_redis() and is_sqlite():
-                    print("   ├─ 启动 SQLite 操作队列管理器...")
-                    from backup.sqlite_queue_manager import get_sqlite_queue_manager
-                    sqlite_queue_manager = get_sqlite_queue_manager()
-                    await sqlite_queue_manager.start()
-                    logger.info("SQLite 操作队列管理器已启动（写操作优先于同步）")
-                elif is_redis():
-                    logger.info("[Redis模式] Redis本身是内存数据库，不需要SQLite操作队列管理器")
-                
+
                 step_time = time.time() - step_start
                 safe_print(f"   └─ 数据库初始化完成 (耗时: {step_time:.2f}秒)\n")
                 logger.info("数据库连接初始化完成")
@@ -351,25 +339,12 @@ class TapeBackupSystem:
                 except Exception:
                     pass
 
-            # 关闭openGauss连接池（如果使用openGauss，先关闭连接池）
+            # 关闭openGauss连接池
             try:
-                from utils.scheduler.db_utils import is_opengauss, close_opengauss_pool
-                if is_opengauss():
-                    if self.opengauss_monitor:
-                        await self.opengauss_monitor.stop()
-                    await close_opengauss_pool()
-                else:
-                    # 如果是 SQLite 模式，停止 SQLite 操作队列管理器（Redis模式不需要）
-                    from utils.scheduler.db_utils import is_redis
-                    from utils.scheduler.sqlite_utils import is_sqlite
-                    
-                    if not is_redis() and is_sqlite():
-                        from backup.sqlite_queue_manager import get_sqlite_queue_manager
-                        sqlite_queue_manager = get_sqlite_queue_manager()
-                        await sqlite_queue_manager.stop()
-                        logger.info("SQLite 操作队列管理器已停止")
-                    elif is_redis():
-                        logger.debug("[Redis模式] Redis模式无需停止SQLite操作队列管理器")
+                from utils.scheduler.db_utils import close_opengauss_pool
+                if self.opengauss_monitor:
+                    await self.opengauss_monitor.stop()
+                await close_opengauss_pool()
             except Exception as e:
                 logger.warning(f"关闭数据库连接池失败: {str(e)}")
 
@@ -471,9 +446,7 @@ def setup_signal_handlers(system):
     # 注册信号处理器
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
-    if hasattr(signal, 'SIGBREAK'):  # Windows
-        signal.signal(signal.SIGBREAK, signal_handler)
-    
+
     return shutdown_event
 
 
@@ -580,34 +553,8 @@ if __name__ == "__main__":
         safe_print(f"   当前版本: Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}\n")
         sys.exit(1)
 
-    # Windows 平台：设置事件循环策略（psycopg3 需要）
-    # psycopg3 在 Windows 上不能使用 ProactorEventLoop，必须使用 SelectorEventLoop
-    if sys.platform == "win32":
-        try:
-            # 检查是否安装了 psycopg3（尝试导入 psycopg_pool）
-            try:
-                import psycopg_pool
-                # 如果安装了 psycopg3，设置事件循环策略
-                asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-                safe_print("Windows 事件循环策略已设置为 SelectorEventLoop（psycopg3 兼容）")
-            except ImportError:
-                # 如果未安装 psycopg3，检查是否使用 openGauss（可能使用 psycopg3）
-                # 为了兼容性，如果使用 openGauss，也设置 SelectorEventLoop
-                try:
-                    from config.database import db_manager
-                    database_url = str(db_manager.settings.DATABASE_URL).lower()
-                    if "opengauss" in database_url or "postgresql" in database_url:
-                        # 使用 PostgreSQL/openGauss，设置 SelectorEventLoop（兼容 psycopg3）
-                        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-                        safe_print("Windows 事件循环策略已设置为 SelectorEventLoop（PostgreSQL/openGauss 兼容）")
-                except Exception:
-                    # 如果无法检查，使用默认策略
-                    pass
-        except Exception as e:
-            safe_print(f"设置事件循环策略时出错: {e}，将使用默认策略")
-
     safe_print("\nPython 版本: " + sys.version.split()[0])
     safe_print("工作目录: " + os.getcwd())
-    
+
     # 运行主程序（异常处理器在 main() 函数中设置）
     asyncio.run(main())

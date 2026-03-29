@@ -23,6 +23,7 @@ from models.backup import BackupTask, BackupSet
 from backup.utils import format_bytes
 from backup.file_scanner import FileScanner
 from utils.scheduler.db_utils import get_opengauss_connection, is_opengauss
+from utils.network_path import validate_network_path, is_unc_path
 from config.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -148,10 +149,30 @@ class SimpleScanner:
             actual_conn = conn._conn if hasattr(conn, '_conn') else conn
             
             # 主扫描循环（与测试程序完全一致）
+            expanded_paths = []  # 展开后的路径列表
             for idx, source_path_str in enumerate(source_paths):
                 logger.info(
                     f"[简洁扫描] 扫描源路径 {idx + 1}/{len(source_paths)}: {source_path_str}"
                 )
+                
+                # 处理 UNC 网络路径
+                actual_path = source_path_str
+                if is_unc_path(source_path_str):
+                    logger.info(f"[简洁扫描] 检测到 UNC 路径，尝试挂载 SMB 共享...")
+                    validation = await validate_network_path(source_path_str)
+                    if validation.get('valid') and validation.get('expanded_paths'):
+                        actual_path = validation['expanded_paths'][0]
+                        logger.info(f"[简洁扫描] UNC 路径已映射到本地: {source_path_str} -> {actual_path}")
+                        expanded_paths.append(actual_path)
+                    else:
+                        logger.warning(f"[简洁扫描] UNC 路径验证失败: {validation.get('message')}")
+                        continue
+                else:
+                    expanded_paths.append(actual_path)
+            
+            # 使用展开后的路径列表
+            for idx, source_path_str in enumerate(expanded_paths):
+                logger.info(f"[简洁扫描] 扫描本地路径 {idx + 1}/{len(expanded_paths)}: {source_path_str}")
                 
                 source_path = Path(source_path_str)
                 if not source_path.exists():

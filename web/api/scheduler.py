@@ -19,7 +19,7 @@ from utils.scheduler import TaskScheduler
 from utils.log_utils import log_operation, log_system
 from models.system_log import LogLevel, LogCategory
 from utils.scheduler.task_storage import release_task_locks_by_task, release_all_active_locks
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
+from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
 from utils.tape_tools import tape_tools_manager
 
 logger = logging.getLogger(__name__)
@@ -216,7 +216,6 @@ async def create_scheduled_task(task: ScheduledTaskCreate, request: Request = No
         # 验证备份任务模板（如果提供了backup_task_id）
         if task.action_type == "backup" and task.backup_task_id:
             from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_redis
-            from utils.scheduler.sqlite_utils import get_sqlite_connection
             
             # 检查是否为Redis数据库
             if is_redis():
@@ -389,7 +388,6 @@ async def _check_tape_label_exists(volume_label: str) -> bool:
     try:
         # 检查是否为Redis数据库
         from utils.scheduler.db_utils import is_redis
-        from utils.scheduler.sqlite_utils import is_sqlite
         
         if is_redis():
             # Redis模式下返回False（暂未实现Redis查询磁带）
@@ -437,7 +435,6 @@ async def _generate_serial_number(year: int, month: int) -> str:
     try:
         # 检查是否为Redis数据库
         from utils.scheduler.db_utils import is_redis
-        from utils.scheduler.sqlite_utils import is_sqlite
         
         if is_redis():
             # Redis模式下返回默认序列号（暂未实现Redis查询磁带）
@@ -530,7 +527,6 @@ async def _format_tape_via_disk_management(
         database_url = settings.DATABASE_URL
         
         # 检查是否为 SQLite
-        from utils.scheduler.sqlite_utils import is_sqlite
         if is_sqlite():
             logger.warning(f"[SQLite模式] 通过磁盘管理格式化磁带暂未实现: {volume_label}")
             return False

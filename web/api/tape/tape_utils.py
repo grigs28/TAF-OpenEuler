@@ -8,6 +8,7 @@ Tape Management API - Utility Functions
 import re
 from typing import Optional, Tuple
 from datetime import date, datetime
+from utils.scheduler.db_utils import is_sqlite, is_redis, get_sqlite_connection
 
 
 def parse_expiry_date_for_inventory(expiry_date):
@@ -27,7 +28,6 @@ def parse_expiry_date_for_inventory(expiry_date):
 
 async def check_tape_exists_sqlite(db_manager, tape_id: str, label: str) -> Tuple[bool, bool]:
     """检查磁带是否存在（SQLite版本）"""
-    from utils.scheduler.sqlite_utils import get_sqlite_connection
     
     async with get_sqlite_connection() as conn:
         # 检查 tape_id
@@ -45,7 +45,6 @@ async def check_tape_exists_sqlite(db_manager, tape_id: str, label: str) -> Tupl
 
 async def count_serial_numbers_sqlite(db_manager, pattern: str) -> int:
     """统计序列号数量（SQLite版本）"""
-    from utils.scheduler.sqlite_utils import get_sqlite_connection, is_sqlite
     from utils.scheduler.db_utils import is_redis
     
     # 检查数据库类型

@@ -81,7 +81,5 @@ flake8==6.1.0
 mypy==1.7.1
 pre-commit==3.6.0
 
-# 系统特定
-pywin32==306; sys_platform == "win32"
-wmi==1.5.1; sys_platform == "win32"
-pyudev==0.24.1; sys_platform == "linux"
+# 系统特定（Linux）
+pyudev==0.24.1

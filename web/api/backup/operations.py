@@ -8,9 +8,7 @@ Backup Management API - Task Operations
 import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
-from utils.scheduler.db_utils import is_opengauss, is_redis
-from utils.scheduler.sqlite_utils import is_sqlite, get_sqlite_connection
-from utils.scheduler.db_utils import get_opengauss_connection
+from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection, is_sqlite, get_sqlite_connection
 from utils.log_utils import log_operation
 from models.system_log import OperationType
 from .utils import get_system_instance, _normalize_status_value

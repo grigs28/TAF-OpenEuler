@@ -907,7 +907,11 @@ async function loadAllSystemConfig() {
                 const compressionParallelBatchesInput = document.getElementById('compressionParallelBatches');
                 if (compressionParallelBatchesInput) compressionParallelBatchesInput.value = config.compression_parallel_batches;
             }
-            
+            if (config.compression_batches_reduction !== undefined) {
+                const compressionBatchesReductionInput = document.getElementById('compressionBatchesReduction');
+                if (compressionBatchesReductionInput) compressionBatchesReductionInput.value = config.compression_batches_reduction;
+            }
+
             // 内存数据库配置
             if (config.use_memory_db !== undefined) {
                 const useMemoryDbCheckbox = document.getElementById('useMemoryDb');
@@ -1042,7 +1046,15 @@ async function saveEnvConfigSection() {
                 const parsed = parseInt(value);
                 return isNaN(parsed) ? null : parsed;
             })(),
-            
+            compression_batches_reduction: (() => {
+                const input = document.getElementById('compressionBatchesReduction');
+                if (!input) return null;
+                const value = input.value;
+                if (value === '' || value === null || value === undefined) return null;
+                const parsed = parseInt(value);
+                return isNaN(parsed) ? null : parsed;
+            })(),
+
             // 内存数据库配置
             use_memory_db: (() => {
                 const checkbox = document.getElementById('useMemoryDb');

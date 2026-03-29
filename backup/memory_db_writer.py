@@ -1837,7 +1837,6 @@ class MemoryDBWriter:
     
     async def _sync_to_sqlite_via_queue(self, reason: str = "manual"):
         """通过队列同步文件到 SQLite 主库（同步操作，普通优先级）"""
-        from backup.sqlite_queue_manager import execute_sqlite_sync
         
         if self._is_syncing:
             logger.warning(

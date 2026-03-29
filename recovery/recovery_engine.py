@@ -24,8 +24,7 @@ from models.backup import BackupSetStatus, BackupTaskType, BackupFileType
 from models.system_log import OperationLog, OperationType
 from tape.tape_manager import TapeManager
 from utils.dingtalk_notifier import DingTalkNotifier
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
-from utils.scheduler.sqlite_utils import get_sqlite_connection
+from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
 from datetime import datetime, timedelta
 import json
 
@@ -75,7 +74,6 @@ class RecoveryEngine:
         try:
             # 在函数开始处导入所有需要的函数，避免变量未定义错误
             from utils.scheduler.db_utils import is_redis
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             backup_sets = []
             filters = filters or {}
@@ -328,7 +326,6 @@ class RecoveryEngine:
         """获取备份集文件列表（从数据库查询真实数据）"""
         try:
             from utils.scheduler.db_utils import is_redis
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             files = []
 
@@ -580,7 +577,6 @@ class RecoveryEngine:
         """
         try:
             from utils.scheduler.db_utils import is_redis, is_opengauss
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             directories = {}
             files = []
@@ -1235,7 +1231,6 @@ class RecoveryEngine:
         """
         try:
             from utils.scheduler.db_utils import is_redis, is_opengauss
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             # 规范化路径（移除前导和尾随斜杠）
             directory_path = directory_path.strip('/').strip('\\')
@@ -2241,7 +2236,6 @@ class RecoveryEngine:
         try:
             # 在函数开始处导入所有需要的函数，避免变量未定义错误
             from utils.scheduler.db_utils import is_redis
-            from utils.scheduler.sqlite_utils import is_sqlite
             
             groups = []
 

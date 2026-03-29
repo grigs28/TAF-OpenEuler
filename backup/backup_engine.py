@@ -103,7 +103,7 @@ class BackupEngine:
         """初始化备份引擎"""
         try:
             import shutil
-            
+
             # 先清除临时目录（启动时清理残留文件）
             compress_dir = Path(self.settings.BACKUP_COMPRESS_DIR)
             temp_dirs = [
@@ -113,7 +113,7 @@ class BackupEngine:
                 compress_dir / "temp",  # temp临时目录
                 compress_dir / "final",  # final正式目录
             ]
-            
+
             # 清除所有临时目录内容（但不删除目录本身）
             for temp_dir_path in temp_dirs:
                 temp_dir = Path(temp_dir_path)
@@ -128,15 +128,16 @@ class BackupEngine:
                         logger.info(f"已清除临时目录: {temp_dir}")
                     except Exception as e:
                         logger.warning(f"清除临时目录失败 {temp_dir}: {str(e)}")
-            
+
             # 重新创建临时目录（确保目录存在）
             for temp_dir in temp_dirs:
                 Path(temp_dir).mkdir(parents=True, exist_ok=True)
-            
+
             # 初始化Final目录监控器（独立线程，10秒轮询扫描）
             self.final_dir_monitor = FinalDirMonitor(
                 tape_handler=self.tape_handler,
-                settings=self.settings
+                settings=self.settings,
+                dingtalk_notifier=self.dingtalk_notifier  # 传递钉钉通知器
             )
             self.final_dir_monitor.start()
             logger.info("Final目录监控器已启动（独立线程，10秒轮询扫描）")
@@ -159,13 +160,30 @@ class BackupEngine:
         except Exception as e:
             logger.error(f"关闭备份引擎时发生错误: {str(e)}")
 
+    async def _send_tape_error_notification(self, error_msg: str):
+        """发送磁带错误通知"""
+        if self.dingtalk_notifier:
+            try:
+                await self.dingtalk_notifier.send_backup_notification(
+                    "磁带检查",
+                    "failed",
+                    {'error': error_msg}
+                )
+                logger.info("[启动] 钉钉通知已发送")
+            except Exception as e:
+                logger.warning(f"[启动] 发送钉钉通知失败: {e}")
+
     def set_dependencies(self, tape_manager: TapeManager, dingtalk_notifier: DingTalkNotifier):
         """设置依赖组件"""
         self.tape_manager = tape_manager
         self.dingtalk_notifier = dingtalk_notifier
         # 更新子模块的依赖
         self.tape_handler.tape_manager = tape_manager
+        self.tape_handler.dingtalk_notifier = dingtalk_notifier
         self.backup_notifier.dingtalk_notifier = dingtalk_notifier
+        # 更新FinalDirMonitor的钉钉通知器
+        if self.final_dir_monitor:
+            self.final_dir_monitor.dingtalk_notifier = dingtalk_notifier
 
     def add_progress_callback(self, callback: Callable):
         """添加进度回调 - 委托给 BackupNotifier"""
@@ -253,6 +271,127 @@ class BackupEngine:
                 backup_task.max_file_size = backup_policy.get('max_file_size', self.settings.MAX_FILE_SIZE)
             if not hasattr(backup_task, 'retention_days') or backup_task.retention_days is None:
                 backup_task.retention_days = backup_policy.get('retention_days', self.settings.DEFAULT_RETENTION_MONTHS * 30)
+
+            # ========== 磁带检查流程（任务开始时执行）==========
+            logger.info("========== 磁带检查 ==========")
+
+            # 获取挂载点
+            mount_point = self.tape_handler._get_ltfs_mount_point()
+
+            # 1. 检查磁带卷标
+            logger.info("[1] 检查磁带卷标")
+            from tape.tape_operations import TapeOperations
+            from backup.utils import extract_label_year_month
+
+            tape_ops = TapeOperations()
+            await tape_ops.initialize()
+            label_info = await tape_ops._read_tape_label()
+
+            # 无法读取卷标 → 进入格式化流程
+            if not label_info or not label_info.get('tape_id'):
+                logger.warning("⚠️ 无法读取磁带卷标，将进入格式化流程")
+                label = "Unknown"
+            else:
+                label = label_info.get('label')
+                logger.info(f"✓ 磁带卷标: {label}")
+
+                # 检查月份
+                parsed = extract_label_year_month(label)
+                if parsed:
+                    from datetime import datetime
+                    year, month = parsed['year'], parsed['month']
+                    logger.info(f"  年月: {year}年{month:02d}月")
+
+                    current_month = datetime.now().month
+                    month_diff = abs(month - current_month)
+                    if month_diff > 6:
+                        month_diff = 12 - month_diff
+
+                    if month_diff > 1:
+                        error_msg = f"卷标不符（磁带{month:02d}月，当前{current_month:02d}月）"
+                        logger.error(f"✗ {error_msg}")
+                        await self._send_tape_error_notification(error_msg)
+                        return False
+                    logger.info(f"✓ 卷标符合要求")
+
+            # 2. 检查LTFS格式和空盘（仅当卷标可读时）
+            is_ltfs = False
+            is_empty = False
+
+            if label != "Unknown":
+                logger.info("[2] 检查LTFS格式和空盘")
+
+                # 先卸载
+                await self.tape_handler.unmount_ltfs()
+                await asyncio.sleep(1)
+
+                self.tape_manager = TapeManager()
+                await self.tape_manager.initialize()
+                self.tape_handler.tape_manager = self.tape_manager
+
+                is_ltfs, msg = await self.tape_handler.check_ltfs_format()
+
+                if is_ltfs:
+                    logger.info("✓ LTFS格式")
+                    is_empty, count = await self.tape_handler.is_tape_empty()
+                    logger.info(f"  用户文件: {count}, 空盘: {'是' if is_empty else '否'}")
+                else:
+                    logger.info(f"✗ 非LTFS格式: {msg}")
+
+            # 3. 格式化检查
+            logger.info("[3] 格式化检查")
+            need_format = not (label != "Unknown" and is_ltfs and is_empty)
+            if need_format:
+                if label == "Unknown":
+                    reason = "无法读取卷标"
+                elif not is_ltfs:
+                    reason = "非LTFS"
+                else:
+                    reason = "磁带不为空"
+                logger.warning(f"⚠️ 需要格式化: {reason}")
+                logger.info("开始格式化...")
+
+                # 格式化前准备
+                from backup.tape_label_generator import generate_tape_label_and_serial
+
+                new_label = await generate_tape_label_and_serial()
+                logger.info(f"新卷标: {new_label.label}")
+                logger.info(f"新序列号: {new_label.serial_number}")
+
+                # 格式化
+                success, format_msg = await self.tape_handler.format_as_ltfs(
+                    volume_name=new_label.label,
+                    serial=new_label.serial_number
+                )
+                if not success:
+                    error_msg = f"格式化失败: {format_msg}"
+                    logger.error(f"✗ {error_msg}")
+                    await self._send_tape_error_notification(error_msg)
+                    return False
+                logger.info(f"✓ 格式化成功")
+            else:
+                logger.info("✓ 无需格式化")
+
+            # 4. 等待并挂载（使用重试机制）
+            logger.info("[4] 等待20秒...")
+            for i in range(20):
+                await asyncio.sleep(1)
+
+            logger.info("[5] 检查挂载状态")
+            if mount_point.is_mount():
+                logger.info("✓ 已挂载")
+            else:
+                # 使用重试机制挂载
+                logger.info("[6] 开始挂载（重试3次，间隔30秒）...")
+                mount_success, mount_msg = await self.tape_handler.mount_with_retry(backup_task=backup_task)
+                if not mount_success:
+                    error_msg = f"挂载失败: {mount_msg}"
+                    logger.error(f"✗ {error_msg}")
+                    await self._send_tape_error_notification(error_msg)
+                    return False
+                logger.info(f"✓ 挂载成功")
+
+            logger.info("========== 磁带检查完成 ==========")
 
             # 1. 检查任务是否已执行过（在存活期内）- 仅自动执行时检查，手动运行跳过
             if not manual_run and scheduled_task:
@@ -348,93 +487,104 @@ class BackupEngine:
                                         error_msg = f"当前磁带 {tape_id} 卷标解析到非法月份 {label_month}，跳过当月验证，继续执行"
                                         logger.error(error_msg)
                                         # 不抛出异常，继续执行
-                                    # 情况1：月份不匹配 - 发送钉钉消息，阻塞等待，每6分钟检测一次
-                                    elif label_month != current_month:
-                                        error_msg = f"当前磁带 {tape_id} 非当月（卷标显示月份 {label_month:02d} 与当前月份 {current_month:02d} 不符），请更换磁带后重试"
-                                        logger.error(error_msg)
-                                        
-                                        # 发送钉钉通知
-                                        if self.dingtalk_notifier:
-                                            try:
-                                                await self.dingtalk_notifier.send_tape_notification(
-                                                    tape_id=tape_id,
-                                                    action="error",
-                                                    details={
-                                                        "error": error_msg,
-                                                        "task_name": backup_task.task_name,
-                                                        "task_id": backup_task.id,
-                                                        "current_month": f"{current_year}年{current_month:02d}月",
-                                                        "tape_month": f"{label_year}年{label_month:02d}月",
-                                                        "message": "当前磁带非当月，请更换当月磁带后重试。系统将每6分钟自动检测一次，检测到当月磁带后自动继续执行。"
-                                                    }
-                                                )
-                                                logger.info("已发送钉钉通知：磁带非当月")
-                                            except Exception as notify_error:
-                                                logger.warning(f"发送钉钉通知失败: {str(notify_error)}")
-                                        
-                                        # 阻塞等待，每6分钟检测一次卷标
-                                        check_interval = 360  # 6分钟 = 360秒
-                                        check_count = 0
-                                        logger.info(f"开始每{check_interval}秒（6分钟）检测一次磁带卷标，直到检测到当月磁带...")
-                                        
-                                        while True:
-                                            # 等待6分钟
-                                            await asyncio.sleep(check_interval)
-                                            check_count += 1
-                                            
-                                            # 检查任务是否被取消
-                                            if backup_task.status == BackupTaskStatus.CANCELLED:
-                                                logger.warning("备份任务已被取消，停止等待磁带")
-                                                raise ValueError("备份任务已被取消")
-                                            
-                                            logger.info(f"第 {check_count} 次检测磁带卷标（每6分钟检测一次）...")
-                                            
-                                            try:
-                                                # 重新读取磁带卷标
-                                                new_metadata = await tape_ops._read_tape_label()
-                                                
-                                                if new_metadata and new_metadata.get('tape_id'):
-                                                    new_label_text = new_metadata.get('label') or new_metadata.get('tape_id')
-                                                    new_tape_id = new_metadata.get('tape_id')
-                                                    logger.info(f"检测到磁带卷标: {new_label_text}")
-                                                    
-                                                    # 重新获取当前时间（可能已经跨月）
-                                                    current_time = now()
-                                                    current_year = current_time.year
-                                                    current_month = current_time.month
-                                                    
-                                                    new_label_info = extract_label_year_month(new_label_text)
-                                                    
-                                                    if new_label_info:
-                                                        new_label_year = new_label_info['year']
-                                                        new_label_month = new_label_info['month']
-                                                        
-                                                        # 检查是否匹配当前月份
-                                                        if new_label_month == current_month:
-                                                            logger.info(f"✅ 检测到当月磁带 {new_tape_id}（{new_label_year}年{new_label_month:02d}月），继续执行备份任务")
-                                                            # 更新 tape_id，继续执行
-                                                            tape_id = new_tape_id
-                                                            break
-                                                        else:
-                                                            logger.warning(
-                                                                f"当前磁带 {new_tape_id} 仍非当月（卷标月份 {new_label_month:02d}，当前月份 {current_month:02d}），"
-                                                                f"继续等待...（已等待 {check_count * 6} 分钟）"
-                                                            )
-                                                    else:
-                                                        logger.warning(f"无法解析磁带 {new_tape_id} 的年月信息，继续等待...")
-                                                else:
-                                                    logger.warning("无法读取磁带卷标，继续等待...")
-                                            except Exception as check_error:
-                                                logger.warning(f"检测磁带卷标时出错: {str(check_error)}，继续等待...")
-                                        
-                                        logger.info(f"磁带卷标验证通过，继续执行备份任务")
-                                    # 年份不匹配但月份匹配 - 允许通过
-                                    elif label_year != current_year:
-                                        logger.info(
-                                            f"卷标年份 {label_year} 与当前年份 {current_year} 不一致，但月份匹配，允许通过"
-                                        )
+                                    # 情况1：月份差异超过1个月 - 发送钉钉消息，阻塞等待，每6分钟检测一次
                                     else:
-                                        logger.info(f"磁带 {tape_id} 卷标匹配当前月份，验证通过")
+                                        # 计算月份差异（允许前后1个月）
+                                        month_diff = abs(label_month - current_month)
+                                        if month_diff > 6:
+                                            month_diff = 12 - month_diff
+
+                                        if month_diff > 1:
+                                            error_msg = f"当前磁带 {tape_id} 月份不符（卷标显示{label_month:02d}月，当前{current_month:02d}月，差异{month_diff}个月），请更换磁带后重试"
+                                            logger.error(error_msg)
+
+                                            # 发送钉钉通知
+                                            if self.dingtalk_notifier:
+                                                try:
+                                                    await self.dingtalk_notifier.send_tape_notification(
+                                                        tape_id=tape_id,
+                                                        action="error",
+                                                        details={
+                                                            "error": error_msg,
+                                                            "task_name": backup_task.task_name,
+                                                            "task_id": backup_task.id,
+                                                            "current_month": f"{current_year}年{current_month:02d}月",
+                                                            "tape_month": f"{label_year}年{label_month:02d}月",
+                                                            "message": f"磁带月份差异{month_diff}个月（允许前后1个月），请更换合适的磁带后重试。系统将每6分钟自动检测一次。"
+                                                        }
+                                                    )
+                                                    logger.info("已发送钉钉通知：磁带月份不符")
+                                                except Exception as notify_error:
+                                                    logger.warning(f"发送钉钉通知失败: {str(notify_error)}")
+
+                                            # 阻塞等待，每6分钟检测一次卷标
+                                            check_interval = 360  # 6分钟 = 360秒
+                                            check_count = 0
+                                            logger.info(f"开始每{check_interval}秒（6分钟）检测一次磁带卷标，直到检测到可用磁带...")
+
+                                            while True:
+                                                # 等待6分钟
+                                                await asyncio.sleep(check_interval)
+                                                check_count += 1
+
+                                                # 检查任务是否被取消
+                                                if backup_task.status == BackupTaskStatus.CANCELLED:
+                                                    logger.warning("备份任务已被取消，停止等待磁带")
+                                                    raise ValueError("备份任务已被取消")
+
+                                                logger.info(f"第 {check_count} 次检测磁带卷标（每6分钟检测一次）...")
+
+                                                try:
+                                                    # 重新读取磁带卷标
+                                                    new_metadata = await tape_ops._read_tape_label()
+
+                                                    if new_metadata and new_metadata.get('tape_id'):
+                                                        new_label_text = new_metadata.get('label') or new_metadata.get('tape_id')
+                                                        new_tape_id = new_metadata.get('tape_id')
+                                                        logger.info(f"检测到磁带卷标: {new_label_text}")
+
+                                                        # 重新获取当前时间（可能已经跨月）
+                                                        current_time = now()
+                                                        current_year = current_time.year
+                                                        current_month = current_time.month
+
+                                                        new_label_info = extract_label_year_month(new_label_text)
+
+                                                        if new_label_info:
+                                                            new_label_year = new_label_info['year']
+                                                            new_label_month = new_label_info['month']
+
+                                                            # 计算月份差异（允许前后1个月）
+                                                            new_month_diff = abs(new_label_month - current_month)
+                                                            if new_month_diff > 6:
+                                                                new_month_diff = 12 - new_month_diff
+
+                                                            # 检查是否在允许范围内（差异<=1）
+                                                            if new_month_diff <= 1:
+                                                                logger.info(f"✅ 检测到可用磁带 {new_tape_id}（{new_label_year}年{new_label_month:02d}月，差异{new_month_diff}个月），继续执行备份任务")
+                                                                # 更新 tape_id，继续执行
+                                                                tape_id = new_tape_id
+                                                                break
+                                                            else:
+                                                                logger.warning(
+                                                                    f"当前磁带 {new_tape_id} 月份差异过大（卷标{new_label_month:02d}月，当前{current_month:02d}月，差异{new_month_diff}个月），"
+                                                                    f"继续等待...（已等待 {check_count * 6} 分钟）"
+                                                                )
+                                                        else:
+                                                            logger.warning(f"无法解析磁带 {new_tape_id} 的年月信息，继续等待...")
+                                                    else:
+                                                        logger.warning("无法读取磁带卷标，继续等待...")
+                                                except Exception as check_error:
+                                                    logger.warning(f"检测磁带卷标时出错: {str(check_error)}，继续等待...")
+
+                                            logger.info(f"磁带卷标验证通过，继续执行备份任务")
+                                        # 年份不匹配但月份在允许范围内 - 允许通过
+                                        elif label_year != current_year:
+                                            logger.info(
+                                                f"卷标年份 {label_year} 与当前年份 {current_year} 不一致，但月份差异{month_diff}个月在允许范围内，允许通过"
+                                            )
+                                        else:
+                                            logger.info(f"磁带 {tape_id} 卷标月份差异{month_diff}个月，验证通过")
                                 else:
                                     # 情况3：无法解析年月信息 - 只记录错误，不影响后续执行
                                     error_msg = f"当前磁带 {tape_id} 卷标无法解析出年月信息，跳过当月验证，继续执行"
@@ -452,252 +602,52 @@ class BackupEngine:
             else:
                 logger.info("========== 手动运行模式，跳过磁带卷标当月验证 ==========")
 
-            # 4. 完整备份前使用 LtfsCmdFormat.exe 格式化（保留卷标信息）
-            # 注意：格式化进度会显示在备份管理卡片中（0-100%），格式化完成后再继续后续备份流程
-            # 注意：手动运行时跳过格式化；可以通过配置 ENABLE_TAPE_FORMAT_BEFORE_FULL 关闭自动格式化
-            from config.settings import get_settings
-            settings = get_settings()
-            enable_tape_format = getattr(settings, "ENABLE_TAPE_FORMAT_BEFORE_FULL", True)
+            # ========== Linux系统：检查磁带是否可写入 ==========
+            import platform
+            if platform.system() == 'Linux' and self.tape_manager:
+                logger.info("========== Linux磁带状态检查 ==========")
 
-            logger.info(f"========== 检查是否需要格式化 ==========")
-            logger.info(f"manual_run={manual_run}, enable_tape_format={enable_tape_format}, 任务类型: {backup_task.task_type} (类型: {type(backup_task.task_type)}, FULL={BackupTaskType.FULL})")
-            
-            # 确保任务类型比较正确（支持字符串和枚举值）
-            task_type_value = backup_task.task_type
-            if hasattr(task_type_value, 'value'):
-                task_type_value = task_type_value.value
-            elif isinstance(task_type_value, BackupTaskType):
-                task_type_value = task_type_value.value
-            else:
-                task_type_value = str(task_type_value)
-            
-            full_type_value = BackupTaskType.FULL.value if hasattr(BackupTaskType.FULL, 'value') else 'full'
-            
-            logger.info(f"任务类型值: {task_type_value} (期望: {full_type_value})")
-            
-            # 手动运行时跳过格式化；当 ENABLE_TAPE_FORMAT_BEFORE_FULL=False 时也跳过格式化
-            if (not manual_run
-                and enable_tape_format
-                and (task_type_value == full_type_value or backup_task.task_type == BackupTaskType.FULL)):
-                logger.info("========== 完整备份前格式化处理（自动运行模式）==========")
-                logger.info("检测到完整备份任务，执行格式化前检查...")
-                
-                # 初始化格式化进度为0%
-                backup_task.progress_percent = 0.0
-                await self.backup_db.update_scan_progress(backup_task, 0, 0)
-                
-                if self.tape_manager:
-                    try:
-                        tape_ops = self.tape_manager.tape_operations
-                        if tape_ops and hasattr(tape_ops, 'erase_preserve_label'):
-                            logger.info("开始执行格式化（保留卷标信息）...")
+                # ========== 获取磁带操作锁（防止并发操作） ==========
+                from utils.linux_tape import acquire_tape_operation_lock, release_tape_operation_lock, is_tape_operation_locked, get_tape_lock_owner
+                lock_owner = f"backup_task_{backup_task.id}"
+                logger.info(f"尝试获取磁带操作锁... (owner={lock_owner})")
 
-                            # 定义进度回调函数，用于更新进度到数据库
-                            async def update_format_progress(task, current, total):
-                                """更新格式化进度到数据库"""
-                                try:
-                                    await self.backup_db.update_scan_progress(task, current, total)
-                                except Exception as e:
-                                    logger.debug(f"更新格式化进度失败（忽略继续）: {str(e)}")
+                if is_tape_operation_locked():
+                    current_owner = get_tape_lock_owner()
+                    error_msg = f"磁带操作锁被占用，当前持有者: {current_owner}，请等待或手动解锁"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
 
-                            # 执行格式化（传递backup_task和进度回调，进度会从0%到100%）
-                            format_success = await tape_ops.erase_preserve_label(
-                                backup_task=backup_task,
-                                progress_callback=update_format_progress
-                            )
-                            
-                            if format_success:
-                                # 格式化完成，确保进度为100%
-                                backup_task.progress_percent = 100.0
-                                await self.backup_db.update_scan_progress(backup_task, 1, 1)
-                                
-                                logger.info("格式化成功（卷标信息已保留），进度: 100%")
-                                # 使用后台任务记录日志，避免阻塞
-                                asyncio.create_task(log_system(
-                                    level=LogLevel.INFO,
-                                    category=LogCategory.BACKUP,
-                                message="完整备份前格式化成功（卷标信息已保留）",
-                                    module="backup.backup_engine",
-                                    function="execute_backup_task",
-                                    task_id=task_id
-                                ))
-                            else:
-                                # 格式化失败，立即停止任务并标记为失败
-                                error_msg = "完整备份前格式化失败，无法继续执行备份任务"
-                                logger.error(f"========== 格式化失败，任务将停止 ==========")
-                                logger.error(error_msg)
-                                
-                                # 设置错误信息
-                                backup_task.error_message = error_msg
-                                backup_task.completed_at = now()
-                                duration_seconds = (now() - task_start_time).total_seconds()
-                                duration_ms = int(duration_seconds * 1000)
-                                
-                                # 更新任务状态为失败
-                                await self.backup_db.update_task_status(backup_task, BackupTaskStatus.FAILED)
-                                
-                                # 使用后台任务记录日志，避免阻塞
-                                asyncio.create_task(log_system(
-                                    level=LogLevel.ERROR,
-                                    category=LogCategory.BACKUP,
-                                    message=error_msg,
-                                    module="backup.backup_engine",
-                                    function="execute_backup_task",
-                                    task_id=task_id,
-                                    duration_ms=duration_ms
-                                ))
-                                asyncio.create_task(log_operation(
-                                    operation_type=OperationType.BACKUP_COMPLETE,
-                                    resource_type="backup",
-                                    resource_id=str(task_id),
-                                    resource_name=task_name,
-                                    operation_name="备份任务失败",
-                                    operation_description=f"备份任务执行失败: {task_name}",
-                                    category="backup",
-                                    success=False,
-                                    error_message=error_msg,
-                                    duration_ms=duration_ms
-                                ))
-                                
-                                # 发送失败通知
-                                if self.dingtalk_notifier:
-                                    try:
-                                        notification_events = await self._get_notification_events()
-                                        if notification_events.get("notify_backup_failed", True):
-                                            logger.info("发送备份失败钉钉通知（格式化失败）...")
-                                            await self.dingtalk_notifier.send_backup_notification(
-                                                backup_task.task_name,
-                                                "failed",
-                                                {'error': error_msg}
-                                            )
-                                            logger.info("备份失败钉钉通知发送成功")
-                                    except Exception as notify_error:
-                                        logger.warning(f"发送备份失败钉钉通知失败: {str(notify_error)}")
-                                
-                                # 保存任务结果
-                                from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
-                                if is_opengauss():
-                                    # 使用连接池
-                                    async with get_opengauss_connection() as conn:
-                                        await conn.execute(
-                                            """
-                                            UPDATE backup_tasks
-                                            SET status = $1::backuptaskstatus,
-                                                completed_at = $2,
-                                                error_message = $3,
-                                                updated_at = $4
-                                            WHERE id = $5
-                                            """,
-                                            BackupTaskStatus.FAILED.value,
-                                            backup_task.completed_at,
-                                            error_msg,
-                                            datetime.now(),
-                                            backup_task.id
-                                        )
-                                
-                                logger.error(f"========== 任务已停止并标记为失败 ==========")
-                                logger.error(f"任务名称: {task_name}")
-                                logger.error(f"任务ID: {task_id}")
-                                logger.error(f"错误原因: {error_msg}")
-                                return False
-                        else:
-                            logger.warning("磁带操作对象不支持保留卷标信息的格式化功能")
-                    except Exception as format_error:
-                        # 格式化过程中发生异常，立即停止任务并标记为失败
-                        error_msg = f"完整备份前格式化过程中发生错误: {str(format_error)}"
-                        logger.error(f"========== 格式化异常，任务将停止 ==========")
-                        logger.error(error_msg)
-                        logger.error(f"异常堆栈:\n{traceback.format_exc()}")
-                        
-                        # 设置错误信息
-                        backup_task.error_message = error_msg
-                        backup_task.completed_at = now()
-                        duration_seconds = (now() - task_start_time).total_seconds()
-                        duration_ms = int(duration_seconds * 1000)
-                        
-                        # 更新任务状态为失败
-                        await self.backup_db.update_task_stage_with_description(
-                            backup_task,
-                            "failed",
-                            f"[任务失败] {error_msg[:100]}{'...' if len(error_msg) > 100 else ''}"
-                        )
-                        await self.backup_db.update_task_status(backup_task, BackupTaskStatus.FAILED)
+                if not acquire_tape_operation_lock(owner=lock_owner, timeout=10.0):
+                    error_msg = "获取磁带操作锁超时，可能有其他任务正在操作磁带"
+                    logger.error(error_msg)
+                    raise ValueError(error_msg)
 
-                        # 使用后台任务记录日志，避免阻塞
-                        asyncio.create_task(log_system(
-                            level=LogLevel.ERROR,
-                            category=LogCategory.BACKUP,
-                            message=error_msg,
-                            module="backup.backup_engine",
-                            function="execute_backup_task",
-                            task_id=task_id,
-                            exception_type=type(format_error).__name__,
-                            stack_trace=traceback.format_exc(),
-                            duration_ms=duration_ms
-                        ))
-                        asyncio.create_task(log_operation(
-                            operation_type=OperationType.BACKUP_COMPLETE,
-                            resource_type="backup",
-                            resource_id=str(task_id),
-                            resource_name=task_name,
-                            operation_name="备份任务失败",
-                            operation_description=f"备份任务执行失败: {task_name}",
-                            category="backup",
-                            success=False,
-                            error_message=error_msg,
-                            duration_ms=duration_ms
-                        ))
-                        
-                        # 发送失败通知
-                        if self.dingtalk_notifier:
-                            try:
-                                notification_events = await self._get_notification_events()
-                                if notification_events.get("notify_backup_failed", True):
-                                    logger.info("发送备份失败钉钉通知（格式化异常）...")
-                                    await self.dingtalk_notifier.send_backup_notification(
-                                        backup_task.task_name,
-                                        "failed",
-                                        {'error': error_msg}
-                                    )
-                                    logger.info("备份失败钉钉通知发送成功")
-                            except Exception as notify_error:
-                                logger.warning(f"发送备份失败钉钉通知失败: {str(notify_error)}")
-                        
-                        # 保存任务结果
-                        from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
-                        if is_opengauss():
-                            # 使用连接池
-                            async with get_opengauss_connection() as conn:
-                                await conn.execute(
-                                    """
-                                    UPDATE backup_tasks
-                                    SET status = $1::backuptaskstatus,
-                                        completed_at = $2,
-                                        error_message = $3,
-                                        updated_at = $4
-                                    WHERE id = $5
-                                    """,
-                                    BackupTaskStatus.FAILED.value,
-                                    backup_task.completed_at,
-                                    error_msg,
-                                    datetime.now(),
-                                    backup_task.id
-                                )
-                        
-                        logger.error(f"========== 任务已停止并标记为失败 ==========")
-                        logger.error(f"任务名称: {task_name}")
-                        logger.error(f"任务ID: {task_id}")
-                        logger.error(f"错误原因: {error_msg}")
-                        return False
-                
-                # 格式化完成后，重置进度为0%，准备开始备份流程
-                backup_task.progress_percent = 0.0
-                await self.backup_db.update_scan_progress(backup_task, 0, 0)
-            else:
-                if manual_run:
-                    logger.info("手动运行模式，跳过格式化操作")
-                elif task_type_value != full_type_value and backup_task.task_type != BackupTaskType.FULL:
-                    logger.info(f"任务类型为 {backup_task.task_type}，不是完整备份（FULL），跳过格式化步骤")
+                tape_lock_acquired = True
+                logger.info(f"磁带操作锁获取成功 (owner={lock_owner})")
+
+                try:
+                    # 注意：磁带准备和挂载逻辑已移到 _perform_backup 中
+                    # 这里只获取磁带锁，确保在 _perform_backup 执行时不会发生并发冲突
+                    logger.info("磁带操作锁已获取，将在 _perform_backup 中进行磁带准备和挂载")
+
+                except ValueError:
+                    # 释放磁带锁
+                    if tape_lock_acquired:
+                        release_tape_operation_lock()
+                        tape_lock_acquired = False
+                    raise
+                except Exception as tape_check_error:
+                    logger.error(f"磁带操作锁获取异常: {str(tape_check_error)}", exc_info=True)
+                    # 释放磁带锁
+                    if tape_lock_acquired:
+                        release_tape_operation_lock()
+                        tape_lock_acquired = False
+                    raise ValueError(f"磁带操作锁获取失败: {str(tape_check_error)}")
+                finally:
+                    # 注意：这里不释放锁，锁将在 _perform_backup 中释放
+                    # 这样可以确保在 _perform_backup 执行期间不会有其他任务操作磁带
+                    logger.info(f"磁带锁将传递给 _perform_backup (owner={lock_owner})")
 
             # 更新任务状态（同时更新 source_paths 和 tape_id，以便任务卡片正确显示）
             # 关键：使用原子操作更新状态，确保只有一个任务能成功从 PENDING 更新为 RUNNING
@@ -707,7 +657,6 @@ class BackupEngine:
             # 使用原子操作：只有当任务状态为 PENDING 时才能更新为 RUNNING
             # 如果任务已经被其他进程更新，这个操作会失败（影响行数为0）
             from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
-            from utils.scheduler.sqlite_utils import is_sqlite
             from config.database import db_manager
             
             if is_opengauss():
@@ -982,7 +931,6 @@ class BackupEngine:
             # 这里只处理失败情况，成功情况由压缩任务处理
             if not success:
                 from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-                from utils.scheduler.sqlite_utils import is_sqlite
                 
                 if is_opengauss():
                     # 使用连接池
@@ -1007,7 +955,6 @@ class BackupEngine:
                     pass
                 elif is_sqlite():
                     # SQLite模式：使用 SQLAlchemy
-                    from utils.scheduler.sqlite_utils import is_sqlite
                     from config.database import get_db
                     if is_sqlite() and db_manager.AsyncSessionLocal and callable(db_manager.AsyncSessionLocal):
                         async for db in get_db():
@@ -1156,11 +1103,15 @@ class BackupEngine:
             # 清零压缩进度信息（新任务开始时）
             backup_task.current_compression_progress = None
             
-            # 1. 检查磁带盘符是否可用（简单检查）
-            logger.info("检查磁带盘符...")
-            tape_drive = self.settings.TAPE_DRIVE_LETTER.upper() + ":\\"
+            # 1. 检查磁带设备是否可用
+            logger.info("检查磁带设备...")
+            tape_drive = self.settings.TAPE_DRIVE_LETTER
+            # Linux 设备路径直接使用，不添加 :\
+            if not tape_drive.startswith('/dev/'):
+                # 如果是 Windows 盘符格式，转换为 Linux 设备路径
+                tape_drive = '/dev/nst0'
             if not os.path.exists(tape_drive):
-                raise RuntimeError(f"磁带盘符不存在: {tape_drive}，请检查配置")
+                raise RuntimeError(f"磁带设备不存在: {tape_drive}，请检查配置")
             
             logger.info(f"磁带盘符可用: {tape_drive}")
             
@@ -1235,10 +1186,39 @@ class BackupEngine:
             if not backup_set:
                 backup_set = await self.backup_db.create_backup_set(backup_task, tape_obj)
 
-            # 4. 流式处理：扫描和压缩循环执行
+            # 4. 挂载 LTFS 磁带（在扫描文件之前）
+            logger.info("========== 挂载 LTFS 磁带 ==========")
+            try:
+                from backup.tape_mounter import TapeMounter
+                mounter = TapeMounter()
+                await mounter.initialize(
+                    tape_manager=self.tape_manager,
+                    dingtalk_notifier=self.dingtalk_notifier
+                )
+
+                # 挂载磁带（包含格式化逻辑）
+                mount_success, mount_msg = await mounter.mount_and_format_tape(backup_task)
+
+                # 只检查挂载是否成功，不成功则停止任务
+                if not mount_success:
+                    error_msg = f"LTFS 磁带挂载失败: {mount_msg}"
+                    logger.error(error_msg)
+                    # 已在 mount_and_format_tape 中发送钉钉通知
+                    raise RuntimeError(error_msg)
+
+                logger.info(f"✅ LTFS 磁带挂载成功: {mount_msg}")
+            except RuntimeError as mount_error:
+                # RuntimeError 由挂载失败抛出，直接向上传播
+                raise
+            except Exception as mount_error:
+                error_msg = f"LTFS 磁带挂载异常: {str(mount_error)}"
+                logger.error(error_msg, exc_info=True)
+                raise RuntimeError(error_msg)
+
+            # 5. 流式处理：扫描和压缩循环执行
             logger.info("开始流式处理：扫描和压缩循环执行...")
             logger.info(f"压缩配置：最大文件大小={format_bytes(self.settings.MAX_FILE_SIZE)}")
-            
+
             scan_status = getattr(backup_task, 'scan_status', 'pending') or 'pending'
             force_rescan = getattr(backup_task, 'force_rescan', False)
             should_run_scanner = force_rescan or scan_status != 'completed'
@@ -1322,7 +1302,7 @@ class BackupEngine:
             if is_opengauss():
                 from backup.file_group_prefetcher import FileGroupPrefetcher
                 # 获取并行批次数量
-                parallel_batches = getattr(self.settings, 'COMPRESSION_PARALLEL_BATCHES', 2)
+                parallel_batches = getattr(self.settings, 'COMPRESSION_PARALLEL_BATCHES', 3)
                 logger.info(
                     f"[备份引擎] openGauss模式：创建文件组预取器，实现压缩和搜索并行执行"
                     f"（并行批次数: {parallel_batches}，队列大小: {parallel_batches + 1}）"
@@ -1610,6 +1590,18 @@ class BackupEngine:
                     logger.error(f"清理后台扫描任务失败: {str(cleanup_error)}")
                 finally:
                     logger.info("后台扫描任务清理完成")
+
+            # 释放磁带操作锁
+            try:
+                from utils.linux_tape import release_tape_operation_lock, is_tape_operation_locked
+                if is_tape_operation_locked():
+                    lock_owner = f"backup_task_{backup_task.id}" if backup_task else "unknown"
+                    logger.info(f"[备份完成] 释放磁带操作锁 (owner={lock_owner})")
+                    release_tape_operation_lock()
+                else:
+                    logger.info("[备份完成] 磁带操作锁已释放，无需重复释放")
+            except Exception as lock_error:
+                logger.warning(f"释放磁带操作锁失败: {str(lock_error)}")
 
     async def get_task_status(self, task_id: int) -> Optional[Dict]:
         """获取任务状态 - 委托给 BackupTaskManager"""

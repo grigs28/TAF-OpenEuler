@@ -14,11 +14,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from config.settings import get_settings
-from tape.itdt_interface import ITDTInterface
 from tape.tape_cartridge import TapeCartridge, TapeStatus
 from tape.tape_operations import TapeOperations
 
 logger = logging.getLogger(__name__)
+
+# Linux 原生磁带操作支持
+_LINUX_TAPE_AVAILABLE = False
+try:
+    from utils.linux_tape import LinuxTapeOperator, get_linux_tape_operator
+    _LINUX_TAPE_AVAILABLE = True
+except ImportError:
+    pass
 
 
 def _parse_tape_status(status_value: str) -> TapeStatus:
@@ -59,7 +66,7 @@ class TapeManager:
 
     def __init__(self):
         self.settings = get_settings()
-        self.itdt_interface = ITDTInterface()
+        self.linux_tape_operator = None  # Linux 原生磁带操作器
         self.tape_operations = TapeOperations()
         self.tape_cartridges: Dict[str, TapeCartridge] = {}
         self.current_tape: Optional[TapeCartridge] = None
@@ -72,26 +79,23 @@ class TapeManager:
     async def initialize(self):
         """初始化磁带管理器"""
         try:
-            # 初始化 ITDT 接口（如果失败，只记录警告，不阻止系统启动）
-            try:
-                await self.itdt_interface.initialize()
-                logger.info("ITDT 接口初始化完成")
-
-                # 初始化磁带操作（共享 ITDT 接口，避免重复初始化）
-                await self.tape_operations.initialize(itdt_interface=self.itdt_interface)
-                logger.info("磁带操作模块初始化完成")
-            except FileNotFoundError as itdt_error:
-                # ITDT 未找到，记录警告但不阻止系统启动
-                logger.warning(f"ITDT 接口初始化失败（磁带设备管理功能将不可用）: {str(itdt_error)}")
-                logger.warning("提示：如果不需要磁带设备管理功能，可以忽略此警告")
-                logger.warning("如果需要使用磁带设备管理功能，请确保 ITDT 可执行文件存在于以下位置之一：")
-                logger.warning("  - 配置的 ITDT_PATH 路径")
-                logger.warning("  - 项目目录下的 ITDT/itdt.exe")
-                logger.warning("  - C:\\itdt\\itdt.exe")
-                logger.warning("  - C:\\Program Files\\IBM\\ITDT\\itdt.exe")
-                self.itdt_interface = None  # 设置为 None，表示 ITDT 不可用
-                # 不初始化 tape_operations，因为需要 ITDT
-                logger.info("磁带管理器将在无 ITDT 的情况下继续运行（部分功能将不可用）")
+            # 使用 Linux 原生磁带操作
+            if _LINUX_TAPE_AVAILABLE:
+                logger.info("使用 Linux 原生磁带操作")
+                try:
+                    self.linux_tape_operator = get_linux_tape_operator()
+                    init_success = await self.linux_tape_operator.initialize()
+                    if init_success:
+                        logger.info("Linux 原生磁带操作初始化完成")
+                        await self.tape_operations.initialize(linux_tape_operator=self.linux_tape_operator)
+                        logger.info("磁带操作模块初始化完成（Linux 原生模式）")
+                    else:
+                        logger.warning("Linux 原生磁带操作初始化失败，磁带设备管理功能将不可用")
+                except Exception as linux_err:
+                    logger.warning(f"Linux 原生磁带操作初始化失败: {str(linux_err)}")
+                    self.linux_tape_operator = None
+            else:
+                logger.warning("Linux 原生磁带操作不可用，磁带设备管理功能将不可用")
 
             # 尝试从配置快速加载设备（不阻塞）
             cached_devices = await self._load_cached_devices()
@@ -123,50 +127,32 @@ class TapeManager:
         if self._scan_in_progress:
             logger.debug("设备扫描已在进行中，跳过")
             return
-        
-        # 检查 ITDT 接口是否可用
-        if self.itdt_interface is None:
-            logger.warning("ITDT 接口不可用，跳过设备扫描（磁带设备管理功能将不可用）")
-            return
-        
-        self._scan_in_progress = True
-        try:
-            # 如果已有缓存设备（从数据库或.env加载），直接使用，不执行扫描
-            if hasattr(self, 'cached_devices') and self.cached_devices:
-                logger.info(f"数据库/配置中已有设备缓存（{len(self.cached_devices)} 个），跳过ITDT扫描")
-                # 直接使用缓存，不执行扫描
-                return
-            
-            # 配置中没有设备或验证失败，执行扫描（60秒超时）
-            logger.info("开始后台扫描磁带设备...")
+
+        # 使用 LinuxTapeOperator 扫描设备
+        if self.linux_tape_operator:
+            logger.info("使用 Linux 原生方式扫描磁带设备...")
+            self._scan_in_progress = True
             try:
-                devices = await asyncio.wait_for(
-                    self.itdt_interface.scan_devices(),
-                    timeout=60.0
-                )
-                logger.info(f"后台扫描完成，检测到 {len(devices)} 个磁带设备")
-            except asyncio.TimeoutError:
-                logger.error("设备扫描超时（60秒），返回空列表")
-                devices = []
+                devices = await LinuxTapeOperator.scan_devices()
+                logger.info(f"检测到 {len(devices)} 个磁带设备")
+                for device in devices:
+                    logger.info(f"设备: {device.get('path', 'unknown')}")
+                if devices:
+                    await self._save_cached_devices(devices)
+                    self.cached_devices = devices
+            except Exception as e:
+                logger.error(f"Linux 设备扫描失败: {str(e)}")
+            finally:
+                self._scan_in_progress = False
+            return
 
-            for device in devices:
-                logger.info(f"磁带设备: {device.get('path', 'unknown')} - {device.get('model', 'Unknown')}")
+        # 如果没有 LinuxTapeOperator，使用缓存
+        if hasattr(self, 'cached_devices') and self.cached_devices:
+            logger.info(f"使用缓存的设备信息（{len(self.cached_devices)} 个）")
+            return
 
-            # 保存到配置
-            if devices:
-                await self._save_cached_devices(devices)
-                self.cached_devices = devices
-                logger.info("设备信息已保存到配置")
-            else:
-                logger.warning("未检测到任何磁带设备")
-
-        except Exception as e:
-            logger.error(f"后台检测磁带设备失败: {str(e)}", exc_info=True)
-            # 失败时保持现有缓存（如果有）
-            if not hasattr(self, 'cached_devices') or not self.cached_devices:
-                self.cached_devices = []
-        finally:
-            self._scan_in_progress = False
+        logger.warning("LinuxTapeOperator 不可用且无设备缓存，跳过设备扫描")
+        self.cached_devices = []
 
     async def _load_cached_devices(self) -> List[Dict[str, Any]]:
         """从配置加载缓存的设备信息（openGauss模式从数据库读取，其他模式从.env文件读取）"""
@@ -290,8 +276,8 @@ class TapeManager:
         """验证设备是否可用（至少测试一个设备）"""
         if not devices:
             return False
-        if self.itdt_interface is None:
-            logger.warning("ITDT 接口不可用，无法验证设备")
+        if self.linux_tape_operator is None:
+            logger.warning("LinuxTapeOperator 不可用，无法验证设备")
             return False
         try:
             # 测试第一个设备是否可用
@@ -299,8 +285,9 @@ class TapeManager:
             device_path = first_device.get('path')
             if not device_path:
                 return False
-            # 尝试test_unit_ready
-            return await self.itdt_interface.test_unit_ready(device_path)
+            # 检查设备状态
+            status = await self.linux_tape_operator.status()
+            return status.get('online', False)
         except Exception:
             return False
 
@@ -308,7 +295,7 @@ class TapeManager:
         """获取缓存的设备列表（优先使用缓存，如果缓存为空且扫描未进行中才触发扫描）"""
         if hasattr(self, 'cached_devices') and self.cached_devices:
             return self.cached_devices
-        
+
         # 如果后台扫描正在进行，等待一下或返回空（避免重复扫描）
         if self._scan_in_progress:
             logger.debug("设备扫描正在进行中，等待完成...")
@@ -319,29 +306,22 @@ class TapeManager:
                     return self.cached_devices
             logger.warning("等待扫描超时，返回空列表")
             return []
-        
-        # 如果没有缓存且扫描未进行，触发扫描（只在必要时，60秒超时）
-        if self.itdt_interface is None:
-            logger.warning("ITDT 接口不可用，无法扫描设备")
+
+        # 如果没有缓存且扫描未进行，触发扫描
+        if self.linux_tape_operator is None:
+            logger.warning("LinuxTapeOperator 不可用，无法扫描设备")
             return []
-        
+
         logger.info("缓存为空，触发设备扫描...")
         try:
-            try:
-                devices = await asyncio.wait_for(
-                    self.itdt_interface.scan_devices(),
-                    timeout=60.0
-                )
-                if devices:
-                    await self._save_cached_devices(devices)
-                    self.cached_devices = devices
-                    return devices
-            except asyncio.TimeoutError:
-                logger.error("设备扫描超时（60秒），返回空列表")
-                return []
+            devices = await LinuxTapeOperator.scan_devices()
+            if devices:
+                await self._save_cached_devices(devices)
+                self.cached_devices = devices
+                return devices
         except Exception as e:
             logger.error(f"获取设备列表失败: {str(e)}")
-            return []
+        return []
 
     async def _load_tape_inventory(self):
         """加载磁带库存信息"""
@@ -834,13 +814,13 @@ class TapeManager:
     async def health_check(self) -> bool:
         """健康检查"""
         try:
-            # 检查 ITDT 接口
-            if self.itdt_interface is None:
-                logger.warning("ITDT 接口不可用，健康检查返回 False")
+            # 检查 LinuxTapeOperator
+            if self.linux_tape_operator is None:
+                logger.warning("LinuxTapeOperator 不可用，健康检查返回 False")
                 return False
             try:
-                ok = await self.itdt_interface.test_unit_ready(None)
-                if not ok:
+                status = await self.linux_tape_operator.status()
+                if not status.get('online', False):
                     return False
             except Exception:
                 return False

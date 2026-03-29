@@ -20,7 +20,6 @@ from .schedule_calculator import calculate_next_run_time
 from utils.log_utils import log_operation, log_system
 from .task_storage import record_run_start, record_run_end, acquire_task_lock, release_task_lock
 from .db_utils import is_opengauss, is_redis, get_opengauss_connection
-from .sqlite_utils import is_sqlite
 
 logger = logging.getLogger(__name__)
 
@@ -454,9 +453,15 @@ def create_task_executor(
             end_time = datetime.now()
             duration = int((end_time - start_time).total_seconds() * 1000)  # 转换为毫秒
             error_msg = str(e)
+
+            # 如果是"任务已在执行中"的错误，直接重新抛出，不记录为 ERROR
+            if "任务已在执行中" in error_msg:
+                logger.info(f"[任务执行器] 任务已在执行中，跳过 - 任务ID: {scheduled_task.id}")
+                raise
+
             import traceback
             stack_trace = traceback.format_exc()
-            
+
             # 详细的任务执行失败日志输出
             duration_seconds = duration / 1000.0
             logger.error("=" * 80)

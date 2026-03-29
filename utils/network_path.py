@@ -1,273 +1,249 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-网络路径工具模块
-Network Path Utilities
+网络路径工具 (Linux 版本)
+支持 SMB/CIFS 网络路径挂载
 """
 
 import os
 import logging
-import platform
-from typing import List, Optional, Dict
-from pathlib import Path, WindowsPath
+import subprocess
+import tempfile
+from typing import Dict, List, Optional
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# 已挂载的 SMB 共享缓存
+_mounted_shares: Dict[str, str] = {}
+
+
+def _get_smb_credentials() -> tuple:
+    """从配置获取 SMB 凭据
+
+    优先级：Settings > 环境变量
+
+    Returns:
+        tuple: (username, password, domain)
+    """
+    # 首先尝试从 Settings 获取
+    try:
+        from config.settings import get_settings
+        settings = get_settings()
+        username = settings.SMB_USERNAME
+        password = settings.SMB_PASSWORD
+        domain = getattr(settings, 'SMB_DOMAIN', '') or ''
+        if username and password:
+            return username, password, domain
+    except Exception as e:
+        logger.debug(f"从 Settings 获取 SMB 凭据失败: {e}")
+
+    # 回退到环境变量
+    username = os.environ.get('SMB_USERNAME', '')
+    password = os.environ.get('SMB_PASSWORD', '')
+    domain = os.environ.get('SMB_DOMAIN', '')
+
+    return username, password, domain
+
+
+def _get_smb_mount_base() -> str:
+    """获取 SMB 挂载基础目录"""
+    try:
+        from config.settings import get_settings
+        settings = get_settings()
+        return settings.SMB_MOUNT_BASE or "/mnt/smb"
+    except Exception:
+        return os.environ.get('SMB_MOUNT_BASE', '/mnt/smb')
+
 
 def is_unc_path(path: str) -> bool:
-    """检查路径是否为 UNC 网络路径
-    
-    Args:
-        path: 路径字符串
-        
-    Returns:
-        bool: 如果是 UNC 路径返回 True
-    """
+    """检查路径是否为 UNC 网络路径"""
     if not path:
         return False
-    
-    # Windows UNC 路径格式: \\server\share 或 \\server\share\path
     path_normalized = path.replace('/', '\\')
     return path_normalized.startswith('\\\\') and not path_normalized.startswith('\\\\?\\')
 
 
 def normalize_unc_path(path: str) -> str:
-    """规范化 UNC 路径
-    
-    Args:
-        path: 路径字符串
-        
-    Returns:
-        str: 规范化后的路径（统一使用反斜杠）
-    """
+    """规范化 UNC 路径"""
     if not path:
         return path
-    
-    # 将正斜杠转换为反斜杠（UNC 路径使用反斜杠）
     return path.replace('/', '\\')
 
 
 def get_unc_server_and_share(path: str) -> Optional[Dict[str, str]]:
-    """从 UNC 路径中提取服务器和共享名称
-    
-    Args:
-        path: UNC 路径，如 \\192.168.0.79 或 \\192.168.0.79\yz
-        
-    Returns:
-        Dict[str, str]: 包含 'server' 和 'share' 的字典，如果路径无效返回 None
-    """
+    """解析 UNC 路径，提取服务器和共享名"""
     if not is_unc_path(path):
         return None
     
-    path_normalized = normalize_unc_path(path)
-    # 移除开头的 \\
-    path_parts = path_normalized[2:].split('\\', 1)
+    normalized = normalize_unc_path(path)
+    parts = normalized.split('\\')
+    parts = [p for p in parts if p]  # 移除空部分
     
-    if len(path_parts) < 1:
+    if len(parts) < 2:
         return None
     
-    server = path_parts[0]
-    share = path_parts[1] if len(path_parts) > 1 else None
+    server = parts[0]
+    share = parts[1]
+    subpath = '\\'.join(parts[2:]) if len(parts) > 2 else ''
     
     return {
         'server': server,
         'share': share,
-        'full_path': path_normalized
+        'subpath': subpath,
+        'full_path': normalized
     }
 
 
-def list_network_shares(server: str) -> List[Dict[str, str]]:
-    """列出指定服务器的所有共享
-    
+async def validate_network_path(path: str, username: str = None, password: str = None) -> dict:
+    """验证网络路径并挂载 SMB 共享
+
     Args:
-        server: 服务器地址，如 '192.168.0.79'
-        
+        path: UNC 路径 (如 \\server\share\path)
+        username: SMB 用户名（可选，默认从配置读取）
+        password: SMB 密码（可选，默认从配置读取）
+
     Returns:
-        List[Dict[str, str]]: 共享列表，每个字典包含 'name' 和 'path'
-    """
-    if platform.system() != 'Windows':
-        logger.warning("列出网络共享功能仅在 Windows 系统上支持")
-        return []
-    
-    try:
-        import win32net
-        import win32netcon
-        
-        shares = []
-        resume_handle = 0
-        
-        while True:
-            # 枚举共享
-            result, share_list, total, resume_handle = win32net.NetShareEnum(
-                f"\\\\{server}",
-                0,  # SHARE_INFO_0
-                resume_handle
-            )
-            
-            for share_info in share_list:
-                share_name = share_info['netname']
-                share_type = share_info['type']
-                
-                # 只返回磁盘共享（排除 IPC$, ADMIN$ 等系统共享）
-                # share_type & 0x1 == 0 表示磁盘共享
-                # 0x80000000 是 STYPE_DISKTREE
-                if share_type & 0x1 == 0:  # 磁盘共享
-                    share_path = f"\\\\{server}\\{share_name}"
-                    shares.append({
-                        'name': share_name,
-                        'path': share_path,
-                        'type': 'disk'
-                    })
-            
-            if resume_handle == 0:
-                break
-        
-        logger.info(f"在服务器 {server} 上找到 {len(shares)} 个共享")
-        return shares
-        
-    except ImportError as e:
-        logger.warning(f"win32net 模块未安装，无法列出网络共享: {str(e)}。请安装 pywin32: pip install pywin32")
-        return []
-    except Exception as e:
-        error_msg = str(e)
-        # 常见错误：访问被拒绝、网络不可达等
-        if '拒绝访问' in error_msg or 'Access denied' in error_msg:
-            logger.warning(f"无法访问服务器 {server} 的共享列表（权限不足）")
-        elif '网络路径未找到' in error_msg or 'Network path not found' in error_msg:
-            logger.warning(f"无法找到服务器 {server}（网络不可达）")
-        else:
-            logger.error(f"列出网络共享失败 {server}: {error_msg}")
-        return []
-
-
-def expand_unc_path(path: str) -> List[str]:
-    """展开 UNC 路径
-    
-    如果路径是 \\server（没有指定共享），则列出所有共享并返回完整路径列表
-    如果路径是 \\server\share，则直接返回该路径
-    
-    Args:
-        path: UNC 路径
-        
-    Returns:
-        List[str]: 展开后的路径列表
-    """
-    if not is_unc_path(path):
-        return [path]
-    
-    path_info = get_unc_server_and_share(path)
-    if not path_info:
-        return [path]
-    
-    server = path_info['server']
-    share = path_info['share']
-    
-    # 如果指定了共享，直接返回
-    if share:
-        return [normalize_unc_path(path)]
-    
-    # 如果没有指定共享，列出所有共享
-    logger.info(f"未指定共享名称，列出服务器 {server} 的所有共享...")
-    shares = list_network_shares(server)
-    
-    if not shares:
-        logger.warning(f"无法列出服务器 {server} 的共享，尝试直接访问根路径")
-        return [normalize_unc_path(path)]
-    
-    # 返回所有共享的完整路径
-    expanded_paths = [share_info['path'] for share_info in shares]
-    logger.info(f"展开路径 {path} 为 {len(expanded_paths)} 个共享路径")
-    return expanded_paths
-
-
-def check_path_exists(path: str) -> bool:
-    """检查路径是否存在（支持 UNC 路径）
-    
-    Args:
-        path: 路径字符串
-        
-    Returns:
-        bool: 如果路径存在返回 True
-    """
-    if not path:
-        return False
-    
-    try:
-        # 对于 UNC 路径，使用 os.path.exists 应该可以工作
-        # 但可能需要先确保网络连接
-        normalized_path = normalize_unc_path(path) if is_unc_path(path) else path
-        
-        # 尝试使用 Path.exists()，它应该支持 UNC 路径
-        path_obj = Path(normalized_path)
-        
-        # 对于 UNC 路径，可能需要特殊处理
-        if is_unc_path(normalized_path):
-            # 尝试访问路径的根目录
-            try:
-                # 检查是否可以访问路径
-                return path_obj.exists()
-            except Exception as e:
-                logger.debug(f"检查 UNC 路径存在性时出错 {normalized_path}: {str(e)}")
-                # 尝试使用 os.path.exists 作为备选
-                return os.path.exists(normalized_path)
-        else:
-            return path_obj.exists()
-            
-    except Exception as e:
-        logger.error(f"检查路径存在性失败 {path}: {str(e)}")
-        return False
-
-
-def validate_network_path(path: str) -> Dict[str, any]:
-    """验证网络路径
-    
-    Args:
-        path: 路径字符串
-        
-    Returns:
-        Dict: 验证结果，包含 'valid', 'exists', 'is_unc', 'expanded_paths' 等字段
+        dict: {
+            'valid': bool,
+            'path': str,  # 本地挂载路径
+            'original_path': str,  # 原始 UNC 路径
+            'expanded_paths': List[str],  # 展开后的路径列表
+            'is_unc': bool,
+            'mount_point': str,  # 挂载点
+            'message': str
+        }
     """
     result = {
         'valid': False,
-        'exists': False,
-        'is_unc': False,
+        'path': path,
+        'original_path': path,
         'expanded_paths': [],
-        'error': None
+        'is_unc': is_unc_path(path),
+        'mount_point': None,
+        'message': ''
     }
-    
-    try:
-        if not path:
-            result['error'] = '路径为空'
-            return result
-        
-        result['is_unc'] = is_unc_path(path)
-        
-        if result['is_unc']:
-            # 展开 UNC 路径
-            expanded_paths = expand_unc_path(path)
-            result['expanded_paths'] = expanded_paths
-            
-            # 检查至少有一个路径存在
-            for expanded_path in expanded_paths:
-                if check_path_exists(expanded_path):
-                    result['exists'] = True
-                    result['valid'] = True
-                    break
-            
-            if not result['exists']:
-                result['error'] = f'无法访问网络路径: {path}'
+
+    if not result['is_unc']:
+        # 本地路径，直接检查
+        if os.path.exists(path):
+            result['valid'] = True
+            result['message'] = '本地路径验证通过'
         else:
-            # 普通路径验证
-            result['exists'] = check_path_exists(path)
-            result['valid'] = result['exists']
-            result['expanded_paths'] = [path]
+            result['message'] = f'本地路径不存在: {path}'
+        return result
+
+    # UNC 路径处理
+    parsed = get_unc_server_and_share(path)
+    if not parsed:
+        result['message'] = f'无效的 UNC 路径格式: {path}'
+        return result
+
+    server = parsed['server']
+    share = parsed['share']
+    subpath = parsed['subpath']
+
+    # 从配置获取凭据（如果未提供）
+    domain = None
+    if not username or not password:
+        config_username, config_password, config_domain = _get_smb_credentials()
+        if not username:
+            username = config_username
+        if not password:
+            password = config_password
+        if not domain:
+            domain = config_domain
+
+    # 检查凭据是否配置
+    if not username or not password:
+        result['message'] = 'SMB 凭据未配置，请在 .env 文件中设置 SMB_USERNAME 和 SMB_PASSWORD'
+        logger.error(result['message'])
+        return result
+
+    # 构建挂载点（使用配置中的挂载基础目录）
+    mount_base = _get_smb_mount_base()
+    mount_key = f"//{server}/{share}"
+    mount_point = f"{mount_base}/{server}_{share}"
+
+    # 检查是否已挂载
+    if mount_key in _mounted_shares:
+        mount_point = _mounted_shares[mount_key]
+        logger.info(f"SMB 共享已挂载: {mount_key} -> {mount_point}")
+    else:
+        # 创建挂载点
+        Path(mount_point).mkdir(parents=True, exist_ok=True)
+
+        # 获取当前用户用于挂载权限
+        current_user = os.environ.get('USER', 'root')
+
+        # 构建挂载选项
+        mount_options = f'username={username},password={password},vers=3.0,uid={current_user},gid={current_user}'
+        if domain:
+            mount_options += f',domain={domain}'
+
+        # 挂载 SMB 共享 (使用 sudo)
+        mount_cmd = [
+            'sudo', 'mount', '-t', 'cifs',
+            f'//{server}/{share}',
+            mount_point,
+            '-o', mount_options
+        ]
+        
+        try:
+            result_mount = subprocess.run(
+                mount_cmd,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
             
-            if not result['exists']:
-                result['error'] = f'路径不存在: {path}'
-                
-    except Exception as e:
-        result['error'] = str(e)
-        logger.error(f"验证路径失败 {path}: {str(e)}")
+            if result_mount.returncode == 0:
+                _mounted_shares[mount_key] = mount_point
+                logger.info(f"SMB 共享挂载成功: {mount_key} -> {mount_point}")
+            else:
+                # 检查是否已经挂载
+                if os.path.ismount(mount_point):
+                    _mounted_shares[mount_key] = mount_point
+                    logger.info(f"SMB 共享已挂载: {mount_key} -> {mount_point}")
+                else:
+                    result['message'] = f'挂载 SMB 共享失败: {result_mount.stderr}'
+                    logger.error(result['message'])
+                    return result
+        except subprocess.TimeoutExpired:
+            result['message'] = '挂载 SMB 共享超时'
+            logger.error(result['message'])
+            return result
+        except Exception as e:
+            result['message'] = f'挂载 SMB 共享异常: {str(e)}'
+            logger.error(result['message'])
+            return result
+    
+    # 构建本地路径
+    local_path = os.path.join(mount_point, subpath.replace('\\', '/'))
+    
+    if os.path.exists(local_path):
+        result['valid'] = True
+        result['path'] = local_path
+        result['mount_point'] = mount_point
+        result['expanded_paths'] = [local_path]
+        result['message'] = f'SMB 路径验证通过，已挂载到: {local_path}'
+    else:
+        result['valid'] = True  # 路径有效但目录可能不存在
+        result['path'] = local_path
+        result['mount_point'] = mount_point
+        result['expanded_paths'] = [local_path]
+        result['message'] = f'SMB 路径已挂载，但子路径不存在: {local_path}'
     
     return result
 
+
+def cleanup_mounts():
+    """清理所有挂载的 SMB 共享"""
+    global _mounted_shares
+    for mount_key, mount_point in _mounted_shares.items():
+        try:
+            subprocess.run(['umount', mount_point], capture_output=True, timeout=10)
+            logger.info(f"已卸载 SMB 共享: {mount_key}")
+        except Exception as e:
+            logger.warning(f"卸载 SMB 共享失败: {mount_key}, {str(e)}")
+    _mounted_shares = {}
