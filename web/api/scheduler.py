@@ -19,7 +19,7 @@ from utils.scheduler import TaskScheduler
 from utils.log_utils import log_operation, log_system
 from models.system_log import LogLevel, LogCategory
 from utils.scheduler.task_storage import release_task_locks_by_task, release_all_active_locks
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
+from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
 from utils.tape_tools import tape_tools_manager
 
 logger = logging.getLogger(__name__)
@@ -215,53 +215,21 @@ async def create_scheduled_task(task: ScheduledTaskCreate, request: Request = No
         
         # 验证备份任务模板（如果提供了backup_task_id）
         if task.action_type == "backup" and task.backup_task_id:
-            from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_redis
-            
-            # 检查是否为Redis数据库
-            if is_redis():
-                # Redis模式下暂不支持验证备份任务模板
-                logger.warning(f"[Redis模式] 验证备份任务模板暂未实现: {task.backup_task_id}")
-                # 继续执行，不验证模板（或者可以返回错误）
-                # raise HTTPException(status_code=501, detail="Redis模式下暂不支持验证备份任务模板")
-            
-            if is_opengauss():
-                # 使用原生SQL查询（openGauss）
-                async with get_opengauss_connection() as conn:
-                    row = await conn.fetchrow("""
-                        SELECT id, task_name, task_type, source_paths, exclude_patterns,
-                               compression_enabled, encryption_enabled, retention_days,
-                               description, tape_device, is_template
-                        FROM backup_tasks
-                        WHERE id = $1 AND is_template = TRUE
-                    """, task.backup_task_id)
-                    
-                    if not row:
-                        raise HTTPException(
-                            status_code=404,
-                            detail=f"备份任务模板不存在: {task.backup_task_id}"
-                        )
-            else:
-                # 使用原生SQL查询（SQLite）
-                # 检查是否为SQLite数据库
-                if not is_sqlite():
-                    logger.warning(f"[数据库类型错误] 当前数据库类型不支持验证备份任务模板: {task.backup_task_id}")
-                    # 继续执行，不验证模板
-                else:
-                    async with get_sqlite_connection() as conn:
-                        cursor = await conn.execute("""
-                            SELECT id, task_name, task_type, source_paths, exclude_patterns,
-                                   compression_enabled, encryption_enabled, retention_days,
-                                   description, tape_device, is_template
-                            FROM backup_tasks
-                            WHERE id = ? AND is_template = 1
-                        """, (task.backup_task_id,))
-                        row = await cursor.fetchone()
-                        
-                        if not row:
-                            raise HTTPException(
-                                status_code=404,
-                                detail=f"备份任务模板不存在: {task.backup_task_id}"
-                            )
+            # 使用 openGauss 原生 SQL 验证备份任务模板
+            async with get_opengauss_connection() as conn:
+                row = await conn.fetchrow("""
+                    SELECT id, task_name, task_type, source_paths, exclude_patterns,
+                           compression_enabled, encryption_enabled, retention_days,
+                           description, tape_device, is_template
+                    FROM backup_tasks
+                    WHERE id = $1 AND is_template = TRUE
+                """, task.backup_task_id)
+
+                if not row:
+                    raise HTTPException(
+                        status_code=404,
+                        detail=f"备份任务模板不存在: {task.backup_task_id}"
+                    )
             
             # 将backup_task_id保存到task_metadata中
             if task.task_metadata is None:
@@ -386,37 +354,12 @@ async def _check_tape_label_exists(volume_label: str) -> bool:
         如果存在返回True，否则返回False
     """
     try:
-        # 检查是否为Redis数据库
-        from utils.scheduler.db_utils import is_redis
-        
-        if is_redis():
-            # Redis模式下返回False（暂未实现Redis查询磁带）
-            logger.debug(f"[Redis模式] 检查磁带卷标存在性暂未实现: {volume_label}")
-            return False
-        
-        if is_opengauss():
-            # 使用连接池
-            async with get_opengauss_connection() as conn:
-                row = await conn.fetchrow(
-                    "SELECT tape_id FROM tape_cartridges WHERE label = $1 LIMIT 1",
-                    volume_label
-                )
-                return row is not None
-        else:
-            # 使用SQLAlchemy（SQLite）
-            from config.database import db_manager
-            from sqlalchemy import select
-            from models.tape import TapeCartridge
-            
-            # 检查是否为SQLite数据库
-            if not is_sqlite() or db_manager.AsyncSessionLocal is None:
-                logger.debug(f"[数据库类型错误] 当前数据库类型不支持检查磁带卷标存在性: {volume_label}")
-                return False
-            
-            async with db_manager.AsyncSessionLocal() as session:
-                stmt = select(TapeCartridge).where(TapeCartridge.label == volume_label).limit(1)
-                result = await session.execute(stmt)
-                return result.scalar_one_or_none() is not None
+        async with get_opengauss_connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT tape_id FROM tape_cartridges WHERE label = $1 LIMIT 1",
+                volume_label
+            )
+            return row is not None
     except Exception as e:
         logger.error(f"检查磁带卷标是否存在失败: {str(e)}")
         return False
@@ -433,53 +376,20 @@ async def _generate_serial_number(year: int, month: int) -> str:
         6位序列号，例如：TP1101（11月第一张磁盘）
     """
     try:
-        # 检查是否为Redis数据库
-        from utils.scheduler.db_utils import is_redis
-        
-        if is_redis():
-            # Redis模式下返回默认序列号（暂未实现Redis查询磁带）
-            logger.debug(f"[Redis模式] 生成序列号暂未实现，返回默认值: TP{month:02d}01")
-            return f"TP{month:02d}01"
-        
         mm = month
-        
-        # 查询当前月份已有多少张磁盘（查询TP + 月份开头的序列号）
-        if is_opengauss():
-            # 使用连接池
-            async with get_opengauss_connection() as conn:
-                # 查询序列号以TPMM开头的记录数量（排除NULL）
-                count = await conn.fetchval(
-                    """
-                    SELECT COUNT(*) FROM tape_cartridges 
-                    WHERE serial_number IS NOT NULL AND serial_number LIKE $1
-                    """,
-                    f"TP{mm:02d}%"
-                )
-                # 序号从01开始
-                sequence = (count or 0) + 1
-        else:
-            # 使用SQLAlchemy（SQLite）
-            from config.database import db_manager
-            from sqlalchemy import select, func, and_
-            from models.tape import TapeCartridge
-            
-            # 检查是否为SQLite数据库
-            if not is_sqlite() or db_manager.AsyncSessionLocal is None:
-                logger.debug(f"[数据库类型错误] 当前数据库类型不支持生成序列号，返回默认值: TP{month:02d}01")
-                return f"TP{month:02d}01"
-            
-            async with db_manager.AsyncSessionLocal() as session:
-                pattern = f"TP{mm:02d}%"
-                stmt = select(func.count(TapeCartridge.id)).where(
-                    and_(
-                        TapeCartridge.serial_number.isnot(None),
-                        TapeCartridge.serial_number.like(pattern)
-                    )
-                )
-                result = await session.execute(stmt)
-                count = result.scalar() or 0
-                sequence = count + 1
-        
+
+        async with get_opengauss_connection() as conn:
+            # 查询序列号以TPMM开头的记录数量（排除NULL）
+            count = await conn.fetchval(
+                """
+                SELECT COUNT(*) FROM tape_cartridges
+                WHERE serial_number IS NOT NULL AND serial_number LIKE $1
+                """,
+                f"TP{mm:02d}%"
+            )
+            # 序号从01开始
+            sequence = (count or 0) + 1
+
         # 生成6位序列号：TPMMNN
         sn = f"TP{mm:02d}{sequence:02d}"
         logger.info(f"生成序列号: {sn} (年份={year}, 月份={month}, 序号={sequence})")
@@ -515,21 +425,9 @@ async def _format_tape_via_disk_management(
     from utils.db_connection_helper import get_psycopg_connection_from_url
     
     try:
-        # 检查是否为Redis数据库
-        from utils.scheduler.db_utils import is_redis
-        
-        if is_redis():
-            logger.warning(f"[Redis模式] 通过磁盘管理格式化磁带暂未实现: {volume_label}")
-            return False
-        
         # 获取数据库连接信息
         settings = get_settings()
         database_url = settings.DATABASE_URL
-        
-        # 检查是否为 SQLite
-        if is_sqlite():
-            logger.warning(f"[SQLite模式] 通过磁盘管理格式化磁带暂未实现: {volume_label}")
-            return False
         
         # 检查磁带是否存在
         tape_id = volume_label  # 使用卷标作为tape_id
@@ -1407,31 +1305,39 @@ async def get_task_logs(
 ):
     """获取计划任务执行日志"""
     try:
-        from config.database import db_manager
-        from sqlalchemy import select, desc
-        
-        async with db_manager.AsyncSessionLocal() as session:
-            stmt = (
-                select(ScheduledTaskLog)
-                .where(ScheduledTaskLog.scheduled_task_id == task_id)
-                .order_by(desc(ScheduledTaskLog.started_at))
-                .limit(limit)
-                .offset(offset)
+        async with get_opengauss_connection() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM scheduled_task_logs
+                WHERE scheduled_task_id = $1
+                ORDER BY started_at DESC
+                LIMIT $2 OFFSET $3
+                """,
+                task_id, limit, offset
             )
-            result = await session.execute(stmt)
-            logs = result.scalars().all()
-            
-            total_stmt = select(ScheduledTaskLog).where(ScheduledTaskLog.scheduled_task_id == task_id)
-            total_result = await session.execute(total_stmt)
-            total = len(list(total_result.scalars().all()))
-            
+
+            total_row = await conn.fetchrow(
+                "SELECT COUNT(*) as cnt FROM scheduled_task_logs WHERE scheduled_task_id = $1",
+                task_id
+            )
+            total = total_row['cnt'] if total_row else 0
+
+            logs = []
+            for row in rows:
+                log_dict = dict(row)
+                # 序列化 datetime
+                for k, v in log_dict.items():
+                    if hasattr(v, 'isoformat'):
+                        log_dict[k] = v.isoformat()
+                logs.append(log_dict)
+
             return {
-                "logs": [log.to_dict() for log in logs],
+                "logs": logs,
                 "total": total,
                 "limit": limit,
                 "offset": offset
             }
-            
+
     except Exception as e:
         logger.error(f"获取任务日志失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

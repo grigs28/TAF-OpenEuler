@@ -44,11 +44,8 @@
 | **磁带设备** | LTO 驱动器 (SCSI 接口) | 支持 LTO-4 及以上 |
 
 **可选组件**：
-- Redis - 高性能任务存储和缓存
 - LTFS - 磁带文件系统支持
 - 7-Zip - 7z 压缩格式支持
-
-</details>
 
 <details>
 <summary><b>快速开始</b></summary>
@@ -64,7 +61,7 @@ conda activate taf
 
 # 3. 安装依赖
 pip install -r requirements.txt
-pip install aiosqlite zstandard
+pip install zstandard
 
 # 4. 配置 openGauss 数据库
 sudo su - omm
@@ -154,7 +151,6 @@ TAF/
 │   ├── settings.py              # 系统配置类
 │   ├── database.py              # 数据库连接管理
 │   ├── database_init.py         # 数据库初始化
-│   ├── redis_db.py              # Redis 连接管理
 │   └── config_manager.py        # 配置管理器
 │
 ├── models/                      # 数据模型
@@ -200,8 +196,7 @@ TAF/
 │   │   ├── task_unlocker.py     # 任务锁释放
 │   │   ├── schedule_calculator.py # 调度计算器
 │   │   ├── action_handlers.py   # 动作处理器
-│   │   ├── db_utils.py          # 数据库工具函数
-│   │   └── redis_task_storage.py # Redis 任务存储
+│   │   └── db_utils.py          # 数据库工具函数
 │   ├── opengauss/               # openGauss 相关
 │   │   └── guard.py            # openGauss 连接守护
 │   ├── linux_tape.py            # Linux 原生磁带操作
@@ -370,7 +365,6 @@ mt -f /dev/nst0 status
 | **Tape Drive** | LTO Drive (SCSI) | LTO-4 and above |
 
 **Optional Components**:
-- Redis - High-performance task storage and caching
 - LTFS - Tape filesystem support
 - 7-Zip - 7z compression format support
 
@@ -390,7 +384,7 @@ conda activate taf
 
 # 3. Install dependencies
 pip install -r requirements.txt
-pip install aiosqlite zstandard
+pip install zstandard
 
 # 4. Configure openGauss database
 sudo su - omm
@@ -480,7 +474,6 @@ TAF/
 │   ├── settings.py              # System settings
 │   ├── database.py              # Database connection manager
 │   ├── database_init.py         # Database initialization
-│   ├── redis_db.py              # Redis connection manager
 │   └── config_manager.py        # Configuration manager
 │
 ├── models/                      # Data models

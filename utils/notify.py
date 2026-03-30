@@ -44,31 +44,13 @@ async def get_enabled_phones() -> List[str]:
     phones = []
 
     try:
-        from utils.scheduler.db_utils import is_opengauss, is_sqlite
+        from utils.scheduler.db_utils import get_opengauss_connection
 
-        if is_opengauss():
-            from utils.scheduler.db_utils import get_opengauss_connection
-
-            async with get_opengauss_connection() as conn:
-                rows = await conn.fetch(
-                    "SELECT phone FROM notification_users WHERE enabled = TRUE"
-                )
-                phones = [row["phone"] for row in rows if row["phone"]]
-
-        elif is_sqlite():
-            import aiosqlite
-            from config.settings import get_settings
-
-            settings = get_settings()
-            db_path = settings.SQLITE_DB_FILE or "data/taf_backup.db"
-
-            async with aiosqlite.connect(db_path) as conn:
-                conn.row_factory = aiosqlite.Row
-                cursor = await conn.execute(
-                    "SELECT phone FROM notification_users WHERE enabled = 1"
-                )
-                rows = await cursor.fetchall()
-                phones = [row["phone"] for row in rows if row["phone"]]
+        async with get_opengauss_connection() as conn:
+            rows = await conn.fetch(
+                "SELECT phone FROM notification_users WHERE enabled = TRUE"
+            )
+            phones = [row["phone"] for row in rows if row["phone"]]
 
     except Exception as e:
         logger.debug(f"查询通知人员失败: {e}")

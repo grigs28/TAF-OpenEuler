@@ -6,7 +6,7 @@ Configuration Management Module
 """
 
 from .settings import Settings, get_settings, reload_settings
-from .database import DatabaseManager, db_manager, get_db, get_sync_db
+from .database import DatabaseManager, db_manager
 from .config_manager import SystemConfigManager, config_manager, get_config_manager
 from .env_file_manager import EnvFileManager, get_env_manager
 
@@ -16,8 +16,6 @@ __all__ = [
     'reload_settings',
     'DatabaseManager',
     'db_manager',
-    'get_db',
-    'get_sync_db',
     'SystemConfigManager',
     'config_manager',
     'get_config_manager',

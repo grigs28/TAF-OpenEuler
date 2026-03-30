@@ -16,7 +16,8 @@ from datetime import datetime
 from typing import Tuple, Optional
 from dataclasses import dataclass
 
-from utils.scheduler.db_utils import is_opengauss, is_sqlite, is_redis, get_opengauss_connection, get_sqlite_connection
+from utils.scheduler.db_utils import get_opengauss_connection
+from backup.utils import normalize_volume_label as normalize_tape_label
 
 logger = logging.getLogger(__name__)
 
@@ -32,61 +33,6 @@ class TapeLabelInfo:
     sequence: int          # 序号
 
 
-def normalize_tape_label(label: str, target_year: int, target_month: int) -> str:
-    """规范化磁带卷标为 TPYYYYMMSS 格式
-
-    Args:
-        label: 原始卷标
-        target_year: 目标年份
-        target_month: 目标月份
-
-    Returns:
-        规范化后的卷标 (TPYYYYMMSS)
-    """
-    if not label:
-        return f"TP{target_year}{target_month:02d}01"
-
-    clean_label = label.strip().upper()
-    default_seq = "01"
-
-    def build_label(seq: str, suffix: str = "") -> str:
-        # 截取前2位序号，确保不超过99
-        if seq and seq.isdigit():
-            seq_int = int(seq)
-            seq = str(min(seq_int, 99)).zfill(2)
-        else:
-            seq = default_seq
-        return f"TP{target_year}{target_month:02d}{seq}{suffix}"
-
-    # 匹配 TPYYYYMMN 格式 (序号可能超过2位) - 必须先匹配，避免被拆分
-    match = re.match(r'^TP(\d{4})(\d{2})(\d{3,})(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    # 匹配 TPYYYYMMSS 格式 (序号正好2位)
-    match = re.match(r'^TP(\d{4})(\d{2})(\d{2})(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    # 匹配 TAPEYYYYMMSS 格式
-    match = re.match(r'^TAPE(\d{4})(\d{2})(\d{2})(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    # 匹配 TAPEYYYYMMN 格式
-    match = re.match(r'^TAPE(\d{4})(\d{2})(\d+)(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    # 匹配任意 YYYYMMSS 格式
-    match = re.search(r'(\d{4})(\d{2})(\d{2})', clean_label)
-    if match:
-        return build_label(match.group(3))
-
-    # 默认返回
-    return build_label(default_seq)
-
-
 async def get_next_tape_sequence(year: int, month: int) -> int:
     """获取指定年月的下一个磁带序号
 
@@ -98,51 +44,15 @@ async def get_next_tape_sequence(year: int, month: int) -> int:
         下一个序号 (1-99)
     """
     try:
-        if is_redis():
-            from backup.redis_tape_db import count_serial_numbers_redis
-            pattern = f"TP{month:02d}%"
-            count = await count_serial_numbers_redis(pattern)
+        async with get_opengauss_connection() as conn:
+            row = await conn.fetchrow("""
+                SELECT COUNT(*) as count
+                FROM tape_cartridges
+                WHERE serial_number IS NOT NULL
+                AND serial_number LIKE $1
+            """, f"TP{month:02d}%")
+            count = row['count'] if row else 0
             return min(count + 1, 99)
-
-        elif is_opengauss():
-            async with get_opengauss_connection() as conn:
-                row = await conn.fetchrow("""
-                    SELECT COUNT(*) as count
-                    FROM tape_cartridges
-                    WHERE serial_number IS NOT NULL
-                    AND serial_number LIKE $1
-                """, f"TP{month:02d}%")
-                count = row['count'] if row else 0
-                return min(count + 1, 99)
-
-        elif is_sqlite():
-            async with get_sqlite_connection() as conn:
-                cursor = await conn.execute("""
-                    SELECT COUNT(*) as count
-                    FROM tape_cartridges
-                    WHERE serial_number IS NOT NULL
-                    AND serial_number LIKE ?
-                """, (f"TP{month:02d}%",))
-                row = await cursor.fetchone()
-                count = row[0] if row else 0
-                return min(count + 1, 99)
-
-        else:
-            # PostgreSQL psycopg模式
-            from utils.db_connection_helper import get_psycopg_connection_from_url
-            from config.settings import get_settings
-            settings = get_settings()
-            conn, _ = get_psycopg_connection_from_url(settings.DATABASE_URL, prefer_psycopg3=True)
-            try:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        SELECT COUNT(*) FROM tape_cartridges
-                        WHERE serial_number IS NOT NULL AND serial_number LIKE %s
-                    """, (f"TP{month:02d}%",))
-                    count = cur.fetchone()[0] or 0
-                    return min(count + 1, 99)
-            finally:
-                conn.close()
 
     except Exception as e:
         logger.warning(f"获取磁带序号失败: {e}，使用默认序号1")

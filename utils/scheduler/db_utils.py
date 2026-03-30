@@ -30,55 +30,6 @@ def is_opengauss() -> bool:
     return "opengauss" in str(database_url).lower()
 
 
-def is_redis() -> bool:
-    """检查当前数据库是否为Redis"""
-    database_url = db_manager.settings.DATABASE_URL
-    db_flavor = getattr(db_manager.settings, 'DB_FLAVOR', None)
-    # 优先使用DB_FLAVOR配置
-    if db_flavor and db_flavor.lower() == "redis":
-        return True
-    # 从DATABASE_URL判断
-    url_lower = str(database_url).lower()
-    return url_lower.startswith("redis://") or url_lower.startswith("rediss://")
-
-
-def is_sqlite() -> bool:
-    """检查当前数据库是否为SQLite"""
-    database_url = db_manager.settings.DATABASE_URL
-    db_flavor = getattr(db_manager.settings, 'DB_FLAVOR', None)
-    # 优先使用DB_FLAVOR配置
-    if db_flavor and db_flavor.lower() == "sqlite":
-        return True
-    # 从DATABASE_URL判断
-    url_lower = str(database_url).lower()
-    return url_lower.startswith("sqlite://") or url_lower.startswith("sqlite+aiosqlite://")
-
-
-@asynccontextmanager
-async def get_sqlite_connection():
-    """获取 SQLite 数据库连接（上下文管理器）
-
-    用于 SQLite 模式下的数据库操作
-    """
-    import aiosqlite
-    database_url = db_manager.settings.DATABASE_URL
-    # 提取 SQLite 文件路径
-    if database_url.startswith("sqlite:///"):
-        db_path = database_url[len("sqlite:///"):]
-    elif database_url.startswith("sqlite+aiosqlite:///"):
-        db_path = database_url[len("sqlite+aiosqlite:///"):]
-    else:
-        raise ValueError(f"无效的 SQLite 数据库 URL: {database_url}")
-
-    conn = await aiosqlite.connect(db_path)
-    # 启用外键约束
-    await conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-    finally:
-        await conn.close()
-
-
 async def get_backup_files_table_by_set_id(conn, backup_set_id: int) -> str:
     """根据 backup_set_id 获取对应的 backup_files 物理表名（多表方案）
 

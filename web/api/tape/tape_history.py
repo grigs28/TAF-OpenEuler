@@ -17,10 +17,10 @@ from fastapi import APIRouter, HTTPException, Request, Depends, BackgroundTasks
 from pydantic import BaseModel
 
 from .models import CreateTapeRequest, UpdateTapeRequest
-from .tape_utils import normalize_tape_label, check_tape_exists_sqlite, count_serial_numbers_sqlite, parse_expiry_date_for_inventory
+from .tape_utils import normalize_tape_label, parse_expiry_date_for_inventory
 from models.system_log import OperationType, LogCategory, LogLevel
 from utils.log_utils import log_operation, log_system
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
+from utils.scheduler.db_utils import get_opengauss_connection
 from utils.tape_tools import tape_tools_manager
 from config.database import db_manager
 
@@ -28,127 +28,48 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def parse_expiry_date_for_inventory(expiry_date):
-    """解析过期日期（用于库存统计）"""
-    from datetime import date, datetime
-    if isinstance(expiry_date, date):
-        return expiry_date
-    if isinstance(expiry_date, datetime):
-        return expiry_date.date()
-    if isinstance(expiry_date, str):
-        try:
-            dt = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
-            return dt.date()
-        except:
-            return date.today()
-    return date.today()
-
-
 @router.get("/history")
 async def get_tape_history(request: Request, limit: int = 50, offset: int = 0):
     """获取磁带操作历史（从新的日志系统获取，使用openGauss原生SQL）"""
     start_time = datetime.now()
     try:
-        from config.settings import get_settings
-        from datetime import timedelta
+        # 使用openGauss连接查询操作日志
+        async with get_opengauss_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT * FROM operation_logs
+                WHERE resource_type = $1
+                ORDER BY operation_time DESC
+                LIMIT $2 OFFSET $3
+            """, "tape", limit, offset)
 
-        settings = get_settings()
+            history = []
+            for row in rows:
+                operation_time = row.get('operation_time')
+                operation_time_str = operation_time.isoformat() if operation_time else None
 
-        # 检查是否为openGauss
-        if is_opengauss():
-            # 使用openGauss连接查询操作日志
-            async with get_opengauss_connection() as conn:
-                rows = await conn.fetch("""
-                    SELECT * FROM operation_logs
-                    WHERE resource_type = $1
-                    ORDER BY operation_time DESC
-                    LIMIT $2 OFFSET $3
-                """, "tape", limit, offset)
+                history.append({
+                    "id": row.get("id"),
+                    "operation_time": operation_time_str,
+                    "operation_type": row.get("operation_type"),
+                    "operation_user": row.get("operation_user"),
+                    "resource_type": row.get("resource_type"),
+                    "resource_id": row.get("resource_id"),
+                    "details": row.get("details"),
+                    "ip_address": row.get("ip_address"),
+                    "user_agent": row.get("user_agent"),
+                    "result": row.get("result"),
+                    "error_message": row.get("error_message"),
+                    "duration_ms": row.get("duration_ms")
+                })
 
-                history = []
-                for row in rows:
-                    operation_time = row.get('operation_time')
-                    operation_time_str = operation_time.isoformat() if operation_time else None
+            # 获取总数
+            count_row = await conn.fetchrow("""
+                SELECT COUNT(*) as total FROM operation_logs
+                WHERE resource_type = $1
+            """, "tape")
+            total = count_row["total"] if count_row else 0
 
-                    history.append({
-                        "id": row.get("id"),
-                        "operation_time": operation_time_str,
-                        "operation_type": row.get("operation_type"),
-                        "operation_user": row.get("operation_user"),
-                        "resource_type": row.get("resource_type"),
-                        "resource_id": row.get("resource_id"),
-                        "details": row.get("details"),
-                        "ip_address": row.get("ip_address"),
-                        "user_agent": row.get("user_agent"),
-                        "result": row.get("result"),
-                        "error_message": row.get("error_message"),
-                        "duration_ms": row.get("duration_ms")
-                    })
-
-                # 获取总数
-                count_row = await conn.fetchrow("""
-                    SELECT COUNT(*) as total FROM operation_logs
-                    WHERE resource_type = $1
-                """, "tape")
-                total = count_row["total"] if count_row else 0
-
-                return {"success": True, "data": history, "total": total}
-
-        # 非openGauss数据库
-        else:
-            # 检查是否为Redis数据库，Redis不支持操作日志表
-            from utils.scheduler.db_utils import is_redis
-            if is_redis():
-                # Redis模式下不返回操作日志（Redis没有对应的表结构）
-                return {"success": True, "data": [], "total": 0}
-
-            # 非openGauss数据库，使用原生SQL（SQLite）
-
-            # 再次检查是否为SQLite
-            if not is_sqlite():
-                return {"success": True, "data": [], "total": 0}
-
-            async with get_sqlite_connection() as conn:
-                cursor = await conn.execute("""
-                    SELECT * FROM operation_logs
-                    WHERE resource_type = ?
-                    ORDER BY operation_time DESC
-                    LIMIT ? OFFSET ?
-                """, ("tape", limit, offset))
-                rows = await cursor.fetchall()
-                columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                operation_logs = [dict(zip(columns, row)) for row in rows]
-
-                history = []
-                for log in operation_logs:
-                    operation_time = log.get('operation_time')
-                    if operation_time and hasattr(operation_time, 'isoformat'):
-                        operation_time_str = operation_time.isoformat()
-                    elif operation_time:
-                        operation_time_str = str(operation_time)
-                    else:
-                        operation_time_str = None
-
-                    history.append({
-                        "id": log.get("id"),
-                        "operation_time": operation_time_str,
-                        "operation_type": log.get("operation_type"),
-                        "operation_user": log.get("operation_user"),
-                        "resource_type": log.get("resource_type"),
-                        "resource_id": log.get("resource_id"),
-                        "details": log.get("details"),
-                        "ip_address": log.get("ip_address"),
-                        "user_agent": log.get("user_agent"),
-                        "result": log.get("result"),
-                        "error_message": log.get("error_message"),
-                        "duration_ms": log.get("duration_ms")
-                    })
-
-                return {
-                    "success": True,
-                    "history": history,
-                    "count": len(history)
-                }
+            return {"success": True, "data": history, "total": total}
 
     except Exception as e:
         duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
@@ -165,76 +86,4 @@ async def get_tape_history(request: Request, limit: int = 50, offset: int = 0):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# 工具函数定义
-async def check_tape_exists_sqlite(db_manager, tape_id: str, label: str) -> tuple[bool, bool]:
-    """检查磁带是否存在（SQLite版本）"""
 
-    async with get_sqlite_connection() as conn:
-        # 检查 tape_id
-        cursor = await conn.execute("SELECT COUNT(*) FROM tape_cartridges WHERE tape_id = ?", (tape_id,))
-        row = await cursor.fetchone()
-        tape_exists = (row[0] > 0) if row else False
-
-        # 检查 label
-        cursor = await conn.execute("SELECT COUNT(*) FROM tape_cartridges WHERE label = ?", (label,))
-        row = await cursor.fetchone()
-        label_exists = (row[0] > 0) if row else False
-
-        return tape_exists, label_exists
-
-
-async def count_serial_numbers_sqlite(db_manager, pattern: str) -> int:
-    """统计序列号数量（SQLite版本）"""
-    from utils.scheduler.db_utils import is_redis
-
-    # 检查数据库类型
-    if is_redis():
-        raise ValueError("Redis模式下不支持磁带管理功能")
-    if not is_sqlite():
-        raise ValueError("当前数据库类型不支持磁带管理功能")
-
-    async with get_sqlite_connection() as conn:
-        cursor = await conn.execute("""
-            SELECT COUNT(*) FROM tape_cartridges
-            WHERE serial_number IS NOT NULL AND serial_number LIKE ?
-        """, (pattern,))
-        row = await cursor.fetchone()
-        return row[0] if row else 0
-
-
-def normalize_tape_label(label: Optional[str], year: int, month: int) -> str:
-    target_year = f"{year:04d}"
-    target_month = f"{month:02d}"
-    default_seq = "01"
-    default_label = f"TP{target_year}{target_month}{default_seq}"
-
-    if not label:
-        return default_label
-
-    clean_label = label.strip().upper()
-
-    def build_label(seq: str, suffix: str = "") -> str:
-        seq = (seq if seq and seq.isdigit() else default_seq).zfill(2)[:2]
-        return f"TP{target_year}{target_month}{seq}{suffix}"
-
-    match = re.match(r'^TP(\d{4})(\d{2})(\d{2})(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    match = re.match(r'^TP(\d{4})(\d{2})(\d+)(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    match = re.match(r'^TAPE(\d{4})(\d{2})(\d{2})(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    match = re.match(r'^TAPE(\d{4})(\d{2})(\d+)(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    match = re.search(r'(\d{4})(\d{2})(\d{2})', clean_label)
-    if match:
-        return build_label(match.group(3))
-
-    return default_label

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from .models import DingTalkConfig, NotificationEvents, NotificationUser
 from models.system_log import OperationType, LogCategory, LogLevel
 from utils.log_utils import log_operation, log_system
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
+from utils.scheduler.db_utils import get_opengauss_connection
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -457,66 +457,28 @@ async def update_notification_events(events: NotificationEvents, request: Reques
 async def get_notification_users(request: Request):
     """获取通知人员列表"""
     try:
-        # 检查是否为Redis数据库
-        from utils.scheduler.db_utils import is_redis
-        
-        if is_redis():
-            # Redis模式下返回空列表（暂未实现Redis查询通知人员）
-            logger.debug("[Redis模式] 查询通知人员列表暂未实现，返回空列表")
-            return {"success": True, "users": []}
-        
-        if is_opengauss():
-            # 使用原生SQL查询
-            # 使用连接池
-            async with get_opengauss_connection() as conn:
-                rows = await conn.fetch("""
-                    SELECT id, phone, name, remark, enabled, created_at, updated_at, created_by, updated_by
-                    FROM notification_users
-                    ORDER BY created_at DESC
-                """)
-                users = []
-                for row in rows:
-                    users.append({
-                        "id": row["id"],
-                        "phone": row["phone"],
-                        "name": row["name"],
-                        "remark": row["remark"],
-                        "enabled": row["enabled"],
-                        "created_at": row["created_at"].isoformat() if row["created_at"] else None,
-                        "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
-                        "created_by": row["created_by"],
-                        "updated_by": row["updated_by"]
-                    })
-                return {"success": True, "users": users}
-        else:
-            # 使用SQLAlchemy查询（SQLite）
-            from config.database import db_manager
-            
-            # 检查是否为SQLite数据库
-            if not is_sqlite() or db_manager.AsyncSessionLocal is None:
-                logger.debug("[数据库类型错误] 当前数据库类型不支持使用SQLAlchemy会话查询通知人员列表，返回空列表")
-                return {"success": True, "users": []}
-            
-            async with db_manager.AsyncSessionLocal() as session:
-                from models.notification_user import NotificationUser as NotificationUserModel
-                from sqlalchemy import select
-                
-                result = await session.execute(select(NotificationUserModel).order_by(NotificationUserModel.created_at.desc()))
-                users = []
-                for user in result.scalars().all():
-                    users.append({
-                        "id": user.id,
-                        "phone": user.phone,
-                        "name": user.name,
-                        "remark": user.remark,
-                        "enabled": user.enabled,
-                        "created_at": user.created_at.isoformat() if user.created_at else None,
-                        "updated_at": user.updated_at.isoformat() if user.updated_at else None,
-                        "created_by": user.created_by,
-                        "updated_by": user.updated_by
-                    })
-                return {"success": True, "users": users}
-                
+        # 使用原生SQL查询
+        async with get_opengauss_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT id, phone, name, remark, enabled, created_at, updated_at, created_by, updated_by
+                FROM notification_users
+                ORDER BY created_at DESC
+            """)
+            users = []
+            for row in rows:
+                users.append({
+                    "id": row["id"],
+                    "phone": row["phone"],
+                    "name": row["name"],
+                    "remark": row["remark"],
+                    "enabled": row["enabled"],
+                    "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+                    "updated_at": row["updated_at"].isoformat() if row["updated_at"] else None,
+                    "created_by": row["created_by"],
+                    "updated_by": row["updated_by"]
+                })
+            return {"success": True, "users": users}
+
     except Exception as e:
         logger.error(f"获取通知人员列表失败: {str(e)}", exc_info=True)
         return {"success": False, "message": str(e)}
@@ -528,118 +490,66 @@ async def create_notification_user(user: NotificationUser, request: Request):
     start_time = datetime.now()
     
     try:
-        if is_opengauss():
-            # 使用 psycopg 同步连接插入（与添加磁带相同的方式）
-            from utils.db_connection_helper import get_psycopg_connection_from_url, set_autocommit
-            from config.settings import get_settings as _get_settings
+        # 使用 psycopg 同步连接插入（与添加磁带相同的方式）
+        from utils.db_connection_helper import get_psycopg_connection_from_url, set_autocommit
+        from config.settings import get_settings as _get_settings
 
-            _settings = _get_settings()
-            _conn, _is_psycopg3 = get_psycopg_connection_from_url(_settings.DATABASE_URL, prefer_psycopg3=True)
-            try:
-                set_autocommit(_conn, _is_psycopg3, autocommit=True)
-                with _conn.cursor() as cur:
-                    # 检查手机号是否已存在
-                    cur.execute("SELECT id FROM notification_users WHERE phone = %s", (user.phone,))
-                    if cur.fetchone():
-                        raise ValueError(f"手机号 {user.phone} 已存在")
-
-                    # 插入新记录
-                    cur.execute(
-                        """
-                        INSERT INTO notification_users (phone, name, remark, enabled, created_at, updated_at)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        RETURNING id
-                        """,
-                        (
-                            user.phone,
-                            user.name,
-                            user.remark,
-                            user.enabled,
-                            datetime.now(),
-                            datetime.now()
-                        )
-                    )
-                    user_id = cur.fetchone()[0]
-            finally:
-                _conn.close()
-
-            # 记录操作日志
-            client_ip = request.client.host if request.client else None
-            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            await log_operation(
-                operation_type=OperationType.CREATE,
-                resource_type="notification",
-                resource_id=str(user_id),
-                resource_name=f"通知人员: {user.name} ({user.phone})",
-                operation_name="创建通知人员",
-                operation_description=f"创建通知人员: {user.name} ({user.phone})",
-                category="system",
-                success=True,
-                result_message="通知人员创建成功",
-                new_values={
-                    "phone": user.phone,
-                    "name": user.name,
-                    "remark": user.remark,
-                    "enabled": user.enabled
-                },
-                ip_address=client_ip,
-                request_method="POST",
-                request_url=str(request.url),
-                duration_ms=duration_ms
-            )
-
-            return {"success": True, "message": "通知人员创建成功", "user_id": user_id}
-        else:
-            # 使用SQLAlchemy插入
-            from config.database import db_manager
-            async with db_manager.AsyncSessionLocal() as session:
-                from models.notification_user import NotificationUser as NotificationUserModel
-                
+        _settings = _get_settings()
+        _conn, _is_psycopg3 = get_psycopg_connection_from_url(_settings.DATABASE_URL, prefer_psycopg3=True)
+        try:
+            set_autocommit(_conn, _is_psycopg3, autocommit=True)
+            with _conn.cursor() as cur:
                 # 检查手机号是否已存在
-                from sqlalchemy import select
-                existing = await session.execute(
-                    select(NotificationUserModel).where(NotificationUserModel.phone == user.phone)
-                )
-                if existing.scalar_one_or_none():
+                cur.execute("SELECT id FROM notification_users WHERE phone = %s", (user.phone,))
+                if cur.fetchone():
                     raise ValueError(f"手机号 {user.phone} 已存在")
-                
-                # 创建新记录
-                new_user = NotificationUserModel(
-                    phone=user.phone,
-                    name=user.name,
-                    remark=user.remark,
-                    enabled=user.enabled
+
+                # 插入新记录
+                cur.execute(
+                    """
+                    INSERT INTO notification_users (phone, name, remark, enabled, created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    RETURNING id
+                    """,
+                    (
+                        user.phone,
+                        user.name,
+                        user.remark,
+                        user.enabled,
+                        datetime.now(),
+                        datetime.now()
+                    )
                 )
-                session.add(new_user)
-                await session.commit()
-                await session.refresh(new_user)
-                
-                # 记录操作日志
-                client_ip = request.client.host if request.client else None
-                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                await log_operation(
-                    operation_type=OperationType.CREATE,
-                    resource_type="notification",
-                    resource_id=str(new_user.id),
-                    resource_name=f"通知人员: {user.name} ({user.phone})",
-                    operation_name="创建通知人员",
-                    operation_description=f"创建通知人员: {user.name} ({user.phone})",
-                    category="system",
-                    success=True,
-                    result_message="通知人员创建成功",
-                    new_values={
-                        "phone": user.phone,
-                        "name": user.name,
-                        "remark": user.remark,
-                        "enabled": user.enabled
-                    },
-                    ip_address=client_ip,
-                    request_method="POST",
-                    request_url=str(request.url),
-                    duration_ms=duration_ms
-                )
-                
-                return {"success": True, "message": "通知人员创建成功", "user_id": new_user.id}
+                user_id = cur.fetchone()[0]
+        finally:
+            _conn.close()
+
+        # 记录操作日志
+        client_ip = request.client.host if request.client else None
+        duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+        await log_operation(
+            operation_type=OperationType.CREATE,
+            resource_type="notification",
+            resource_id=str(user_id),
+            resource_name=f"通知人员: {user.name} ({user.phone})",
+            operation_name="创建通知人员",
+            operation_description=f"创建通知人员: {user.name} ({user.phone})",
+            category="system",
+            success=True,
+            result_message="通知人员创建成功",
+            new_values={
+                "phone": user.phone,
+                "name": user.name,
+                "remark": user.remark,
+                "enabled": user.enabled
+            },
+            ip_address=client_ip,
+            request_method="POST",
+            request_url=str(request.url),
+            duration_ms=duration_ms
+        )
+
+        return {"success": True, "message": "通知人员创建成功", "user_id": user_id}
                 
     except Exception as e:
         error_msg = str(e)
@@ -673,150 +583,78 @@ async def update_notification_user(user_id: int, user: NotificationUser, request
     old_values = {}
     
     try:
-        if is_opengauss():
-            # 使用原生SQL更新
-            # 使用连接池
-            async with get_opengauss_connection() as conn:
-                # 获取旧值
-                old_row = await conn.fetchrow(
-                    "SELECT phone, name, remark, enabled FROM notification_users WHERE id = $1",
-                    user_id
-                )
-                if not old_row:
-                    raise ValueError(f"通知人员 ID {user_id} 不存在")
-                
-                old_values = {
-                    "phone": old_row["phone"],
-                    "name": old_row["name"],
-                    "remark": old_row["remark"],
-                    "enabled": old_row["enabled"]
-                }
-                
-                # 检查手机号是否已被其他用户使用
-                existing = await conn.fetchrow(
-                    "SELECT id FROM notification_users WHERE phone = $1 AND id != $2",
-                    user.phone,
-                    user_id
-                )
-                if existing:
-                    raise ValueError(f"手机号 {user.phone} 已被其他用户使用")
-                
-                # 更新记录
-                await conn.execute(
-                    """
-                    UPDATE notification_users
-                    SET phone = $1, name = $2, remark = $3, enabled = $4, updated_at = $5
-                    WHERE id = $6
-                    """,
-                    user.phone,
-                    user.name,
-                    user.remark,
-                    user.enabled,
-                    datetime.now(),
-                    user_id
-                )
-                
-                # 记录操作日志
-                new_values = {
-                    "phone": user.phone,
-                    "name": user.name,
-                    "remark": user.remark,
-                    "enabled": user.enabled
-                }
-                changed_fields = [key for key in new_values if old_values.get(key) != new_values.get(key)]
-                
-                client_ip = request.client.host if request.client else None
-                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                await log_operation(
-                    operation_type=OperationType.UPDATE,
-                    resource_type="notification",
-                    resource_id=str(user_id),
-                    resource_name=f"通知人员: {user.name} ({user.phone})",
-                    operation_name="更新通知人员",
-                    operation_description=f"更新通知人员: {user.name} ({user.phone})",
-                    category="system",
-                    success=True,
-                    result_message="通知人员更新成功",
-                    old_values=old_values,
-                    new_values=new_values,
-                    changed_fields=changed_fields,
-                    ip_address=client_ip,
-                    request_method="PUT",
-                    request_url=str(request.url),
-                    duration_ms=duration_ms
-                )
-                
-                return {"success": True, "message": "通知人员更新成功"}
-        else:
-            # 使用SQLAlchemy更新
-            from config.database import db_manager
-            async with db_manager.AsyncSessionLocal() as session:
-                from models.notification_user import NotificationUser as NotificationUserModel
-                from sqlalchemy import select
-                
-                # 获取旧值
-                result = await session.execute(
-                    select(NotificationUserModel).where(NotificationUserModel.id == user_id)
-                )
-                existing_user = result.scalar_one_or_none()
-                if not existing_user:
-                    raise ValueError(f"通知人员 ID {user_id} 不存在")
-                
-                old_values = {
-                    "phone": existing_user.phone,
-                    "name": existing_user.name,
-                    "remark": existing_user.remark,
-                    "enabled": existing_user.enabled
-                }
-                
-                # 检查手机号是否已被其他用户使用
-                result = await session.execute(
-                    select(NotificationUserModel).where(
-                        NotificationUserModel.phone == user.phone,
-                        NotificationUserModel.id != user_id
-                    )
-                )
-                if result.scalar_one_or_none():
-                    raise ValueError(f"手机号 {user.phone} 已被其他用户使用")
-                
-                # 更新记录
-                existing_user.phone = user.phone
-                existing_user.name = user.name
-                existing_user.remark = user.remark
-                existing_user.enabled = user.enabled
-                await session.commit()
-                
-                # 记录操作日志
-                new_values = {
-                    "phone": user.phone,
-                    "name": user.name,
-                    "remark": user.remark,
-                    "enabled": user.enabled
-                }
-                changed_fields = [key for key in new_values if old_values.get(key) != new_values.get(key)]
-                
-                client_ip = request.client.host if request.client else None
-                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                await log_operation(
-                    operation_type=OperationType.UPDATE,
-                    resource_type="notification",
-                    resource_id=str(user_id),
-                    resource_name=f"通知人员: {user.name} ({user.phone})",
-                    operation_name="更新通知人员",
-                    operation_description=f"更新通知人员: {user.name} ({user.phone})",
-                    category="system",
-                    success=True,
-                    result_message="通知人员更新成功",
-                    old_values=old_values,
-                    new_values=new_values,
-                    changed_fields=changed_fields,
-                    ip_address=client_ip,
-                    request_method="PUT",
-                    request_url=str(request.url),
-                    duration_ms=duration_ms
-                )
-                
-                return {"success": True, "message": "通知人员更新成功"}
+        # 使用原生SQL更新
+        async with get_opengauss_connection() as conn:
+            # 获取旧值
+            old_row = await conn.fetchrow(
+                "SELECT phone, name, remark, enabled FROM notification_users WHERE id = $1",
+                user_id
+            )
+            if not old_row:
+                raise ValueError(f"通知人员 ID {user_id} 不存在")
+
+            old_values = {
+                "phone": old_row["phone"],
+                "name": old_row["name"],
+                "remark": old_row["remark"],
+                "enabled": old_row["enabled"]
+            }
+
+            # 检查手机号是否已被其他用户使用
+            existing = await conn.fetchrow(
+                "SELECT id FROM notification_users WHERE phone = $1 AND id != $2",
+                user.phone,
+                user_id
+            )
+            if existing:
+                raise ValueError(f"手机号 {user.phone} 已被其他用户使用")
+
+            # 更新记录
+            await conn.execute(
+                """
+                UPDATE notification_users
+                SET phone = $1, name = $2, remark = $3, enabled = $4, updated_at = $5
+                WHERE id = $6
+                """,
+                user.phone,
+                user.name,
+                user.remark,
+                user.enabled,
+                datetime.now(),
+                user_id
+            )
+
+            # 记录操作日志
+            new_values = {
+                "phone": user.phone,
+                "name": user.name,
+                "remark": user.remark,
+                "enabled": user.enabled
+            }
+            changed_fields = [key for key in new_values if old_values.get(key) != new_values.get(key)]
+
+            client_ip = request.client.host if request.client else None
+            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            await log_operation(
+                operation_type=OperationType.UPDATE,
+                resource_type="notification",
+                resource_id=str(user_id),
+                resource_name=f"通知人员: {user.name} ({user.phone})",
+                operation_name="更新通知人员",
+                operation_description=f"更新通知人员: {user.name} ({user.phone})",
+                category="system",
+                success=True,
+                result_message="通知人员更新成功",
+                old_values=old_values,
+                new_values=new_values,
+                changed_fields=changed_fields,
+                ip_address=client_ip,
+                request_method="PUT",
+                request_url=str(request.url),
+                duration_ms=duration_ms
+            )
+
+            return {"success": True, "message": "通知人员更新成功"}
                 
     except Exception as e:
         error_msg = str(e)
@@ -852,99 +690,50 @@ async def delete_notification_user(user_id: int, request: Request):
     old_values = {}
     
     try:
-        if is_opengauss():
-            # 使用原生SQL删除
-            # 使用连接池
-            async with get_opengauss_connection() as conn:
-                # 获取旧值
-                old_row = await conn.fetchrow(
-                    "SELECT phone, name, remark, enabled FROM notification_users WHERE id = $1",
-                    user_id
-                )
-                if not old_row:
-                    raise ValueError(f"通知人员 ID {user_id} 不存在")
-                
-                old_values = {
-                    "phone": old_row["phone"],
-                    "name": old_row["name"],
-                    "remark": old_row["remark"],
-                    "enabled": old_row["enabled"]
-                }
-                
-                # 删除记录
-                await conn.execute(
-                    "DELETE FROM notification_users WHERE id = $1",
-                    user_id
-                )
-                
-                # 记录操作日志
-                client_ip = request.client.host if request.client else None
-                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                await log_operation(
-                    operation_type=OperationType.DELETE,
-                    resource_type="notification",
-                    resource_id=str(user_id),
-                    resource_name=f"通知人员: {old_values.get('name')} ({old_values.get('phone')})",
-                    operation_name="删除通知人员",
-                    operation_description=f"删除通知人员: {old_values.get('name')} ({old_values.get('phone')})",
-                    category="system",
-                    success=True,
-                    result_message="通知人员删除成功",
-                    old_values=old_values,
-                    ip_address=client_ip,
-                    request_method="DELETE",
-                    request_url=str(request.url),
-                    duration_ms=duration_ms
-                )
-                
-                return {"success": True, "message": "通知人员删除成功"}
-        else:
-            # 使用SQLAlchemy删除
-            from config.database import db_manager
-            async with db_manager.AsyncSessionLocal() as session:
-                from models.notification_user import NotificationUser as NotificationUserModel
-                from sqlalchemy import select
-                
-                # 获取旧值
-                result = await session.execute(
-                    select(NotificationUserModel).where(NotificationUserModel.id == user_id)
-                )
-                existing_user = result.scalar_one_or_none()
-                if not existing_user:
-                    raise ValueError(f"通知人员 ID {user_id} 不存在")
-                
-                old_values = {
-                    "phone": existing_user.phone,
-                    "name": existing_user.name,
-                    "remark": existing_user.remark,
-                    "enabled": existing_user.enabled
-                }
-                
-                # 删除记录
-                await session.delete(existing_user)
-                await session.commit()
-                
-                # 记录操作日志
-                client_ip = request.client.host if request.client else None
-                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                await log_operation(
-                    operation_type=OperationType.DELETE,
-                    resource_type="notification",
-                    resource_id=str(user_id),
-                    resource_name=f"通知人员: {old_values.get('name')} ({old_values.get('phone')})",
-                    operation_name="删除通知人员",
-                    operation_description=f"删除通知人员: {old_values.get('name')} ({old_values.get('phone')})",
-                    category="system",
-                    success=True,
-                    result_message="通知人员删除成功",
-                    old_values=old_values,
-                    ip_address=client_ip,
-                    request_method="DELETE",
-                    request_url=str(request.url),
-                    duration_ms=duration_ms
-                )
-                
-                return {"success": True, "message": "通知人员删除成功"}
+        # 使用原生SQL删除
+        async with get_opengauss_connection() as conn:
+            # 获取旧值
+            old_row = await conn.fetchrow(
+                "SELECT phone, name, remark, enabled FROM notification_users WHERE id = $1",
+                user_id
+            )
+            if not old_row:
+                raise ValueError(f"通知人员 ID {user_id} 不存在")
+
+            old_values = {
+                "phone": old_row["phone"],
+                "name": old_row["name"],
+                "remark": old_row["remark"],
+                "enabled": old_row["enabled"]
+            }
+
+            # 删除记录
+            await conn.execute(
+                "DELETE FROM notification_users WHERE id = $1",
+                user_id
+            )
+
+            # 记录操作日志
+            client_ip = request.client.host if request.client else None
+            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            await log_operation(
+                operation_type=OperationType.DELETE,
+                resource_type="notification",
+                resource_id=str(user_id),
+                resource_name=f"通知人员: {old_values.get('name')} ({old_values.get('phone')})",
+                operation_name="删除通知人员",
+                operation_description=f"删除通知人员: {old_values.get('name')} ({old_values.get('phone')})",
+                category="system",
+                success=True,
+                result_message="通知人员删除成功",
+                old_values=old_values,
+                ip_address=client_ip,
+                request_method="DELETE",
+                request_url=str(request.url),
+                duration_ms=duration_ms
+            )
+
+            return {"success": True, "message": "通知人员删除成功"}
                 
     except Exception as e:
         error_msg = str(e)

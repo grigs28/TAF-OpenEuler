@@ -17,10 +17,10 @@ from fastapi import APIRouter, HTTPException, Request, Depends, BackgroundTasks
 from pydantic import BaseModel
 
 from .models import CreateTapeRequest, UpdateTapeRequest
-from .tape_utils import normalize_tape_label, check_tape_exists_sqlite, count_serial_numbers_sqlite, parse_expiry_date_for_inventory
+from .tape_utils import normalize_tape_label, parse_expiry_date_for_inventory
 from models.system_log import OperationType, LogCategory, LogLevel
 from utils.log_utils import log_operation, log_system
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
+from utils.scheduler.db_utils import get_opengauss_connection
 from utils.tape_tools import tape_tools_manager
 from config.database import db_manager
 
@@ -28,94 +28,6 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-def parse_expiry_date_for_inventory(expiry_date):
-    """解析过期日期（用于库存统计）"""
-    from datetime import date, datetime
-    if isinstance(expiry_date, date):
-        return expiry_date
-    if isinstance(expiry_date, datetime):
-        return expiry_date.date()
-    if isinstance(expiry_date, str):
-        try:
-            dt = datetime.fromisoformat(expiry_date.replace('Z', '+00:00'))
-            return dt.date()
-        except:
-            return date.today()
-    return date.today()
-
-
-async def check_tape_exists_sqlite(db_manager, tape_id: str, label: str) -> tuple[bool, bool]:
-    """检查磁带是否存在（SQLite版本）"""
-    
-    async with get_sqlite_connection() as conn:
-        # 检查 tape_id
-        cursor = await conn.execute("SELECT COUNT(*) FROM tape_cartridges WHERE tape_id = ?", (tape_id,))
-        row = await cursor.fetchone()
-        tape_exists = (row[0] > 0) if row else False
-        
-        # 检查 label
-        cursor = await conn.execute("SELECT COUNT(*) FROM tape_cartridges WHERE label = ?", (label,))
-        row = await cursor.fetchone()
-        label_exists = (row[0] > 0) if row else False
-        
-        return tape_exists, label_exists
-
-
-async def count_serial_numbers_sqlite(db_manager, pattern: str) -> int:
-    """统计序列号数量（SQLite版本）"""
-    from utils.scheduler.db_utils import is_redis
-    
-    # 检查数据库类型
-    if is_redis():
-        raise ValueError("Redis模式下不支持磁带管理功能")
-    if not is_sqlite():
-        raise ValueError("当前数据库类型不支持磁带管理功能")
-    
-    async with get_sqlite_connection() as conn:
-        cursor = await conn.execute("""
-            SELECT COUNT(*) FROM tape_cartridges
-            WHERE serial_number IS NOT NULL AND serial_number LIKE ?
-        """, (pattern,))
-        row = await cursor.fetchone()
-        return row[0] if row else 0
-
-
-def normalize_tape_label(label: Optional[str], year: int, month: int) -> str:
-    target_year = f"{year:04d}"
-    target_month = f"{month:02d}"
-    default_seq = "01"
-    default_label = f"TP{target_year}{target_month}{default_seq}"
-
-    if not label:
-        return default_label
-
-    clean_label = label.strip().upper()
-
-    def build_label(seq: str, suffix: str = "") -> str:
-        seq = (seq if seq and seq.isdigit() else default_seq).zfill(2)[:2]
-        return f"TP{target_year}{target_month}{seq}{suffix}"
-
-    match = re.match(r'^TP(\d{4})(\d{2})(\d{2})(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    match = re.match(r'^TP(\d{4})(\d{2})(\d+)(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    match = re.match(r'^TAPE(\d{4})(\d{2})(\d{2})(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    match = re.match(r'^TAPE(\d{4})(\d{2})(\d+)(.*)$', clean_label)
-    if match:
-        return build_label(match.group(3), match.group(4))
-
-    match = re.search(r'(\d{4})(\d{2})(\d{2})', clean_label)
-    if match:
-        return build_label(match.group(3))
-
-    return default_label
 
 
 
@@ -124,61 +36,10 @@ async def get_tape(tape_id: str, request: Request):
     """获取磁带详情"""
     try:
         from config.settings import get_settings
-        from utils.scheduler.db_utils import is_redis
-        
+
         settings = get_settings()
         database_url = settings.DATABASE_URL
-        
-        # 检查是否为 Redis
-        if is_redis():
-            logger.warning(f"[Redis模式] 获取磁带详情暂未实现: {tape_id}")
-            raise HTTPException(status_code=501, detail="Redis模式下暂不支持获取磁带详情功能")
-        
-        # 检查是否为 SQLite
-        if is_sqlite():
-            # 使用原生SQL查询 SQLite
-            
-            async with get_sqlite_connection() as conn:
-                cursor = await conn.execute("""
-                    SELECT tape_id, label, status, media_type, generation, serial_number, location,
-                           capacity_bytes, used_bytes, retention_months, notes, manufactured_date, 
-                           expiry_date, auto_erase, health_score
-                    FROM tape_cartridges 
-                    WHERE tape_id = ?
-                """, (tape_id,))
-                
-                row = await cursor.fetchone()
-                
-                if not row:
-                    return {
-                        "success": False,
-                        "message": f"磁带 {tape_id} 不存在"
-                    }
-                
-                # 构建返回数据
-                tape = {
-                    "tape_id": row[0],
-                    "label": row[1],
-                    "status": row[2] if isinstance(row[2], str) else (row[2].value if hasattr(row[2], 'value') else str(row[2])),
-                    "media_type": row[3],
-                    "generation": row[4],
-                    "serial_number": row[5],
-                    "location": row[6],
-                    "capacity_bytes": row[7],
-                    "used_bytes": row[8],
-                    "retention_months": row[9],
-                    "notes": row[10],
-                    "manufactured_date": row[11].isoformat() if row[11] and hasattr(row[11], 'isoformat') else (str(row[11]) if row[11] else None),
-                    "expiry_date": row[12].isoformat() if row[12] and hasattr(row[12], 'isoformat') else (str(row[12]) if row[12] else None),
-                    "auto_erase": row[13],
-                    "health_score": row[14]
-                }
-                
-                return {
-                    "success": True,
-                    "tape": tape
-                }
-        
+
         # 使用统一的连接辅助函数（支持 psycopg2 和 psycopg3）
         from utils.db_connection_helper import get_psycopg_connection_from_url
         
@@ -250,21 +111,9 @@ async def update_tape(tape_id: str, request: UpdateTapeRequest, http_request: Re
             raise HTTPException(status_code=500, detail="系统未初始化")
 
         from config.settings import get_settings
-        from utils.scheduler.db_utils import is_redis
-        
+
         settings = get_settings()
         database_url = settings.DATABASE_URL
-        
-        # 检查是否为 Redis
-        if is_redis():
-            logger.warning(f"[Redis模式] 更新磁带暂未实现: {tape_id}")
-            raise HTTPException(status_code=501, detail="Redis模式下暂不支持更新磁带功能")
-        
-        # 检查是否为 SQLite
-        if is_sqlite():
-            # SQLite 版本暂不支持更新磁带（需要实现）
-            logger.warning(f"[SQLite模式] 更新磁带暂未实现: {tape_id}")
-            raise HTTPException(status_code=501, detail="SQLite模式下暂不支持更新磁带功能")
 
         # 使用统一的连接辅助函数（支持 psycopg2 和 psycopg3）
         from utils.db_connection_helper import get_psycopg_connection_from_url
@@ -753,127 +602,53 @@ async def check_tape_exists(tape_id: str, request: Request):
     try:
         from config.settings import get_settings
         from datetime import datetime, timezone
-        from utils.scheduler.db_utils import is_redis
-        
+
         settings = get_settings()
         database_url = settings.DATABASE_URL
-        
-        # 检查是否为 Redis
-        if is_redis():
-            # Redis模式：使用Redis查询磁带
-            from backup.redis_tape_db import get_tape_redis
-            from datetime import timezone
-            
-            tape = await get_tape_redis(tape_id)
-            if not tape:
-                return {
-                    "exists": False
-                }
-            
-            # 检查是否过期（仅比较年月）
-            is_expired = False
-            expiry_date_val = tape.get('expiry_date')
-            if expiry_date_val:
-                now = datetime.now(timezone.utc)
-                # 如果 expiry_date_val 是字符串，转换为 datetime
-                if isinstance(expiry_date_val, str):
-                    expiry_date_val = datetime.fromisoformat(expiry_date_val.replace('Z', '+00:00'))
-                # 比较年月
-                if (now.year > expiry_date_val.year) or (now.year == expiry_date_val.year and now.month >= expiry_date_val.month):
-                    is_expired = True
-            
-            return {
-                "exists": True,
-                "tape_id": tape.get('tape_id'),
-                "label": tape.get('label'),
-                "status": tape.get('status'),
-                "is_expired": is_expired,
-                "expiry_date": expiry_date_val.isoformat() if expiry_date_val and hasattr(expiry_date_val, 'isoformat') else (str(expiry_date_val) if expiry_date_val else None)
-            }
-        
-        # 检查是否为 SQLite
-        is_sqlite = database_url.startswith("sqlite:///") or database_url.startswith("sqlite+aiosqlite:///")
-        
-        if is_sqlite:
-            # 使用原生SQL查询 SQLite
-            
-            async with get_sqlite_connection() as conn:
-                cursor = await conn.execute("""
+
+        # 使用统一的连接辅助函数（支持 psycopg2 和 psycopg3）
+        from utils.db_connection_helper import get_psycopg_connection_from_url
+
+        # 连接数据库
+        conn, is_psycopg3 = get_psycopg_connection_from_url(database_url, prefer_psycopg3=True)
+
+        try:
+            with conn.cursor() as cur:
+                # 查询磁带是否存在
+                cur.execute("""
                     SELECT tape_id, label, status, expiry_date
                     FROM tape_cartridges
-                    WHERE tape_id = ?
+                    WHERE tape_id = %s
                 """, (tape_id,))
-                row = await cursor.fetchone()
-                
+
+                row = cur.fetchone()
+
                 if row:
                     # 检查是否过期（仅比较年月）
                     is_expired = False
-                    expiry_date_val = row[3]  # expiry_date
-                    if expiry_date_val:
+                    if row[3]:  # expiry_date
+                        # 使用timezone-aware datetime进行比较
                         now = datetime.now(timezone.utc)
-                        # 如果 expiry_date_val 是字符串，转换为 datetime
-                        if isinstance(expiry_date_val, str):
-                            expiry_date_val = datetime.fromisoformat(expiry_date_val.replace('Z', '+00:00'))
+                        expiry_date = row[3]
                         # 比较年月
-                        if (now.year > expiry_date_val.year) or (now.year == expiry_date_val.year and now.month >= expiry_date_val.month):
+                        if (now.year > expiry_date.year) or (now.year == expiry_date.year and now.month >= expiry_date.month):
                             is_expired = True
-                    
+
                     return {
                         "exists": True,
                         "tape_id": row[0],
                         "label": row[1],
-                        "status": row[2] if isinstance(row[2], str) else (row[2].value if hasattr(row[2], 'value') else str(row[2])),
+                        "status": row[2] if isinstance(row[2], str) else row[2].value,
                         "is_expired": is_expired,
-                        "expiry_date": expiry_date_val.isoformat() if expiry_date_val and hasattr(expiry_date_val, 'isoformat') else (str(expiry_date_val) if expiry_date_val else None)
+                        "expiry_date": row[3].isoformat() if row[3] else None
                     }
                 else:
                     return {
                         "exists": False
                     }
-        else:
-            # 使用统一的连接辅助函数（支持 psycopg2 和 psycopg3）
-            from utils.db_connection_helper import get_psycopg_connection_from_url
-            
-            # 连接数据库
-            conn, is_psycopg3 = get_psycopg_connection_from_url(database_url, prefer_psycopg3=True)
-            
-            try:
-                with conn.cursor() as cur:
-                    # 查询磁带是否存在
-                    cur.execute("""
-                        SELECT tape_id, label, status, expiry_date
-                        FROM tape_cartridges
-                        WHERE tape_id = %s
-                    """, (tape_id,))
-                    
-                    row = cur.fetchone()
-                    
-                    if row:
-                        # 检查是否过期（仅比较年月）
-                        is_expired = False
-                        if row[3]:  # expiry_date
-                            # 使用timezone-aware datetime进行比较
-                            now = datetime.now(timezone.utc)
-                            expiry_date = row[3]
-                            # 比较年月
-                            if (now.year > expiry_date.year) or (now.year == expiry_date.year and now.month >= expiry_date.month):
-                                is_expired = True
-                        
-                        return {
-                            "exists": True,
-                            "tape_id": row[0],
-                            "label": row[1],
-                            "status": row[2] if isinstance(row[2], str) else row[2].value,
-                            "is_expired": is_expired,
-                            "expiry_date": row[3].isoformat() if row[3] else None
-                        }
-                    else:
-                        return {
-                            "exists": False
-                        }
-            
-            finally:
-                conn.close()
+
+        finally:
+            conn.close()
         
     except Exception as e:
         logger.error(f"检查磁带存在性失败: {str(e)}")
@@ -884,202 +659,50 @@ async def check_tape_exists(tape_id: str, request: Request):
 async def list_tapes(request: Request):
     """获取所有磁带列表"""
     try:
-        from config.settings import get_settings
-        from utils.scheduler.db_utils import is_redis
-        
-        settings = get_settings()
-        database_url = settings.DATABASE_URL
-        
-        # 检查是否为 Redis
-        if is_redis():
-            # Redis模式：使用Redis查询磁带列表
-            from backup.redis_tape_db import list_tapes_redis
-            
-            tapes_redis = await list_tapes_redis()
-            
+        # 使用openGauss连接
+        async with get_opengauss_connection() as conn:
+            rows = await conn.fetch("""
+                SELECT
+                    tape_id, label, status, media_type, generation,
+                    serial_number, location, capacity_bytes, used_bytes,
+                    write_count, read_count, load_count, health_score,
+                    first_use_date, last_erase_date, expiry_date,
+                    retention_months, backup_set_count, notes
+                FROM tape_cartridges
+                ORDER BY tape_id
+            """)
+
             tapes = []
-            for tape in tapes_redis:
-                capacity_bytes = tape.get('capacity_bytes', 0)
-                used_bytes = tape.get('used_bytes', 0)
-                usage_percent = (used_bytes / capacity_bytes * 100) if capacity_bytes > 0 else 0
-                
+            for row in rows:
                 tapes.append({
-                    "tape_id": tape.get('tape_id'),
-                    "label": tape.get('label'),
-                    "status": tape.get('status', 'AVAILABLE'),
-                    "media_type": tape.get('media_type', 'LTO'),
-                    "generation": tape.get('generation', 8),
-                    "serial_number": tape.get('serial_number', ''),
-                    "location": tape.get('location', ''),
-                    "capacity_bytes": capacity_bytes,
-                    "used_bytes": used_bytes,
-                    "usage_percent": usage_percent,
-                    "write_count": tape.get('write_count', 0),
-                    "read_count": tape.get('read_count', 0),
-                    "load_count": tape.get('load_count', 0),
-                    "health_score": tape.get('health_score', 100),
-                    "first_use_date": tape.get('first_use_date').isoformat() if tape.get('first_use_date') and hasattr(tape.get('first_use_date'), 'isoformat') else None,
-                    "last_erase_date": tape.get('last_erase_date').isoformat() if tape.get('last_erase_date') and hasattr(tape.get('last_erase_date'), 'isoformat') else None,
-                    "expiry_date": tape.get('expiry_date').isoformat() if tape.get('expiry_date') and hasattr(tape.get('expiry_date'), 'isoformat') else None,
-                    "retention_months": tape.get('retention_months', 6),
-                    "backup_set_count": tape.get('backup_set_count', 0),
-                    "notes": tape.get('notes', '')
+                    "tape_id": row["tape_id"],
+                    "label": row["label"],
+                    "status": row["status"].value if hasattr(row["status"], 'value') else str(row["status"]),
+                    "media_type": row["media_type"],
+                    "generation": row["generation"],
+                    "serial_number": row["serial_number"],
+                    "location": row["location"],
+                    "capacity_bytes": row["capacity_bytes"],
+                    "used_bytes": row["used_bytes"],
+                    "usage_percent": (row["used_bytes"] / row["capacity_bytes"] * 100) if row["capacity_bytes"] > 0 else 0,
+                    "write_count": row["write_count"],
+                    "read_count": row["read_count"],
+                    "load_count": row["load_count"],
+                    "health_score": row["health_score"],
+                    "first_use_date": row["first_use_date"].isoformat() if row["first_use_date"] else None,
+                    "last_erase_date": row["last_erase_date"].isoformat() if row["last_erase_date"] else None,
+                    "expiry_date": row["expiry_date"].isoformat() if row["expiry_date"] else None,
+                    "retention_months": row["retention_months"],
+                    "backup_set_count": row["backup_set_count"],
+                    "notes": row["notes"]
                 })
-            
-            return {
-                "success": True,
-                "tapes": tapes,
-                "count": len(tapes)
-            }
-        
-        # 检查是否为 SQLite
-        is_sqlite = database_url.startswith("sqlite:///") or database_url.startswith("sqlite+aiosqlite:///")
-        
-        if is_sqlite:
-            # 使用原生SQL查询 SQLite
-            
-            async with get_sqlite_connection() as conn:
-                cursor = await conn.execute("""
-                    SELECT tape_id, label, status, media_type, generation,
-                           serial_number, location, capacity_bytes, used_bytes,
-                           write_count, read_count, load_count, health_score,
-                           first_use_date, last_erase_date, expiry_date,
-                           retention_months, backup_set_count, notes
-                    FROM tape_cartridges
-                    ORDER BY tape_id
-                """)
-                rows = await cursor.fetchall()
-                
-                tapes = []
-                for row in rows:
-                    usage_percent = (row[8] / row[7] * 100) if row[7] and row[7] > 0 else 0
-                    tapes.append({
-                        "tape_id": row[0],
-                        "label": row[1],
-                        "status": row[2] if isinstance(row[2], str) else (row[2].value if hasattr(row[2], 'value') else str(row[2])),
-                        "media_type": row[3],
-                        "generation": row[4],
-                        "serial_number": row[5],
-                        "location": row[6],
-                        "capacity_bytes": row[7],
-                        "used_bytes": row[8],
-                        "usage_percent": usage_percent,
-                        "write_count": row[9],
-                        "read_count": row[10],
-                        "load_count": row[11],
-                        "health_score": row[12],
-                        "first_use_date": row[13].isoformat() if row[13] and hasattr(row[13], 'isoformat') else (str(row[13]) if row[13] else None),
-                        "last_erase_date": row[14].isoformat() if row[14] and hasattr(row[14], 'isoformat') else (str(row[14]) if row[14] else None),
-                        "expiry_date": row[15].isoformat() if row[15] and hasattr(row[15], 'isoformat') else (str(row[15]) if row[15] else None),
-                        "retention_months": row[16],
-                        "backup_set_count": row[17],
-                        "notes": row[18]
-                    })
 
-            return {
-                "success": True,
-                "tapes": tapes,
-                "count": len(tapes)
-            }
-        elif is_opengauss():
-            # 使用openGauss连接
-            async with get_opengauss_connection() as conn:
-                rows = await conn.fetch("""
-                    SELECT
-                        tape_id, label, status, media_type, generation,
-                        serial_number, location, capacity_bytes, used_bytes,
-                        write_count, read_count, load_count, health_score,
-                        first_use_date, last_erase_date, expiry_date,
-                        retention_months, backup_set_count, notes
-                    FROM tape_cartridges
-                    ORDER BY tape_id
-                """)
-
-                tapes = []
-                for row in rows:
-                    tapes.append({
-                        "tape_id": row["tape_id"],
-                        "label": row["label"],
-                        "status": row["status"].value if hasattr(row["status"], 'value') else str(row["status"]),
-                        "media_type": row["media_type"],
-                        "generation": row["generation"],
-                        "serial_number": row["serial_number"],
-                        "location": row["location"],
-                        "capacity_bytes": row["capacity_bytes"],
-                        "used_bytes": row["used_bytes"],
-                        "usage_percent": (row["used_bytes"] / row["capacity_bytes"] * 100) if row["capacity_bytes"] > 0 else 0,
-                        "write_count": row["write_count"],
-                        "read_count": row["read_count"],
-                        "load_count": row["load_count"],
-                        "health_score": row["health_score"],
-                        "first_use_date": row["first_use_date"].isoformat() if row["first_use_date"] else None,
-                        "last_erase_date": row["last_erase_date"].isoformat() if row["last_erase_date"] else None,
-                        "expiry_date": row["expiry_date"].isoformat() if row["expiry_date"] else None,
-                        "retention_months": row["retention_months"],
-                        "backup_set_count": row["backup_set_count"],
-                        "notes": row["notes"]
-                    })
-
-            return {
-                "success": True,
-                "tapes": tapes,
-                "count": len(tapes)
-            }
-        else:
-            # 使用统一的连接辅助函数（支持 psycopg2 和 psycopg3）- 用于其他数据库
-            from utils.db_connection_helper import get_psycopg_connection_from_url
-
-            conn, is_psycopg3 = get_psycopg_connection_from_url(database_url, prefer_psycopg3=True)
-
-            tapes = []
-            try:
-                with conn.cursor() as cur:
-                    # 查询所有磁带
-                    cur.execute("""
-                        SELECT
-                            tape_id, label, status, media_type, generation,
-                            serial_number, location, capacity_bytes, used_bytes,
-                            write_count, read_count, load_count, health_score,
-                            first_use_date, last_erase_date, expiry_date,
-                            retention_months, backup_set_count, notes
-                        FROM tape_cartridges
-                        ORDER BY tape_id
-                    """)
-
-                    rows = cur.fetchall()
-
-                    for row in rows:
-                        tapes.append({
-                            "tape_id": row[0],
-                            "label": row[1],
-                            "status": row[2] if isinstance(row[2], str) else row[2].value,
-                            "media_type": row[3],
-                            "generation": row[4],
-                            "serial_number": row[5],
-                            "location": row[6],
-                            "capacity_bytes": row[7],
-                            "used_bytes": row[8],
-                            "usage_percent": (row[8] / row[7] * 100) if row[7] > 0 else 0,
-                            "write_count": row[9],
-                            "read_count": row[10],
-                            "load_count": row[11],
-                            "health_score": row[12],
-                            "first_use_date": row[13].isoformat() if row[13] else None,
-                            "last_erase_date": row[14].isoformat() if row[14] else None,
-                            "expiry_date": row[15].isoformat() if row[15] else None,
-                            "retention_months": row[16],
-                            "backup_set_count": row[17],
-                            "notes": row[18]
-                        })
-            finally:
-                conn.close()
-            
         return {
             "success": True,
             "tapes": tapes,
             "count": len(tapes)
         }
-        
+
     except Exception as e:
         logger.error(f"获取磁带列表失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1090,44 +713,29 @@ async def get_tape_inventory(request: Request):
     """获取磁带库存统计（从数据库获取真实数据）"""
     start_time = datetime.now()
     try:
-        from config.settings import get_settings
         from datetime import date
-        from utils.scheduler.db_utils import is_redis
-        
-        settings = get_settings()
-        database_url = settings.DATABASE_URL
-        
-        # 检查是否为 Redis
-        if is_redis():
-            # Redis模式：使用Redis查询磁带库存
-            from backup.redis_tape_db import list_tapes_redis
-            
-            tapes_redis = await list_tapes_redis()
-            
-            total_tapes = len(tapes_redis)
-            available_tapes = sum(1 for t in tapes_redis if t.get('status', '').upper() == 'AVAILABLE')
-            in_use_tapes = sum(1 for t in tapes_redis if t.get('status', '').upper() == 'IN_USE')
-            full_tapes = sum(1 for t in tapes_redis if t.get('status', '').upper() == 'FULL')
-            # 计算过期磁带数量
-            expired_tapes = 0
-            for t in tapes_redis:
-                expiry = t.get('expiry_date')
-                if expiry:
-                    try:
-                        expiry_date = parse_expiry_date_for_inventory(expiry)
-                        if expiry_date and expiry_date < date.today():
-                            expired_tapes += 1
-                    except Exception:
-                        pass
-            error_tapes = sum(1 for t in tapes_redis if t.get('status', '').upper() == 'ERROR')
-            excellent_tapes = sum(1 for t in tapes_redis if (t.get('health_score') or 0) >= 80)
-            good_tapes = sum(1 for t in tapes_redis if 60 <= (t.get('health_score') or 0) < 80)
-            warning_tapes = sum(1 for t in tapes_redis if 40 <= (t.get('health_score') or 0) < 60)
-            critical_tapes = sum(1 for t in tapes_redis if (t.get('health_score') or 0) < 40)
-            total_capacity_bytes = sum(t.get('capacity_bytes', 0) or 0 for t in tapes_redis)
-            total_used_bytes = sum(t.get('used_bytes', 0) or 0 for t in tapes_redis)
+
+        # 使用openGauss连接查询磁带库存
+        async with get_opengauss_connection() as conn:
+            rows = await conn.fetch("SELECT * FROM tape_cartridges")
+
+            # 计算统计信息
+            from models.tape import TapeStatus
+
+            total_tapes = len(rows)
+            available_tapes = sum(1 for t in rows if t.get('status') == TapeStatus.AVAILABLE)
+            in_use_tapes = sum(1 for t in rows if t.get('status') == TapeStatus.IN_USE)
+            full_tapes = sum(1 for t in rows if t.get('status') == TapeStatus.FULL)
+            expired_tapes = sum(1 for t in rows if t.get('expiry_date') and t.get('expiry_date').date() < date.today())
+            error_tapes = sum(1 for t in rows if t.get('status') == TapeStatus.ERROR)
+            excellent_tapes = sum(1 for t in rows if (t.get('health_score') or 0) >= 80)
+            good_tapes = sum(1 for t in rows if 60 <= (t.get('health_score') or 0) < 80)
+            warning_tapes = sum(1 for t in rows if 40 <= (t.get('health_score') or 0) < 60)
+            critical_tapes = sum(1 for t in rows if (t.get('health_score') or 0) < 40)
+            total_capacity_bytes = sum(t.get('capacity_bytes') or 0 for t in rows)
+            total_used_bytes = sum(t.get('used_bytes') or 0 for t in rows)
             total_available_bytes = total_capacity_bytes - total_used_bytes
-            
+
             inventory = {
                 "total_tapes": total_tapes,
                 "available_tapes": available_tapes,
@@ -1144,209 +752,17 @@ async def get_tape_inventory(request: Request):
                 "total_available_bytes": total_available_bytes,
                 "usage_percent": (total_used_bytes / total_capacity_bytes * 100) if total_capacity_bytes > 0 else 0
             }
-            
-            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            await log_system(
-                level=LogLevel.INFO,
-                category=LogCategory.TAPE,
-                message=f"[Redis模式] 获取磁带库存统计成功: 总计 {total_tapes} 个磁带",
-                module="web.api.tape.crud",
-                function="get_tape_inventory",
-                duration_ms=duration_ms
-            )
-            return inventory
 
-        # 检查是否为 openGauss
-        if is_opengauss():
-            # 使用openGauss连接查询磁带库存
-            async with get_opengauss_connection() as conn:
-                rows = await conn.fetch("SELECT * FROM tape_cartridges")
-
-                # 计算统计信息
-                from models.tape import TapeStatus
-                from datetime import date
-
-                total_tapes = len(rows)
-                available_tapes = sum(1 for t in rows if t.get('status') == TapeStatus.AVAILABLE)
-                in_use_tapes = sum(1 for t in rows if t.get('status') == TapeStatus.IN_USE)
-                full_tapes = sum(1 for t in rows if t.get('status') == TapeStatus.FULL)
-                expired_tapes = sum(1 for t in rows if t.get('expiry_date') and t.get('expiry_date').date() < date.today())
-                error_tapes = sum(1 for t in rows if t.get('status') == TapeStatus.ERROR)
-                excellent_tapes = sum(1 for t in rows if (t.get('health_score') or 0) >= 80)
-                good_tapes = sum(1 for t in rows if 60 <= (t.get('health_score') or 0) < 80)
-                warning_tapes = sum(1 for t in rows if 40 <= (t.get('health_score') or 0) < 60)
-                critical_tapes = sum(1 for t in rows if (t.get('health_score') or 0) < 40)
-                total_capacity_bytes = sum(t.get('capacity_bytes') or 0 for t in rows)
-                total_used_bytes = sum(t.get('used_bytes') or 0 for t in rows)
-                total_available_bytes = total_capacity_bytes - total_used_bytes
-
-                inventory = {
-                    "total_tapes": total_tapes,
-                    "available_tapes": available_tapes,
-                    "in_use_tapes": in_use_tapes,
-                    "full_tapes": full_tapes,
-                    "expired_tapes": expired_tapes,
-                    "error_tapes": error_tapes,
-                    "excellent_tapes": excellent_tapes,
-                    "good_tapes": good_tapes,
-                    "warning_tapes": warning_tapes,
-                    "critical_tapes": critical_tapes,
-                    "total_capacity_bytes": total_capacity_bytes,
-                    "total_used_bytes": total_used_bytes,
-                    "total_available_bytes": total_available_bytes,
-                    "usage_percent": (total_used_bytes / total_capacity_bytes * 100) if total_capacity_bytes > 0 else 0
-                }
-
-            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            await log_system(
-                level=LogLevel.INFO,
-                category=LogCategory.TAPE,
-                message=f"[openGauss模式] 获取磁带库存统计成功: 总计 {total_tapes} 个磁带",
-                module="web.api.tape.crud",
-                function="get_tape_inventory",
-                duration_ms=duration_ms
-            )
-            return inventory
-
-        # 检查是否为 SQLite
-        is_sqlite = database_url.startswith("sqlite:///") or database_url.startswith("sqlite+aiosqlite:///")
-
-        if is_sqlite:
-            # 使用原生SQL查询 SQLite
-            
-            async with get_sqlite_connection() as conn:
-                cursor = await conn.execute("SELECT * FROM tape_cartridges")
-                rows = await cursor.fetchall()
-                columns = [desc[0] for desc in cursor.description] if cursor.description else []
-                tapes = [dict(zip(columns, row)) for row in rows]
-                
-                # 计算统计信息
-                from models.tape import TapeStatus
-                from datetime import date
-                
-                total_tapes = len(tapes)
-                available_tapes = sum(1 for t in tapes if (t.get('status') == TapeStatus.AVAILABLE.value if isinstance(t.get('status'), str) else t.get('status') == TapeStatus.AVAILABLE))
-                in_use_tapes = sum(1 for t in tapes if (t.get('status') == TapeStatus.IN_USE.value if isinstance(t.get('status'), str) else t.get('status') == TapeStatus.IN_USE))
-                full_tapes = sum(1 for t in tapes if (t.get('status') == TapeStatus.FULL.value if isinstance(t.get('status'), str) else t.get('status') == TapeStatus.FULL))
-                expired_tapes = sum(1 for t in tapes if t.get('expiry_date') and (t.get('expiry_date').date() if hasattr(t.get('expiry_date'), 'date') else date.fromisoformat(str(t.get('expiry_date'))[:10])) < date.today())
-                error_tapes = sum(1 for t in tapes if (t.get('status') == TapeStatus.ERROR.value if isinstance(t.get('status'), str) else t.get('status') == TapeStatus.ERROR))
-                excellent_tapes = sum(1 for t in tapes if (t.get('health_score') or 0) >= 80)
-                good_tapes = sum(1 for t in tapes if 60 <= (t.get('health_score') or 0) < 80)
-                warning_tapes = sum(1 for t in tapes if 40 <= (t.get('health_score') or 0) < 60)
-                critical_tapes = sum(1 for t in tapes if (t.get('health_score') or 0) < 40)
-                total_capacity_bytes = sum(t.get('capacity_bytes') or 0 for t in tapes)
-                total_used_bytes = sum(t.get('used_bytes') or 0 for t in tapes)
-                total_available_bytes = total_capacity_bytes - total_used_bytes
-                
-                inventory = {
-                    "total_tapes": total_tapes,
-                    "available_tapes": available_tapes,
-                    "in_use_tapes": in_use_tapes,
-                    "full_tapes": full_tapes,
-                    "expired_tapes": expired_tapes,
-                    "error_tapes": error_tapes,
-                    "excellent_tapes": excellent_tapes,
-                    "good_tapes": good_tapes,
-                    "warning_tapes": warning_tapes,
-                    "critical_tapes": critical_tapes,
-                    "total_capacity_bytes": total_capacity_bytes,
-                    "total_used_bytes": total_used_bytes,
-                    "total_available_bytes": total_available_bytes,
-                    "usage_percent": (total_used_bytes / total_capacity_bytes * 100) if total_capacity_bytes > 0 else 0
-                }
-
-            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-            await log_system(
-                level=LogLevel.INFO,
-                category=LogCategory.TAPE,
-                message=f"[SQLite模式] 获取磁带库存统计成功: 总计 {total_tapes} 个磁带",
-                module="web.api.tape.crud",
-                function="get_tape_inventory",
-                duration_ms=duration_ms
-            )
-            return inventory
-        else:
-            # 使用统一的连接辅助函数（支持 psycopg2 和 psycopg3）
-            from utils.db_connection_helper import get_psycopg_connection_from_url
-            
-            conn, is_psycopg3 = get_psycopg_connection_from_url(database_url, prefer_psycopg3=True)
-            
-            try:
-                with conn.cursor() as cur:
-                    # 从数据库获取真实统计数据
-                    # 注意：available_tapes 只统计 AVAILABLE 状态，排除 MAINTENANCE（格式化中）状态
-                    cur.execute("""
-                        SELECT 
-                            COUNT(*) as total_tapes,
-                            COUNT(*) FILTER (WHERE status = 'AVAILABLE') as available_tapes,
-                            COUNT(*) FILTER (WHERE status = 'IN_USE') as in_use_tapes,
-                            COUNT(*) FILTER (WHERE status = 'FULL') as full_tapes,
-                            COUNT(*) FILTER (WHERE expiry_date < CURRENT_DATE) as expired_tapes,
-                            COUNT(*) FILTER (WHERE status = 'ERROR') as error_tapes,
-                            COUNT(*) FILTER (WHERE health_score >= 80) as excellent_tapes,
-                            COUNT(*) FILTER (WHERE health_score >= 60 AND health_score < 80) as good_tapes,
-                            COUNT(*) FILTER (WHERE health_score >= 40 AND health_score < 60) as warning_tapes,
-                            COUNT(*) FILTER (WHERE health_score < 40) as critical_tapes,
-                            COALESCE(SUM(capacity_bytes), 0) as total_capacity_bytes,
-                            COALESCE(SUM(used_bytes), 0) as total_used_bytes
-                        FROM tape_cartridges
-                    """)
-                    
-                    row = cur.fetchone()
-                    
-                    if row:
-                        total_capacity_bytes = row[10] or 0
-                        total_used_bytes = row[11] or 0
-                        total_available_bytes = total_capacity_bytes - total_used_bytes
-                        
-                        inventory = {
-                            "total_tapes": row[0] or 0,
-                            "available_tapes": row[1] or 0,
-                            "in_use_tapes": row[2] or 0,
-                            "full_tapes": row[3] or 0,
-                            "expired_tapes": row[4] or 0,
-                            "error_tapes": row[5] or 0,
-                            "excellent_tapes": row[6] or 0,
-                            "good_tapes": row[7] or 0,
-                            "warning_tapes": row[8] or 0,
-                            "critical_tapes": row[9] or 0,
-                            "total_capacity_bytes": total_capacity_bytes,
-                            "total_used_bytes": total_used_bytes,
-                            "total_available_bytes": total_available_bytes,
-                            "usage_percent": (total_used_bytes / total_capacity_bytes * 100) if total_capacity_bytes > 0 else 0
-                        }
-                    else:
-                        # 如果没有数据，返回空统计
-                        inventory = {
-                            "total_tapes": 0,
-                            "available_tapes": 0,
-                            "in_use_tapes": 0,
-                            "full_tapes": 0,
-                            "expired_tapes": 0,
-                            "error_tapes": 0,
-                            "excellent_tapes": 0,
-                            "good_tapes": 0,
-                            "warning_tapes": 0,
-                            "critical_tapes": 0,
-                            "total_capacity_bytes": 0,
-                            "total_used_bytes": 0,
-                            "total_available_bytes": 0,
-                            "usage_percent": 0
-                        }
-            
-            finally:
-                conn.close()
-        
         duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
         await log_system(
             level=LogLevel.INFO,
             category=LogCategory.TAPE,
-            message=f"获取磁带库存统计成功: 总计 {inventory['total_tapes']} 个磁带",
+            message=f"获取磁带库存统计成功: 总计 {total_tapes} 个磁带",
             module="web.api.tape.crud",
             function="get_tape_inventory",
             duration_ms=duration_ms
         )
-        
+
         return inventory
 
     except Exception as e:

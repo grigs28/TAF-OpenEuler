@@ -25,49 +25,27 @@ async def get_database_config():
     try:
         from config.settings import get_settings
         settings = get_settings()
-        
-        # 解析当前数据库URL，仅支持 sqlite（本地内存/文件）和 openGauss
+
         db_url = settings.DATABASE_URL or ""
         db_info = {
-            "db_type": "sqlite",
+            "db_type": "opengauss",
             "pool_size": settings.DB_POOL_SIZE,
             "max_overflow": settings.DB_MAX_OVERFLOW,
-            "query_dop": getattr(settings, 'DB_QUERY_DOP', 16)  # openGauss 查询并行度
+            "query_dop": getattr(settings, 'DB_QUERY_DOP', 16),
+            # openGauss 连接参数
+            "db_host": settings.DB_HOST,
+            "db_port": settings.DB_PORT,
+            "db_user": settings.DB_USER,
+            "db_database": settings.DB_DATABASE,
+            "db_password": settings.DB_PASSWORD or ""
         }
 
-        # 优先使用 DB_FLAVOR 配置获取数据库类型
-        db_flavor = getattr(settings, 'DB_FLAVOR', None)
-        if db_flavor and db_flavor.lower() in ("sqlite", "opengauss"):
-            db_info["db_type"] = db_flavor.lower()
-        # 否则从 DATABASE_URL 推断数据库类型
-        elif db_url.startswith("opengauss://"):
-            db_info["db_type"] = "opengauss"
-        else:
-            # 其他情况一律按 sqlite 处理（本地内存/文件数据库）
-            db_info["db_type"] = "sqlite"
-
-        # 根据数据库类型设置相应参数
-        if db_info["db_type"] == "sqlite":
-            # SQLite 数据库路径（内存/文件均可）
-            if db_url.startswith("sqlite:///"):
-                db_info["db_path"] = db_url.replace("sqlite:///", "")
-            else:
-                db_info["db_path"] = "./data/backup_system.db"
-        else:
-            # openGauss 连接参数
-            db_info["db_host"] = settings.DB_HOST
-            db_info["db_port"] = settings.DB_PORT
-            db_info["db_user"] = settings.DB_USER
-            db_info["db_database"] = settings.DB_DATABASE
-            db_info["db_password"] = settings.DB_PASSWORD or ""  # 添加密码字段，如果为空则返回空字符串
-        
         return db_info
-        
+
     except Exception as e:
         logger.error(f"获取数据库配置失败: {str(e)}")
         return {
-            "db_type": "sqlite",
-            "db_path": "./data/backup_system.db",
+            "db_type": "opengauss",
             "pool_size": 10,
             "max_overflow": 20
         }
@@ -78,36 +56,32 @@ async def test_database_connection(config: DatabaseConfig):
     """测试数据库连接"""
     try:
         from config.database import DatabaseManager
-        
-        # 构建数据库URL
-        if config.db_type == "sqlite":
-            if not config.db_path:
-                raise ValueError("SQLite数据库需要指定路径")
-            db_url = f"sqlite:///{config.db_path}"
-        elif config.db_type == "opengauss":
+
+        # 构建 openGauss 数据库URL
+        if config.db_type == "opengauss":
             if not all([config.db_host, config.db_port, config.db_user, config.db_database]):
                 raise ValueError("openGauss 数据库需要完整的连接参数")
             # 将 opengauss URL 显式写为 opengauss 协议，后续在 DatabaseManager 内部转换为 postgresql 以兼容驱动
             db_url = f"opengauss://{config.db_user}:{config.db_password}@{config.db_host}:{config.db_port}/{config.db_database}"
         else:
             raise ValueError(f"不支持的数据库类型: {config.db_type}")
-        
-        # 仅支持 sqlite 和 openGauss，统一通过 DatabaseManager 测试
+
+        # 通过 DatabaseManager 测试
         temp_db = DatabaseManager()
         # 手动设置URL进行测试
         temp_db.settings.DATABASE_URL = db_url
         temp_db.settings.DB_POOL_SIZE = config.pool_size
         temp_db.settings.DB_MAX_OVERFLOW = config.max_overflow
-        
+
         # 尝试初始化连接
         await temp_db.initialize()
-        
+
         # 测试查询
         success = await temp_db.health_check()
-        
+
         # 关闭连接
         await temp_db.close()
-        
+
         if success:
             return {
                 "success": True,
@@ -119,7 +93,7 @@ async def test_database_connection(config: DatabaseConfig):
                 "success": False,
                 "message": "数据库连接测试失败"
             }
-            
+
     except Exception as e:
         logger.error(f"测试数据库连接失败: {str(e)}")
         return {
@@ -143,7 +117,7 @@ async def update_database_config(config: DatabaseConfig, request: Request):
         # 获取当前配置，用于填充缺失的密码和记录旧值
         current_settings = get_settings()
         old_values = {
-            "db_type": "sqlite" if current_settings.DATABASE_URL.startswith("sqlite") else "opengauss",
+            "db_type": "opengauss",
             "db_host": current_settings.DB_HOST or "",
             "db_port": current_settings.DB_PORT or 0,
             "db_user": current_settings.DB_USER or "",
@@ -151,17 +125,11 @@ async def update_database_config(config: DatabaseConfig, request: Request):
             "pool_size": current_settings.DB_POOL_SIZE,
             "max_overflow": current_settings.DB_MAX_OVERFLOW
         }
-        
+
         logger.info(f"更新数据库配置: type={config.db_type}, host={config.db_host}, user={config.db_user}")
-        
+
         # 验证配置
-        if config.db_type == "sqlite":
-            if not config.db_path:
-                raise ValueError("SQLite数据库需要指定路径")
-            # 创建目录
-            Path(config.db_path).parent.mkdir(parents=True, exist_ok=True)
-            db_url = f"sqlite:///{config.db_path}"
-        elif config.db_type == "opengauss":
+        if config.db_type == "opengauss":
             # 如果密码为空，使用当前配置的密码
             if not config.db_password:
                 # 从当前URL提取密码
@@ -202,7 +170,7 @@ async def update_database_config(config: DatabaseConfig, request: Request):
         # 构建更新字典
         updates = {
             "DATABASE_URL": db_url,
-            "DB_FLAVOR": config.db_type,  # 保存数据库类型（仅 sqlite / opengauss）
+            "DB_FLAVOR": "opengauss",
             "DB_HOST": config.db_host or "",
             "DB_PORT": str(config.db_port or ""),
             "DB_USER": config.db_user or "",
@@ -211,10 +179,7 @@ async def update_database_config(config: DatabaseConfig, request: Request):
             "DB_POOL_SIZE": str(config.pool_size),
             "DB_MAX_OVERFLOW": str(config.max_overflow)
         }
-        
-        # 仅保留 sqlite / opengauss，清除 Redis 特有配置
-        updates["DB_INDEX"] = ""
-        updates["REDIS_CONFIG_FILE_PATH"] = ""
+
         # openGauss/PostgreSQL特有配置：查询并行度（配置项保存在 .env 中，供连接池使用）
         # 从当前配置获取 query_dop，如果没有则使用默认值 16
         query_dop = getattr(current_settings, 'DB_QUERY_DOP', 16)
@@ -340,26 +305,6 @@ async def update_database_config(config: DatabaseConfig, request: Request):
         raise HTTPException(status_code=500, detail=error_msg)
 
 
-@router.get("/database/redis/config-file")
-async def get_redis_config_file():
-    """获取Redis配置文件路径"""
-    try:
-        from config.redis_db import get_redis_config_file_path
-        config_file_path = get_redis_config_file_path()
-        return {
-            "success": True,
-            "config_file_path": config_file_path,
-            "message": "配置文件路径获取成功" if config_file_path else "未找到Redis配置文件"
-        }
-    except Exception as e:
-        logger.error(f"获取Redis配置文件路径失败: {str(e)}")
-        return {
-            "success": False,
-            "config_file_path": None,
-            "message": f"获取配置文件路径失败: {str(e)}"
-        }
-
-
 @router.get("/database/status")
 async def get_database_status(request: Request):
     """获取数据库状态"""
@@ -379,28 +324,15 @@ async def get_database_status(request: Request):
         
         db_info = {
             "status": "online" if db_healthy else "offline",
-            "db_type": "unknown",
+            "db_type": "openGauss",
             "pool_size": settings.DB_POOL_SIZE,
-            "max_overflow": settings.DB_MAX_OVERFLOW
+            "max_overflow": settings.DB_MAX_OVERFLOW,
+            "db_host": settings.DB_HOST,
+            "db_port": settings.DB_PORT,
+            "db_user": settings.DB_USER,
+            "db_database": settings.DB_DATABASE
         }
-        
-        # 解析数据库类型
-        db_url = settings.DATABASE_URL
-        db_flavor = getattr(settings, 'DB_FLAVOR', None)
-        if db_flavor and db_flavor.lower() == "redis":
-            db_info["db_type"] = "Redis"
-        elif db_url.startswith("redis://") or db_url.startswith("rediss://"):
-            db_info["db_type"] = "Redis"
-        elif db_url.startswith("sqlite"):
-            db_info["db_type"] = "SQLite"
-            db_info["db_path"] = db_url.replace("sqlite:///", "")
-        elif db_url.startswith("opengauss://"):
-            db_info["db_type"] = "openGauss"
-        elif db_url.startswith("postgresql://"):
-            # 需要检查是否是从opengauss转换来的
-            # 通过检查DB_HOST等参数是否匹配来判断
-            db_info["db_type"] = "PostgreSQL"
-        
+
         return db_info
         
     except Exception as e:

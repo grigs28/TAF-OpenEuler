@@ -264,319 +264,6 @@ class BatchDBWriter:
         else:
             logger.info(f"当前仅支持 openGauss，跳过批量写入 {len(file_batch)} 个文件")
 
-    async def _process_batch_redis(self, file_batch: List[Dict]):
-        """处理一个文件批次（Redis版本，优化10000条记录写入速度）"""
-        from config.redis_db import get_redis_client
-        from backup.redis_backup_db import (
-            KEY_PREFIX_BACKUP_FILE, KEY_INDEX_BACKUP_FILES,
-            KEY_INDEX_BACKUP_FILE_BY_SET_ID, _get_redis_key
-        )
-        from backup.redis_backup_db import KEY_COUNTER_BACKUP_FILE
-        import json as json_module
-        from datetime import timezone
-        import time
-
-        if not file_batch:
-            return
-
-        batch_start_time = time.time()
-        
-        try:
-            redis = await get_redis_client()
-            
-            # ========== 优化阶段1：快速分类文件（仅查缓存）==========
-            step1_start = time.time()
-            
-            # 预先提取所有文件路径和构建映射（减少循环）
-            batch_file_paths = []
-            file_info_map = {}
-            for file_info in file_batch:
-                file_path = file_info.get('path', '')
-                if file_path:
-                    batch_file_paths.append(file_path)
-                    file_info_map[file_path] = file_info
-            
-            # 只检查缓存，不查询Redis（第一次扫描时都是新文件，缓存为空）
-            existing_file_paths = {}
-            new_file_paths = []
-            
-            for file_path in batch_file_paths:
-                if file_path in self._file_path_cache:
-                    existing_file_paths[file_path] = self._file_path_cache[file_path]
-                else:
-                    new_file_paths.append(file_path)
-            
-            step1_time = time.time() - step1_start
-            
-            # ========== 优化阶段2：批量检查已复制文件（仅检查已存在的）==========
-            skipped_paths = set()
-            
-            if existing_file_paths:
-                step_check_start = time.time()
-                check_pipe = redis.pipeline()
-                check_items = []
-                
-                for file_path, file_id in existing_file_paths.items():
-                    file_key = _get_redis_key(KEY_PREFIX_BACKUP_FILE, file_id)
-                    check_pipe.hget(file_key, 'is_copy_success')
-                    check_items.append(file_path)
-                
-                copy_status_results = await check_pipe.execute()
-                step_check_time = time.time() - step_check_start
-                
-                # 过滤已成功复制的文件
-                for file_path, is_copy_success in zip(check_items, copy_status_results):
-                    if is_copy_success in ('1', 'True', 'true'):
-                        skipped_paths.add(file_path)
-                        # 从待处理列表中移除
-                        existing_file_paths.pop(file_path, None)
-            
-            # ========== 优化阶段3：预先准备基础数据（减少重复计算）==========
-            current_time = datetime.now()
-            current_time_tz = current_time.replace(tzinfo=timezone.utc)
-            
-            # 过滤出需要插入的新文件（排除已跳过的）
-            actual_new_file_paths = [p for p in new_file_paths if p not in skipped_paths]
-            new_file_count = len(actual_new_file_paths)
-            new_file_ids = []
-            
-            # ========== 优化阶段4：合并ID获取和数据准备（减少循环次数）==========
-            step_prep_start = time.time()
-            
-            # 关键优化：使用INCRBY批量获取ID范围（只需1次网络往返）
-            if new_file_count > 0:
-                step_id_start = time.time()
-                # 使用INCRBY一次性获取ID范围（原子操作，1次网络往返）
-                # 先获取起始ID
-                start_id = await redis.incr(KEY_COUNTER_BACKUP_FILE)
-                # 如果批量大于1，继续递增计数器获取剩余ID
-                if new_file_count > 1:
-                    # 使用INCRBY一次性增加 (new_file_count - 1)，因为第一个ID已经通过INCR获取
-                    await redis.incrby(KEY_COUNTER_BACKUP_FILE, new_file_count - 1)
-                # 生成ID列表：start_id 到 start_id + new_file_count - 1
-                new_file_ids = list(range(start_id, start_id + new_file_count))
-                step_id_time = time.time() - step_id_start
-            else:
-                step_id_time = 0
-                new_file_ids = []
-            
-            insert_items = []
-            update_operations = []
-            file_id_index = 0
-            set_index_key = f"{KEY_INDEX_BACKUP_FILE_BY_SET_ID}:{self.backup_set_db_id}"
-            
-            # 预先准备插入数据（只处理实际需要插入的新文件）
-            # 优化：使用列表推导式和预计算来减少循环开销
-            for file_path in actual_new_file_paths:
-                file_info = file_info_map[file_path]
-                file_stat = file_info.get('file_stat')
-                
-                # 文件大小提取（优化：减少条件判断）
-                file_size = (
-                    int(file_info['size'])
-                    if 'size' in file_info and file_info.get('size') is not None
-                    else (file_stat.st_size if file_stat and hasattr(file_stat, 'st_size') else 0)
-                )
-                
-                file_name = file_info.get('name') or Path(file_path).name
-                metadata = file_info.get('file_metadata') or {}
-                metadata.update({'scanned_at': current_time.isoformat()})
-                
-                file_id = new_file_ids[file_id_index]
-                file_id_index += 1
-                file_key = _get_redis_key(KEY_PREFIX_BACKUP_FILE, file_id)
-                
-                # 预先计算时间字段（避免在循环中重复计算）
-                created_time_str = (
-                    datetime.fromtimestamp(file_stat.st_ctime, tz=timezone.utc).isoformat()
-                    if file_stat and hasattr(file_stat, 'st_ctime')
-                    else ''
-                )
-                modified_time_str = (
-                    datetime.fromtimestamp(file_stat.st_mtime, tz=timezone.utc).isoformat()
-                    if file_stat and hasattr(file_stat, 'st_mtime')
-                    else ''
-                )
-                accessed_time_str = (
-                    datetime.fromtimestamp(file_stat.st_atime, tz=timezone.utc).isoformat()
-                    if file_stat and hasattr(file_stat, 'st_atime')
-                    else ''
-                )
-                permissions_str = (
-                    oct(file_stat.st_mode)[-3:]
-                    if file_stat and hasattr(file_stat, 'st_mode')
-                    else ''
-                )
-                
-                insert_mapping = {
-                    'backup_set_id': str(self.backup_set_db_id),
-                    'file_path': file_path,
-                    'file_name': file_name,
-                    'file_type': 'file',
-                    'file_size': str(file_size),
-                    'compressed_size': '',
-                    'file_permissions': permissions_str,
-                    'created_time': created_time_str,
-                    'modified_time': modified_time_str,
-                    'accessed_time': accessed_time_str,
-                    'compressed': '0',
-                    'checksum': '',
-                    'backup_time': current_time_tz.isoformat(),
-                    'chunk_number': '',
-                    'tape_block_start': '',
-                    'file_metadata': json_module.dumps(metadata),
-                    'is_copy_success': '0',
-                    'copy_status_at': ''
-                }
-                
-                insert_items.append((file_key, file_id, file_path, insert_mapping))
-            
-            # 预先准备更新数据
-            for file_path, file_id in existing_file_paths.items():
-                if file_path in skipped_paths:
-                    continue
-                
-                file_info = file_info_map[file_path]
-                file_stat = file_info.get('file_stat')
-                
-                # 文件大小提取（优化）
-                file_size = (
-                    int(file_info['size'])
-                    if 'size' in file_info and file_info.get('size') is not None
-                    else (file_stat.st_size if file_stat and hasattr(file_stat, 'st_size') else 0)
-                )
-                
-                file_name = file_info.get('name') or Path(file_path).name
-                metadata = file_info.get('file_metadata') or {}
-                metadata.update({'scanned_at': current_time.isoformat()})
-                
-                file_key = _get_redis_key(KEY_PREFIX_BACKUP_FILE, file_id)
-                
-                # 时间字段预处理
-                modified_time_str = (
-                    datetime.fromtimestamp(file_stat.st_mtime, tz=timezone.utc).isoformat()
-                    if file_stat and hasattr(file_stat, 'st_mtime')
-                    else ''
-                )
-                permissions_str = (
-                    oct(file_stat.st_mode)[-3:]
-                    if file_stat and hasattr(file_stat, 'st_mode')
-                    else ''
-                )
-                
-                update_mapping = {
-                    'file_name': file_name,
-                    'file_size': str(file_size),
-                    'file_permissions': permissions_str,
-                    'modified_time': modified_time_str,
-                    'file_metadata': json_module.dumps(metadata),
-                    'updated_at': current_time.isoformat()
-                }
-                
-                update_operations.append((file_key, update_mapping))
-            
-            step_prep_time = time.time() - step_prep_start
-            
-            # ========== 优化阶段5：分批执行操作（避免Pipeline过大导致Redis处理慢）==========
-            if insert_items or update_operations:
-                step_exec_start = time.time()
-                
-                from backup.redis_backup_db import KEY_INDEX_BACKUP_FILES, KEY_INDEX_BACKUP_FILE_BY_PATH, KEY_INDEX_BACKUP_FILE_PENDING
-                
-                # 关键优化：分批执行Pipeline，避免单个Pipeline过大导致Redis处理慢
-                # 每批最多5000个文件，避免Pipeline超过20000个命令（Redis处理会变慢）
-                pipeline_batch_size = 5000
-                total_inserted = 0
-                total_updated = 0
-                
-                # 准备路径索引的批量更新（所有文件一起更新，减少操作数）
-                path_index_key = f"{KEY_INDEX_BACKUP_FILE_BY_PATH}:{self.backup_set_db_id}"
-                path_index_mapping = {}  # {file_path: file_id}
-                
-                # 分批处理插入操作
-                for i in range(0, len(insert_items), pipeline_batch_size):
-                    batch_insert_items = insert_items[i:i + pipeline_batch_size]
-                    
-                    # 构建Pipeline（分批执行，避免单个Pipeline过大）
-                    pipe = redis.pipeline()
-                    
-                    # 收集文件ID和路径（用于批量更新索引）
-                    file_ids_for_index = []
-                    
-                    for file_key, file_id, file_path, insert_mapping in batch_insert_items:
-                        # 插入Hash（使用mapping参数，一次性设置多个字段）
-                        pipe.hset(file_key, mapping=insert_mapping)
-                        file_ids_for_index.append((str(file_id), file_path))
-                        path_index_mapping[file_path] = str(file_id)
-                        # 更新缓存（内存操作，不占用网络）
-                        self._file_path_cache[file_path] = file_id
-                    
-                    # 批量添加到全局索引（一次性添加多个成员，减少操作数）
-                    if file_ids_for_index:
-                        file_ids_str = [fid for fid, _ in file_ids_for_index]
-                        # Redis的SADD可以一次添加多个成员（但redis-py需要逐个调用，所以使用循环）
-                        # 优化：先收集所有文件ID，然后一次性批量添加
-                        pipe.sadd(KEY_INDEX_BACKUP_FILES, *file_ids_str)
-                        pipe.sadd(set_index_key, *file_ids_str)
-                        
-                        # 阶段1优化：维护未压缩文件索引（Sorted Set，使用文件大小作为score）
-                        # 所有新插入的文件默认都是未压缩的（is_copy_success='0'）
-                        pending_index_key = f"{KEY_INDEX_BACKUP_FILE_PENDING}:{self.backup_set_db_id}"
-                        pending_items = {}  # {file_id: file_size} 用于ZADD批量添加
-                        for file_key, file_id, file_path, insert_mapping in batch_insert_items:
-                            # 从insert_mapping获取file_size
-                            file_size_str = insert_mapping.get('file_size', '0')
-                            try:
-                                file_size = int(file_size_str) if file_size_str else 0
-                                if file_size > 0:  # 只添加有效的文件大小
-                                    pending_items[str(file_id)] = file_size
-                            except (ValueError, TypeError):
-                                pass
-                        if pending_items:
-                            pipe.zadd(pending_index_key, pending_items)
-                    
-                    # 执行当前批次的Pipeline
-                    await pipe.execute()
-                    total_inserted += len(batch_insert_items)
-                
-                # 批量更新路径索引（所有文件一起更新，大幅减少操作数）
-                if path_index_mapping:
-                    # 使用HMSET批量设置路径索引（一次性设置多个字段）
-                    await redis.hset(path_index_key, mapping=path_index_mapping)
-                
-                # 分批处理更新操作
-                for i in range(0, len(update_operations), pipeline_batch_size):
-                    batch_update_ops = update_operations[i:i + pipeline_batch_size]
-                    
-                    pipe = redis.pipeline()
-                    for file_key, update_mapping in batch_update_ops:
-                        pipe.hset(file_key, mapping=update_mapping)
-                    
-                    await pipe.execute()
-                    total_updated += len(batch_update_ops)
-                
-                step_exec_time = time.time() - step_exec_start
-                
-                # 性能日志（优化：只记录关键信息）
-                total_time = time.time() - batch_start_time
-                avg_speed = len(file_batch) / total_time if total_time > 0 else float('inf')
-                
-                # 只记录关键信息（INFO级别）
-                if total_time > 0.5 or len(file_batch) >= 1000:  # 耗时超过0.5秒或批次大于1000时记录
-                    logger.info(
-                        f"[Redis批量写入] 批次: {len(file_batch)} 个文件，"
-                        f"插入={total_inserted}，更新={total_updated}，"
-                        f"总耗时={total_time*1000:.1f}ms，速度={avg_speed:.0f} 个/秒"
-                    )
-                else:
-                    logger.debug(
-                        f"[Redis批量写入] 批次: {len(file_batch)} 个文件，"
-                        f"插入={total_inserted}，更新={total_updated}，"
-                        f"总耗时={total_time*1000:.1f}ms，速度={avg_speed:.0f} 个/秒"
-                    )
-        except Exception as e:
-            logger.error(f"[Redis模式] 批量处理文件失败: {str(e)}", exc_info=True)
-
     def _build_file_record_fields(self, file_info: Dict) -> Dict[str, Any]:
         """根据扫描器数据构建与 backup_files 表一致的字段"""
 
@@ -1250,10 +937,6 @@ class BackupDB:
                         )
                     else:
                         raise RuntimeError(f"备份集插入后查询失败: {set_id}")
-            else:
-                # SQLite 版本
-                from backup.sqlite_backup_db import create_backup_set_sqlite
-                backup_set = await create_backup_set_sqlite(backup_task, tape)
 
             backup_task.backup_set_id = set_id
             logger.info(f"创建备份集: {set_id}")
@@ -1280,70 +963,61 @@ class BackupDB:
             backup_set.chunk_count = 1  # 简化处理
 
             # 保存更新 - 使用原生 openGauss SQL
-            from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-            
-            if is_redis():
-                # Redis 版本
-                from backup.redis_backup_db import finalize_backup_set_redis
-                await finalize_backup_set_redis(backup_set, file_count, total_size)
-            elif is_opengauss():
-                # 使用连接池
-                async with get_opengauss_connection() as conn:
+            from utils.scheduler.db_utils import get_opengauss_connection
+
+            # 使用连接池
+            async with get_opengauss_connection() as conn:
+                try:
+                    await conn.execute(
+                        """
+                        UPDATE backup_sets
+                        SET total_files = $1,
+                            total_bytes = $2,
+                            compressed_bytes = $3,
+                            compression_ratio = $4,
+                            chunk_count = $5,
+                            updated_at = $6
+                        WHERE set_id = $7
+                        """,
+                        file_count,
+                        total_size,
+                        total_size,
+                        backup_set.compression_ratio,
+                        backup_set.chunk_count,
+                        datetime.now(),
+                        backup_set.set_id
+                    )
+
+                    # 显式提交事务（psycopg3 binary protocol 需要显式提交）
+                    await conn.commit()
+
+                    # 验证事务提交状态
+                    actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+                    if hasattr(actual_conn, 'info'):
+                        transaction_status = actual_conn.info.transaction_status
+                        if transaction_status == 0:  # IDLE: 事务成功提交
+                            logger.debug(f"finalize_backup_set: 事务已提交（set_id={backup_set.set_id}）")
+                        elif transaction_status == 1:  # INTRANS: 事务未提交
+                            logger.warning(f"finalize_backup_set: ⚠️ 事务未提交，状态={transaction_status}，尝试回滚")
+                            await actual_conn.rollback()
+                            raise Exception("事务提交失败")
+                        elif transaction_status == 3:  # INERROR: 错误状态
+                            logger.error(f"finalize_backup_set: ❌ 连接处于错误状态，回滚事务")
+                            await actual_conn.rollback()
+                            raise Exception("连接处于错误状态")
+                except Exception as db_error:
+                    # 异常时显式回滚，避免长事务锁表
+                    logger.error(f"finalize_backup_set: 数据库操作失败: {str(db_error)}", exc_info=True)
                     try:
-                        await conn.execute(
-                            """
-                            UPDATE backup_sets
-                            SET total_files = $1,
-                                total_bytes = $2,
-                                compressed_bytes = $3,
-                                compression_ratio = $4,
-                                chunk_count = $5,
-                                updated_at = $6
-                            WHERE set_id = $7
-                            """,
-                            file_count,
-                            total_size,
-                            total_size,
-                            backup_set.compression_ratio,
-                            backup_set.chunk_count,
-                            datetime.now(),
-                            backup_set.set_id
-                        )
-                        
-                        # 显式提交事务（psycopg3 binary protocol 需要显式提交）
-                        await conn.commit()
-                        
-                        # 验证事务提交状态
                         actual_conn = conn._conn if hasattr(conn, '_conn') else conn
                         if hasattr(actual_conn, 'info'):
                             transaction_status = actual_conn.info.transaction_status
-                            if transaction_status == 0:  # IDLE: 事务成功提交
-                                logger.debug(f"finalize_backup_set: 事务已提交（set_id={backup_set.set_id}）")
-                            elif transaction_status == 1:  # INTRANS: 事务未提交
-                                logger.warning(f"finalize_backup_set: ⚠️ 事务未提交，状态={transaction_status}，尝试回滚")
+                            if transaction_status in (1, 3):  # INTRANS or INERROR
                                 await actual_conn.rollback()
-                                raise Exception("事务提交失败")
-                            elif transaction_status == 3:  # INERROR: 错误状态
-                                logger.error(f"finalize_backup_set: ❌ 连接处于错误状态，回滚事务")
-                                await actual_conn.rollback()
-                                raise Exception("连接处于错误状态")
-                    except Exception as db_error:
-                        # 异常时显式回滚，避免长事务锁表
-                        logger.error(f"finalize_backup_set: 数据库操作失败: {str(db_error)}", exc_info=True)
-                        try:
-                            actual_conn = conn._conn if hasattr(conn, '_conn') else conn
-                            if hasattr(actual_conn, 'info'):
-                                transaction_status = actual_conn.info.transaction_status
-                                if transaction_status in (1, 3):  # INTRANS or INERROR
-                                    await actual_conn.rollback()
-                                    logger.debug(f"finalize_backup_set: 异常时事务已回滚（set_id={backup_set.set_id}）")
-                        except Exception as rollback_err:
-                            logger.warning(f"finalize_backup_set: 回滚事务失败: {str(rollback_err)}")
-                        raise  # 重新抛出异常
-            else:
-                # SQLite 版本：使用原生 SQL
-                from backup.sqlite_backup_db import finalize_backup_set_sqlite
-                await finalize_backup_set_sqlite(backup_set, file_count, total_size)
+                                logger.debug(f"finalize_backup_set: 异常时事务已回滚（set_id={backup_set.set_id}）")
+                    except Exception as rollback_err:
+                        logger.warning(f"finalize_backup_set: 回滚事务失败: {str(rollback_err)}")
+                    raise  # 重新抛出异常
 
             logger.info(f"备份集完成: {backup_set.set_id}")
 
@@ -1813,45 +1487,36 @@ class BackupDB:
 
     async def get_backup_set_by_set_id(self, set_id: str) -> Optional[BackupSet]:
         """根据 set_id 获取备份集"""
-        from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
+        from utils.scheduler.db_utils import get_opengauss_connection
         if not set_id:
             return None
-        
-        if is_redis():
-            # Redis 版本
-            from backup.redis_backup_db import get_backup_set_by_set_id_redis
-            return await get_backup_set_by_set_id_redis(set_id)
-        elif is_opengauss():
-            async with get_opengauss_connection() as conn:
+
+        async with get_opengauss_connection() as conn:
+            try:
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, set_id, set_name, backup_group, status, backup_task_id,
+                           tape_id, backup_type, backup_time, total_files, total_bytes,
+                           compressed_bytes, compression_ratio, chunk_count, created_at,
+                           updated_at
+                    FROM backup_sets
+                    WHERE set_id = $1
+                    """,
+                    set_id
+                )
+            except Exception as e:
+                # 异常时回滚，确保连接处于干净状态
+                logger.error(f"get_backup_set_by_set_id: 查询失败: {str(e)}", exc_info=True)
                 try:
-                    row = await conn.fetchrow(
-                        """
-                        SELECT id, set_id, set_name, backup_group, status, backup_task_id,
-                               tape_id, backup_type, backup_time, total_files, total_bytes,
-                               compressed_bytes, compression_ratio, chunk_count, created_at,
-                               updated_at
-                        FROM backup_sets
-                        WHERE set_id = $1
-                        """,
-                        set_id
-                    )
-                except Exception as e:
-                    # 异常时回滚，确保连接处于干净状态
-                    logger.error(f"get_backup_set_by_set_id: 查询失败: {str(e)}", exc_info=True)
-                    try:
-                        actual_conn = conn._conn if hasattr(conn, '_conn') else conn
-                        if hasattr(actual_conn, 'info'):
-                            transaction_status = actual_conn.info.transaction_status
-                            if transaction_status in (1, 3):  # INTRANS or INERROR
-                                await actual_conn.rollback()
-                                logger.debug(f"get_backup_set_by_set_id: 异常时事务已回滚（set_id={set_id}）")
-                    except Exception as rollback_err:
-                        logger.warning(f"get_backup_set_by_set_id: 回滚事务失败: {str(rollback_err)}")
-                    raise  # 重新抛出异常
-        else:
-            # SQLite 版本
-            from backup.sqlite_backup_db import get_backup_set_by_set_id_sqlite
-            return await get_backup_set_by_set_id_sqlite(set_id)
+                    actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+                    if hasattr(actual_conn, 'info'):
+                        transaction_status = actual_conn.info.transaction_status
+                        if transaction_status in (1, 3):  # INTRANS or INERROR
+                            await actual_conn.rollback()
+                            logger.debug(f"get_backup_set_by_set_id: 异常时事务已回滚（set_id={set_id}）")
+                except Exception as rollback_err:
+                    logger.warning(f"get_backup_set_by_set_id: 回滚事务失败: {str(rollback_err)}")
+                raise  # 重新抛出异常
         
         if not row:
             return None
@@ -4110,81 +3775,72 @@ class BackupDB:
                 update_fields.append('completed_at')
                 update_values.append(current_time)
             
-            # 使用原生 openGauss SQL（仅支持 openGauss）
-            from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_redis
-            
-            if is_redis():
-                # Redis 版本
-                from backup.redis_backup_db import update_task_status_redis
-                await update_task_status_redis(backup_task, status)
-            elif is_opengauss():
-                # 使用连接池
-                async with get_opengauss_connection() as conn:
-                    # 动态构建UPDATE语句
-                    set_clauses = []
-                    params = []
-                    param_index = 1
-                    
-                    for field in update_fields:
-                        if field == 'status':
-                            # 确保状态值正确：如果是枚举，使用.value；如果是字符串，直接使用
-                            status_value = update_values[update_fields.index(field)]
-                            if hasattr(status_value, 'value'):
-                                status_value = status_value.value
-                            set_clauses.append(f"status = ${param_index}::backuptaskstatus")
-                            params.append(status_value)
-                        elif field == 'source_paths':
-                            set_clauses.append(f"source_paths = ${param_index}::jsonb")
-                            params.append(update_values[update_fields.index(field)])
-                        else:
-                            set_clauses.append(f"{field} = ${param_index}")
-                            params.append(update_values[update_fields.index(field)])
-                        param_index += 1
-                    
-                    params.append(backup_task.id)
-                    
-                    # 添加调试日志
-                    logger.info(f"[更新任务状态] 任务ID: {backup_task.id}, 状态: {status.value if hasattr(status, 'value') else status}")
-                    logger.debug(f"[更新任务状态] UPDATE SQL: SET {', '.join(set_clauses)} WHERE id = ${param_index}")
-                    logger.debug(f"[更新任务状态] 参数: {params}")
-                    
-                    # psycopg3 binary protocol 需要显式提交事务
-                    result = await conn.execute(
-                        f"""
-                        UPDATE backup_tasks
-                        SET {', '.join(set_clauses)}
-                        WHERE id = ${param_index}
-                        """,
-                        *params
-                    )
-                    logger.info(f"[openGauss] 更新任务状态成功: task_id={backup_task.id}, status={status.value}, 影响行数: {result}")
+            # 使用原生 openGauss SQL
+            from utils.scheduler.db_utils import get_opengauss_connection
 
-                    # 显式提交事务
-                    actual_conn = conn._conn if hasattr(conn, '_conn') else conn
-                    try:
-                        await actual_conn.commit()
-                        logger.debug(f"任务 {backup_task.id} 状态更新已提交到数据库")
-                    except Exception as commit_err:
-                        logger.info(f"提交任务状态更新事务失败（可能已自动提交）: {commit_err}")
-                        # 如果不在事务中，commit() 可能会失败，尝试回滚
-                        try:
-                            await actual_conn.rollback()
-                        except:
-                            pass
+            # 使用连接池
+            async with get_opengauss_connection() as conn:
+                # 动态构建UPDATE语句
+                set_clauses = []
+                params = []
+                param_index = 1
 
-                    # 验证更新是否成功
-                    verify_row = await conn.fetchrow(
-                        "SELECT id, status, is_template FROM backup_tasks WHERE id = $1",
-                        backup_task.id
-                    )
-                    if verify_row:
-                        logger.info(f"[更新任务状态] 验证: 任务ID={verify_row['id']}, 状态={verify_row['status']}, is_template={verify_row['is_template']}")
+                for field in update_fields:
+                    if field == 'status':
+                        # 确保状态值正确：如果是枚举，使用.value；如果是字符串，直接使用
+                        status_value = update_values[update_fields.index(field)]
+                        if hasattr(status_value, 'value'):
+                            status_value = status_value.value
+                        set_clauses.append(f"status = ${param_index}::backuptaskstatus")
+                        params.append(status_value)
+                    elif field == 'source_paths':
+                        set_clauses.append(f"source_paths = ${param_index}::jsonb")
+                        params.append(update_values[update_fields.index(field)])
                     else:
-                        logger.info(f"[更新任务状态] 验证失败: 找不到任务ID={backup_task.id}")
-            else:
-                # SQLite 版本
-                from backup.sqlite_backup_db import update_task_status_sqlite
-                await update_task_status_sqlite(backup_task, status)
+                        set_clauses.append(f"{field} = ${param_index}")
+                        params.append(update_values[update_fields.index(field)])
+                    param_index += 1
+
+                params.append(backup_task.id)
+
+                # 添加调试日志
+                logger.info(f"[更新任务状态] 任务ID: {backup_task.id}, 状态: {status.value if hasattr(status, 'value') else status}")
+                logger.debug(f"[更新任务状态] UPDATE SQL: SET {', '.join(set_clauses)} WHERE id = ${param_index}")
+                logger.debug(f"[更新任务状态] 参数: {params}")
+
+                # psycopg3 binary protocol 需要显式提交事务
+                result = await conn.execute(
+                    f"""
+                    UPDATE backup_tasks
+                    SET {', '.join(set_clauses)}
+                    WHERE id = ${param_index}
+                    """,
+                    *params
+                )
+                logger.info(f"[openGauss] 更新任务状态成功: task_id={backup_task.id}, status={status.value}, 影响行数: {result}")
+
+                # 显式提交事务
+                actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+                try:
+                    await actual_conn.commit()
+                    logger.debug(f"任务 {backup_task.id} 状态更新已提交到数据库")
+                except Exception as commit_err:
+                    logger.info(f"提交任务状态更新事务失败（可能已自动提交）: {commit_err}")
+                    # 如果不在事务中，commit() 可能会失败，尝试回滚
+                    try:
+                        await actual_conn.rollback()
+                    except:
+                        pass
+
+                # 验证更新是否成功
+                verify_row = await conn.fetchrow(
+                    "SELECT id, status, is_template FROM backup_tasks WHERE id = $1",
+                    backup_task.id
+                )
+                if verify_row:
+                    logger.info(f"[更新任务状态] 验证: 任务ID={verify_row['id']}, 状态={verify_row['status']}, is_template={verify_row['is_template']}")
+                else:
+                    logger.info(f"[更新任务状态] 验证失败: 找不到任务ID={backup_task.id}")
         except Exception as e:
             logger.error(f"更新任务状态失败: {str(e)}")
     
@@ -4204,71 +3860,68 @@ class BackupDB:
             task_id = backup_task.id
 
             # 使用原生 openGauss SQL
-            from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
+            from utils.scheduler.db_utils import get_opengauss_connection
 
             current_time = datetime.now()
 
-            if is_opengauss():
-                import asyncio
-                max_retries = 3
-                retry_count = 0
-                update_success = False
+            import asyncio
+            max_retries = 3
+            retry_count = 0
+            update_success = False
 
-                while retry_count < max_retries and not update_success:
-                    try:
-                        async with get_opengauss_connection() as conn:
-                            # 开始新事务
-                            await conn.execute("BEGIN")
+            while retry_count < max_retries and not update_success:
+                try:
+                    async with get_opengauss_connection() as conn:
+                        # 开始新事务
+                        await conn.execute("BEGIN")
 
-                            if description:
-                                # 同时更新operation_stage和description
-                                await conn.execute("""
-                                    UPDATE backup_tasks
-                                    SET operation_stage = $1,
-                                        description = $2,
-                                        updated_at = $3
-                                    WHERE id = $4
-                                """, stage_code, description, current_time, task_id)
-                            else:
-                                # 只更新operation_stage
-                                await conn.execute("""
-                                    UPDATE backup_tasks
-                                    SET operation_stage = $1,
-                                        updated_at = $2
-                                    WHERE id = $3
-                                """, stage_code, current_time, task_id)
-
-                            # psycopg3 binary protocol 需要显式提交事务
-                            await conn.commit()
-
-                            # 验证事务提交状态
-                            actual_conn = conn._conn if hasattr(conn, '_conn') else conn
-                            transaction_status = actual_conn.info.transaction_status
-
-                            if transaction_status == 0:  # IDLE: 事务成功提交
-                                update_success = True
-                                logger.debug(f"任务 {task_id} 阶段更新事务提交成功: {stage_code}")
-                            else:
-                                # 事务状态异常
-                                logger.warning(f"任务 {task_id} 阶段更新事务状态异常: {transaction_status}，重试 {retry_count + 1}/{max_retries}")
-                                retry_count += 1
-                                if retry_count < max_retries:
-                                    await asyncio.sleep(0.2 * retry_count)  # 短暂等待后重试
-
-                    except Exception as update_error:
-                        retry_count += 1
-                        if retry_count >= max_retries:
-                            logger.error(f"任务 {task_id} 阶段更新失败，达到最大重试次数 {max_retries}: {str(update_error)}")
-                            raise
+                        if description:
+                            # 同时更新operation_stage和description
+                            await conn.execute("""
+                                UPDATE backup_tasks
+                                SET operation_stage = $1,
+                                    description = $2,
+                                    updated_at = $3
+                                WHERE id = $4
+                            """, stage_code, description, current_time, task_id)
                         else:
-                            logger.warning(f"任务 {task_id} 阶段更新失败，重试 {retry_count}/{max_retries}: {str(update_error)}")
-                            await asyncio.sleep(0.3 * retry_count)
+                            # 只更新operation_stage
+                            await conn.execute("""
+                                UPDATE backup_tasks
+                                SET operation_stage = $1,
+                                    updated_at = $2
+                                WHERE id = $3
+                            """, stage_code, current_time, task_id)
 
-                if not update_success:
-                    logger.error(f"任务 {task_id} 阶段更新最终失败: {stage_code}")
-                    raise Exception(f"阶段更新失败: {stage_code}")
-            else:
-                logger.info("[update_task_stage_async] 当前仅支持 openGauss，跳过数据库更新")
+                        # psycopg3 binary protocol 需要显式提交事务
+                        await conn.commit()
+
+                        # 验证事务提交状态
+                        actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+                        transaction_status = actual_conn.info.transaction_status
+
+                        if transaction_status == 0:  # IDLE: 事务成功提交
+                            update_success = True
+                            logger.debug(f"任务 {task_id} 阶段更新事务提交成功: {stage_code}")
+                        else:
+                            # 事务状态异常
+                            logger.warning(f"任务 {task_id} 阶段更新事务状态异常: {transaction_status}，重试 {retry_count + 1}/{max_retries}")
+                            retry_count += 1
+                            if retry_count < max_retries:
+                                await asyncio.sleep(0.2 * retry_count)  # 短暂等待后重试
+
+                except Exception as update_error:
+                    retry_count += 1
+                    if retry_count >= max_retries:
+                        logger.error(f"任务 {task_id} 阶段更新失败，达到最大重试次数 {max_retries}: {str(update_error)}")
+                        raise
+                    else:
+                        logger.warning(f"任务 {task_id} 阶段更新失败，重试 {retry_count}/{max_retries}: {str(update_error)}")
+                        await asyncio.sleep(0.3 * retry_count)
+
+            if not update_success:
+                logger.error(f"任务 {task_id} 阶段更新最终失败: {stage_code}")
+                raise Exception(f"阶段更新失败: {stage_code}")
 
             logger.debug(f"任务 {task_id} 阶段更新为: {stage_code}" + (f", 描述: {description}" if description else ""))
 
@@ -4438,99 +4091,71 @@ class BackupDB:
         """
         try:
             # 使用原生 openGauss SQL
-            from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-            
-            if is_redis():
-                # Redis 版本
-                from backup.redis_backup_db import get_task_status_redis
-                return await get_task_status_redis(task_id)
-            elif is_opengauss():
-                # 使用连接池
-                async with get_opengauss_connection() as conn:
-                    row = await conn.fetchrow(
-                        """
-                        SELECT id, status, progress_percent, processed_files, total_files,
-                               processed_bytes, total_bytes, compressed_bytes, description,
-                               source_paths, tape_device, tape_id, result_summary, started_at, completed_at
-                        FROM backup_tasks
-                        WHERE id = $1
-                        """,
-                        task_id
-                    )
-                    
-                    if row:
-                        source_paths = None
-                        if row['source_paths']:
-                            try:
-                                if isinstance(row['source_paths'], str):
-                                    source_paths = json.loads(row['source_paths'])
-                                else:
-                                    source_paths = row['source_paths']
-                            except:
-                                source_paths = None
-                        
-                        # 计算压缩率
-                        compression_ratio = 0.0
-                        if row['processed_bytes'] and row['processed_bytes'] > 0 and row['compressed_bytes']:
-                            compression_ratio = float(row['compressed_bytes']) / float(row['processed_bytes'])
-                        
-                        # 解析result_summary获取预计的压缩包总数
-                        estimated_archive_count = None
-                        total_scanned_bytes = None
-                        if row['result_summary']:
-                            try:
-                                result_summary_dict = None
-                                if isinstance(row['result_summary'], str):
-                                    result_summary_dict = json.loads(row['result_summary'])
-                                elif isinstance(row['result_summary'], dict):
-                                    result_summary_dict = row['result_summary']
-                                
-                                if isinstance(result_summary_dict, dict):
-                                    estimated_archive_count = result_summary_dict.get('estimated_archive_count')
-                                    total_scanned_bytes = result_summary_dict.get('total_scanned_bytes')
-                            except Exception:
-                                pass
-                        
-                        return {
-                            'task_id': task_id,
-                            'status': row['status'],
-                            'progress_percent': row['progress_percent'] or 0.0,
-                            'processed_files': row['processed_files'] or 0,
-                            'total_files': row['total_files'] or 0,  # 总文件数（由后台扫描任务更新）
-                            'total_bytes': row['total_bytes'] or 0,  # 总字节数（由后台扫描任务更新）
-                            'processed_bytes': row['processed_bytes'] or 0,
-                            'compressed_bytes': row['compressed_bytes'] or 0,
-                            'compression_ratio': compression_ratio,
-                            'estimated_archive_count': estimated_archive_count,  # 压缩包数量（从 result_summary.estimated_archive_count 读取）
-                            'description': row['description'] or '',
-                            'source_paths': source_paths,
-                            'tape_device': row['tape_device'],
-                            'tape_id': row['tape_id'],
-                            'started_at': row['started_at'],
-                            'completed_at': row['completed_at']
-                        }
-            else:
-                # SQLite 版本
-                from backup.sqlite_backup_db import get_task_status_sqlite
-                result = await get_task_status_sqlite(task_id)
-                if result:
+            from utils.scheduler.db_utils import get_opengauss_connection
+
+            # 使用连接池
+            async with get_opengauss_connection() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, status, progress_percent, processed_files, total_files,
+                           processed_bytes, total_bytes, compressed_bytes, description,
+                           source_paths, tape_device, tape_id, result_summary, started_at, completed_at
+                    FROM backup_tasks
+                    WHERE id = $1
+                    """,
+                    task_id
+                )
+
+                if row:
+                    source_paths = None
+                    if row['source_paths']:
+                        try:
+                            if isinstance(row['source_paths'], str):
+                                source_paths = json.loads(row['source_paths'])
+                            else:
+                                source_paths = row['source_paths']
+                        except:
+                            source_paths = None
+
+                    # 计算压缩率
+                    compression_ratio = 0.0
+                    if row['processed_bytes'] and row['processed_bytes'] > 0 and row['compressed_bytes']:
+                        compression_ratio = float(row['compressed_bytes']) / float(row['processed_bytes'])
+
+                    # 解析result_summary获取预计的压缩包总数
+                    estimated_archive_count = None
+                    total_scanned_bytes = None
+                    if row['result_summary']:
+                        try:
+                            result_summary_dict = None
+                            if isinstance(row['result_summary'], str):
+                                result_summary_dict = json.loads(row['result_summary'])
+                            elif isinstance(row['result_summary'], dict):
+                                result_summary_dict = row['result_summary']
+
+                            if isinstance(result_summary_dict, dict):
+                                estimated_archive_count = result_summary_dict.get('estimated_archive_count')
+                                total_scanned_bytes = result_summary_dict.get('total_scanned_bytes')
+                        except Exception:
+                            pass
+
                     return {
-                        'task_id': result['id'],
-                        'status': result['status'],
-                        'progress_percent': result['progress_percent'],
-                        'processed_files': result['processed_files'],
-                        'total_files': result['total_files'],
-                        'total_bytes': result['total_bytes'],
-                        'processed_bytes': result['processed_bytes'],
-                        'compressed_bytes': result['compressed_bytes'],
-                        'compression_ratio': result['compression_ratio'],
-                        'estimated_archive_count': result['estimated_archive_count'],
-                        'description': result['description'],
-                        'source_paths': result['source_paths'],
-                        'tape_device': result['tape_device'],
-                        'tape_id': result['tape_id'],
-                        'started_at': result['started_at'],
-                        'completed_at': result['completed_at']
+                        'task_id': task_id,
+                        'status': row['status'],
+                        'progress_percent': row['progress_percent'] or 0.0,
+                        'processed_files': row['processed_files'] or 0,
+                        'total_files': row['total_files'] or 0,  # 总文件数（由后台扫描任务更新）
+                        'total_bytes': row['total_bytes'] or 0,  # 总字节数（由后台扫描任务更新）
+                        'processed_bytes': row['processed_bytes'] or 0,
+                        'compressed_bytes': row['compressed_bytes'] or 0,
+                        'compression_ratio': compression_ratio,
+                        'estimated_archive_count': estimated_archive_count,  # 压缩包数量（从 result_summary.estimated_archive_count 读取）
+                        'description': row['description'] or '',
+                        'source_paths': source_paths,
+                        'tape_device': row['tape_device'],
+                        'tape_id': row['tape_id'],
+                        'started_at': row['started_at'],
+                        'completed_at': row['completed_at']
                     }
             
             return None
@@ -4548,37 +4173,16 @@ class BackupDB:
             总文件数，如果不存在则返回0
         """
         try:
-            from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-            
-            if is_redis():
-                # Redis 版本
-                from config.redis_db import get_redis_client
-                from backup.redis_backup_db import KEY_PREFIX_BACKUP_TASK, _get_redis_key
-                redis = await get_redis_client()
-                task_key = _get_redis_key(KEY_PREFIX_BACKUP_TASK, task_id)
-                task_data = await redis.hgetall(task_key)
-                if task_data:
-                    total_files_str = task_data.get('total_files', '0')
-                    try:
-                        return int(total_files_str) if total_files_str else 0
-                    except (ValueError, TypeError):
-                        return 0
-                return 0
-            elif is_opengauss():
-                # 使用连接池
-                async with get_opengauss_connection() as conn:
-                    row = await conn.fetchrow(
-                        "SELECT total_files FROM backup_tasks WHERE id = $1",
-                        task_id
-                    )
-                    if row:
-                        return row['total_files'] or 0
-            elif is_sqlite():
-                # SQLite 版本：使用原生 SQL
-                async with get_sqlite_connection() as conn:
-                    cursor = await conn.execute("SELECT total_files FROM backup_tasks WHERE id = ?", (task_id,))
-                    row = await cursor.fetchone()
-                    return row[0] or 0 if row else 0
+            from utils.scheduler.db_utils import get_opengauss_connection
+
+            # 使用连接池
+            async with get_opengauss_connection() as conn:
+                row = await conn.fetchrow(
+                    "SELECT total_files FROM backup_tasks WHERE id = $1",
+                    task_id
+                )
+                if row:
+                    return row['total_files'] or 0
             return 0
         except Exception as e:
             logger.debug(f"读取总文件数失败（忽略继续）: {str(e)}")
@@ -4601,68 +4205,59 @@ class BackupDB:
             backup_task.total_bytes = total_bytes  # total_bytes: 总字节数
             
             # 更新数据库
-            from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-            
-            if is_redis():
-                # Redis 版本
-                from backup.redis_backup_db import update_scan_progress_only_redis
-                await update_scan_progress_only_redis(backup_task, total_files, total_bytes)
-            elif is_opengauss():
-                # 使用连接池
-                async with get_opengauss_connection() as conn:
-                    # 获取当前的 result_summary
-                    row = await conn.fetchrow(
-                        "SELECT result_summary FROM backup_tasks WHERE id = $1",
-                        backup_task.id
-                    )
-                    result_summary = {}
-                    if row and row['result_summary']:
-                        try:
-                            if isinstance(row['result_summary'], str):
-                                result_summary = json.loads(row['result_summary'])
-                            elif isinstance(row['result_summary'], dict):
-                                result_summary = row['result_summary']
-                        except Exception:
-                            result_summary = {}
-                    
-                    # 更新 result_summary 中的总文件数和总字节数（作为备份存储）
-                    result_summary['total_scanned_files'] = total_files
-                    result_summary['total_scanned_bytes'] = total_bytes
-                    
-                    # 更新数据库：使用正确的字段存储总文件数和总字节数
-                    # 使用 NUMERIC 类型处理大数值（避免 int64 溢出）
-                    # 将 total_bytes 转换为字符串，然后使用 NUMERIC 类型
-                    await conn.execute(
-                        """
-                        UPDATE backup_tasks
-                        SET total_files = $1,
-                            total_bytes = $2::NUMERIC,
-                            result_summary = $3::jsonb,
-                            updated_at = $4
-                        WHERE id = $5
-                        """,
-                        total_files,  # total_files: 总文件数
-                        str(total_bytes),   # total_bytes: 总字节数（转换为字符串，使用 NUMERIC 类型）
-                        json.dumps(result_summary),
-                        datetime.now(),
-                        backup_task.id
-                    )
-                    
-                    # psycopg3 binary protocol 需要显式提交事务
-                    actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+            from utils.scheduler.db_utils import get_opengauss_connection
+
+            # 使用连接池
+            async with get_opengauss_connection() as conn:
+                # 获取当前的 result_summary
+                row = await conn.fetchrow(
+                    "SELECT result_summary FROM backup_tasks WHERE id = $1",
+                    backup_task.id
+                )
+                result_summary = {}
+                if row and row['result_summary']:
                     try:
-                        await actual_conn.commit()
-                        logger.debug(f"任务 {backup_task.id} 扫描进度更新已提交到数据库: total_files={total_files}, total_bytes={total_bytes}")
-                    except Exception as commit_err:
-                        logger.info(f"提交扫描进度更新事务失败（可能已自动提交）: {commit_err}")
-                        try:
-                            await actual_conn.rollback()
-                        except:
-                            pass
-            elif is_sqlite():
-                # SQLite 版本
-                from backup.sqlite_backup_db import update_scan_progress_only_sqlite
-                await update_scan_progress_only_sqlite(backup_task, total_files, total_bytes)
+                        if isinstance(row['result_summary'], str):
+                            result_summary = json.loads(row['result_summary'])
+                        elif isinstance(row['result_summary'], dict):
+                            result_summary = row['result_summary']
+                    except Exception:
+                        result_summary = {}
+
+                # 更新 result_summary 中的总文件数和总字节数（作为备份存储）
+                result_summary['total_scanned_files'] = total_files
+                result_summary['total_scanned_bytes'] = total_bytes
+
+                # 更新数据库：使用正确的字段存储总文件数和总字节数
+                # 使用 NUMERIC 类型处理大数值（避免 int64 溢出）
+                # 将 total_bytes 转换为字符串，然后使用 NUMERIC 类型
+                await conn.execute(
+                    """
+                    UPDATE backup_tasks
+                    SET total_files = $1,
+                        total_bytes = $2::NUMERIC,
+                        result_summary = $3::jsonb,
+                        updated_at = $4
+                    WHERE id = $5
+                    """,
+                    total_files,  # total_files: 总文件数
+                    str(total_bytes),   # total_bytes: 总字节数（转换为字符串，使用 NUMERIC 类型）
+                    json.dumps(result_summary),
+                    datetime.now(),
+                    backup_task.id
+                )
+
+                # psycopg3 binary protocol 需要显式提交事务
+                actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+                try:
+                    await actual_conn.commit()
+                    logger.debug(f"任务 {backup_task.id} 扫描进度更新已提交到数据库: total_files={total_files}, total_bytes={total_bytes}")
+                except Exception as commit_err:
+                    logger.info(f"提交扫描进度更新事务失败（可能已自动提交）: {commit_err}")
+                    try:
+                        await actual_conn.rollback()
+                    except:
+                        pass
         except Exception as e:
             logger.info(f"更新扫描进度失败（忽略继续）: {str(e)}")
 

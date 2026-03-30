@@ -363,13 +363,6 @@ class MemoryDBWriter:
         if not file_info_list:
             return 0
         
-        # 检查数据库类型
-        from utils.scheduler.db_utils import is_opengauss
-        if not is_opengauss():
-            # 非openGauss模式，使用原来的内存数据库逻辑
-            await self.add_files_batch(file_info_list)
-            return len(file_info_list)
-        
         try:
             # 准备批量插入数据
             insert_data = []
@@ -946,13 +939,6 @@ class MemoryDBWriter:
             )
             return
 
-        # 检查数据库类型
-        from utils.scheduler.db_utils import is_opengauss
-        if not is_opengauss():
-            # SQLite 模式：使用队列同步到主数据库（写操作优先）
-            await self._sync_to_sqlite_via_queue(reason)
-            return
-
         logger.info(f"[openGauss同步] 开始同步 (原因: {reason})，设置 _is_syncing = True")
         self._is_syncing = True
         self._sync_start_time = time.time()  # 记录同步开始时间
@@ -1482,22 +1468,10 @@ class MemoryDBWriter:
         if not files:
             return 0, []
 
-        # 检查数据库类型
-        from utils.scheduler.db_utils import is_opengauss
-        if not is_opengauss():
-            # SQLite 模式：使用SQLite的插入方法
-            file_data_map = []
-            for file_record in files:
-                file_data_map.append((file_record, None))
-            synced_file_ids = await self._insert_files_to_sqlite(file_data_map)
-            return len(synced_file_ids), synced_file_ids
-
-        logger.debug(f"正在批量同步 {len(files)} 个文件到openGauss数据库（使用批量插入优化）...")
-        
-        # 准备文件数据映射（借鉴SQLite的方式）
+        # 准备文件数据映射
         file_data_map = []
         for file_record in files:
-            file_data_map.append((file_record, None))  # 第二个参数在openGauss模式下不需要
+            file_data_map.append((file_record, None))
         
         # 使用_insert_files_to_opengauss插入数据
         synced_file_ids = await self._insert_files_to_opengauss(file_data_map)
@@ -1517,10 +1491,6 @@ class MemoryDBWriter:
         """
         # 检查数据库类型
         from utils.scheduler.db_utils import is_opengauss
-        if not is_opengauss():
-            synced_file_ids = await self._insert_files_to_sqlite(file_data_map)
-            return len(synced_file_ids), synced_file_ids
-
         synced_count = 0
         synced_file_ids = []
         
@@ -1753,225 +1723,6 @@ class MemoryDBWriter:
         except (ValueError, sqlite3.ProgrammingError) as e:
             # 连接已关闭，记录警告但不抛出异常
             logger.warning(f"标记同步错误时数据库连接已关闭: {e}")
-
-    async def _insert_files_to_sqlite(self, file_data_map: List[Tuple]) -> List[int]:
-        """将扫描文件同步到 SQLite 主库（调用方负责队列和串行执行）"""
-        from backup.sqlite_backup_db import insert_backup_files_sqlite
-
-        files_payload: List[Dict] = []
-        synced_file_ids: List[int] = []
-
-        for file_record, _ in file_data_map:
-            if not file_record:
-                continue
-
-            file_id = file_record[0]
-            backup_set_id = file_record[1]
-            file_path = file_record[2]
-            file_name = file_record[3]
-            directory_path = file_record[4]
-            display_name = file_record[5]
-            file_type = file_record[6] or "file"
-            file_size = file_record[7] or 0
-            compressed_size = file_record[8]
-            file_permissions = file_record[9]
-            file_owner = file_record[10]
-            file_group = file_record[11]
-            created_time = self._parse_datetime_from_sqlite(file_record[12])
-            modified_time = self._parse_datetime_from_sqlite(file_record[13])
-            accessed_time = self._parse_datetime_from_sqlite(file_record[14])
-            tape_block_start = file_record[15]
-            tape_block_count = file_record[16]
-            compressed = bool(file_record[17])
-            encrypted = bool(file_record[18])
-            checksum = file_record[19]
-            is_copy_success = bool(file_record[20])
-            copy_status_at = self._parse_datetime_from_sqlite(file_record[21])
-            backup_time = self._parse_datetime_from_sqlite(file_record[22])
-            chunk_number = file_record[23]
-            version = file_record[24]
-            file_metadata = file_record[25]
-            tags = file_record[26]
-
-            files_payload.append(
-                {
-                    "backup_set_id": backup_set_id,
-                    "file_path": file_path,
-                    "file_name": file_name,
-                    "directory_path": directory_path,
-                    "display_name": display_name,
-                    "file_type": file_type,
-                    "file_size": file_size,
-                    "compressed_size": compressed_size,
-                    "file_permissions": file_permissions,
-                    "file_owner": file_owner,
-                    "file_group": file_group,
-                    "created_time": created_time,
-                    "modified_time": modified_time,
-                    "accessed_time": accessed_time,
-                    "tape_block_start": tape_block_start,
-                    "tape_block_count": tape_block_count,
-                    "compressed": compressed,
-                    "encrypted": encrypted,
-                    "checksum": checksum,
-                    "is_copy_success": is_copy_success,
-                    "copy_status_at": copy_status_at,
-                    "backup_time": backup_time,
-                    "chunk_number": chunk_number,
-                    "version": version,
-                    "file_metadata": file_metadata,
-                    "tags": tags,
-                }
-            )
-            synced_file_ids.append(file_id)
-
-        if files_payload:
-            # 直接写入 SQLite（调用方负责确保串行执行，例如通过 sqlite_queue_manager）
-            inserted_ids = await insert_backup_files_sqlite(files_payload)
-            # insert_backup_files_sqlite 返回数据库中新生成的自增ID，但我们需要内存数据库的文件ID
-            # 因此仍然返回 synced_file_ids（内存数据库ID），用于标记内存数据库状态
-            if not inserted_ids:
-                logger.warning("insert_backup_files_sqlite 未返回任何 ID，可能所有文件已存在")
-
-        return synced_file_ids
-    
-    async def _sync_to_sqlite_via_queue(self, reason: str = "manual"):
-        """通过队列同步文件到 SQLite 主库（同步操作，普通优先级）"""
-        
-        if self._is_syncing:
-            logger.warning(
-                f"[SQLite同步] 同步已在进行中，跳过本次同步请求 (原因: {reason})。"
-                f"如果此状态持续，可能是之前的同步未正确完成。"
-            )
-            return
-        
-        logger.info(f"[SQLite同步] 开始同步 (原因: {reason})，设置 _is_syncing = True")
-        self._is_syncing = True
-        self._sync_start_time = time.time()  # 记录同步开始时间
-        sync_start_time = self._sync_start_time
-        total_synced_count = 0
-        batch_number = 0
-
-        try:
-            # 记录同步开始时的待同步文件数
-            initial_pending_count = await self._get_pending_sync_count()
-            if initial_pending_count > 0:
-                logger.info(f"[SQLite同步开始] 待同步文件数: {initial_pending_count} 个 (原因: {reason})")
-            else:
-                logger.info(f"[SQLite同步开始] 没有待同步文件 (原因: {reason})")
-            
-            # 循环同步，直到所有未同步的文件都处理完成
-            max_batches = 1000  # 防止无限循环
-            while batch_number < max_batches:
-                # 获取待同步的文件批次（每次获取一批）
-                get_files_start = time.time()
-                files_to_sync = await self._get_files_to_sync()
-                get_files_time = time.time() - get_files_start
-                if get_files_time > 1.0:
-                    logger.info(f"[SQLite同步] 获取待同步文件耗时较长: {get_files_time:.2f}秒")
-
-                if not files_to_sync:
-                    # 没有更多文件需要同步
-                    if batch_number == 0:
-                        logger.info("内存数据库中没有文件需要同步到SQLite")
-                    break
-
-                batch_number += 1
-                logger.info(
-                    f"[SQLite批次 {batch_number}] 开始同步 {len(files_to_sync)} 个文件 "
-                    f"(原因: {reason}, backup_set_db_id={self.backup_set_db_id})"
-                )
-
-                # 准备批量插入数据
-                prepare_start = time.time()
-                file_data_map = []
-                for file_record in files_to_sync:
-                    file_data_map.append((file_record, None))  # 第二个参数在 SQLite 模式下不需要
-                prepare_time = time.time() - prepare_start
-                if prepare_time > 1.0:
-                    logger.warning(f"[SQLite批次 {batch_number}] 准备数据耗时较长: {prepare_time:.2f}秒")
-
-                # 通过队列同步到 SQLite（同步操作，普通优先级）
-                # _insert_files_to_sqlite 返回内存数据库中的文件ID列表
-                batch_sync_start = time.time()
-                try:
-                    logger.debug(f"[SQLite批次 {batch_number}] 调用 execute_sqlite_sync，文件数: {len(file_data_map)}")
-                    # 添加超时保护（5分钟超时）
-                    import asyncio
-                    synced_file_ids = await asyncio.wait_for(
-                        execute_sqlite_sync(self._insert_files_to_sqlite, file_data_map),
-                        timeout=300.0  # 5分钟超时
-                    )
-                    batch_sync_time = time.time() - batch_sync_start
-                    logger.info(f"[SQLite批次 {batch_number}] execute_sqlite_sync 完成，耗时: {batch_sync_time:.2f}秒")
-                except asyncio.TimeoutError:
-                    batch_sync_time = time.time() - batch_sync_start
-                    logger.error(
-                        f"[SQLite批次 {batch_number}] ⚠️⚠️ 同步超时（300秒）！"
-                        f"文件数: {len(file_data_map)}，耗时: {batch_sync_time:.2f}秒。"
-                        f"可能原因：1) 批量插入数据量过大 2) SQLite 队列管理器阻塞 3) 数据库锁等待"
-                    )
-                    # 超时后继续处理下一批，不中断整个同步流程
-                    continue
-                except Exception as batch_error:
-                    batch_sync_time = time.time() - batch_sync_start
-                    logger.error(
-                        f"[SQLite批次 {batch_number}] 同步失败: {str(batch_error)}，"
-                        f"耗时: {batch_sync_time:.2f}秒",
-                        exc_info=True
-                    )
-                    # 继续处理下一批，不中断整个同步流程
-                    continue
-
-                # 更新同步状态（只标记成功同步的文件）
-                if synced_file_ids:
-                    await self._mark_files_synced(synced_file_ids)
-
-                # 更新统计
-                synced_count = len(synced_file_ids)
-                total_synced_count += synced_count
-                self._stats['synced_files'] += synced_count
-                self._stats['sync_batches'] += 1
-
-                logger.info(
-                    f"[SQLite批次 {batch_number}] ✅ 同步完成: {synced_count}/{len(files_to_sync)} 个文件已成功同步，"
-                    f"耗时: {batch_sync_time:.2f}秒"
-                )
-
-            if batch_number >= max_batches:
-                logger.warning(
-                    f"[SQLite同步] 达到最大批次限制 ({max_batches})，停止同步。"
-                    f"可能还有文件未同步，将在下次同步时继续。"
-                )
-
-            # 所有批次同步完成
-            if batch_number > 0:
-                sync_time = time.time() - sync_start_time
-                self._stats['sync_time'] += sync_time
-                self._last_sync_time = time.time()
-                
-                # 检查是否还有未同步的文件
-                final_pending_count = await self._get_pending_sync_count()
-                
-                # 获取累计统计信息
-                total_scanned = self._stats['total_files']
-                total_synced_accumulated = self._stats['synced_files']
-                
-                logger.info(
-                    f"✅ SQLite同步完成: 共 {batch_number} 个批次，总耗时 {sync_time:.2f}秒，"
-                    f"同步开始时待同步: {initial_pending_count} 个，"
-                    f"同步完成后剩余: {final_pending_count} 个，"
-                    f"本次同步: {total_synced_count} 个，"
-                    f"累计总扫描: {total_scanned} 个，"
-                    f"累计总同步: {total_synced_accumulated} 个"
-                )
-
-        except Exception as e:
-            logger.error(f"[SQLite同步] 同步过程异常: {e}", exc_info=True)
-        finally:
-            logger.info(f"[SQLite同步] 同步结束，设置 _is_syncing = False")
-            self._is_syncing = False
-            self._sync_start_time = 0  # 重置同步开始时间
 
     async def _create_checkpoint(self):
         """创建检查点 - 持久化保护"""

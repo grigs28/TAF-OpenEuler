@@ -6,6 +6,7 @@ Tape Tools Management API - Linux Version
 """
 
 import os
+import json
 import shutil
 import logging
 import asyncio
@@ -16,7 +17,6 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 
 from models.system_log import OperationType, LogCategory, LogLevel
-from config.database import get_db
 from config.settings import get_settings
 from utils.linux_tape import get_linux_tape_operator, LinuxTapeOperator
 
@@ -66,7 +66,6 @@ class SetblkRequest(BaseModel):
 
 # 记录操作日志的辅助函数
 async def log_tool_operation(
-    db,
     operation_type: OperationType,
     operation_name: str,
     success: bool,
@@ -75,21 +74,36 @@ async def log_tool_operation(
 ):
     """记录工具操作日志"""
     try:
-        from models.system_log import OperationLog
+        from utils.db_connection_helper import get_psycopg_connection_from_url
+        from config.settings import get_settings
 
-        log_entry = OperationLog(
-            operation_type=operation_type,
-            resource_type="tool",
-            operation_name=operation_name,
-            operation_description=f"工具管理: {operation_name}",
-            category="tape",
-            operation_time=datetime.now(),
-            success=success,
-            request_params=details or {},
-            error_message=error_message
-        )
-        db.add(log_entry)
-        await db.commit()
+        settings = get_settings()
+        conn, _ = get_psycopg_connection_from_url(settings.DATABASE_URL, prefer_psycopg3=True)
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO operation_logs
+                    (operation_type, resource_type, operation_name, operation_description,
+                     category, operation_time, success, request_params, error_message,
+                     created_at, updated_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                    """,
+                    (
+                        operation_type.value if hasattr(operation_type, 'value') else str(operation_type),
+                        "tool",
+                        operation_name,
+                        f"工具管理: {operation_name}",
+                        "tape",
+                        datetime.now(),
+                        success,
+                        json.dumps(details or {}, ensure_ascii=False, default=str),
+                        error_message
+                    )
+                )
+                conn.commit()
+        finally:
+            conn.close()
     except Exception as e:
         logger.error(f"记录工具操作日志失败: {str(e)}")
 
@@ -268,7 +282,7 @@ async def scan_tape_devices():
 
 
 @router.post("/linux/mkltfs")
-async def mkltfs_format(request: MkltfsRequest, db = Depends(get_db)):
+async def mkltfs_format(request: MkltfsRequest):
     """使用 mkltfs 格式化磁带"""
     try:
         # 查找 mkltfs 路径
@@ -309,7 +323,7 @@ async def mkltfs_format(request: MkltfsRequest, db = Depends(get_db)):
 
         # 记录日志
         await log_tool_operation(
-            db, OperationType.TAPE_FORMAT, "LTFS格式化",
+            OperationType.TAPE_FORMAT, "LTFS格式化",
             result.returncode == 0,
             {"device_path": request.device_path, "volume_label": request.volume_label},
             stderr if result.returncode != 0 else None
@@ -330,7 +344,7 @@ async def mkltfs_format(request: MkltfsRequest, db = Depends(get_db)):
 
 
 @router.post("/linux/ltfs-mount")
-async def mount_ltfs(request: LtfsMountRequest, db = Depends(get_db)):
+async def mount_ltfs(request: LtfsMountRequest):
     """挂载 LTFS 文件系统"""
     try:
         # 查找 ltfs 路径
@@ -388,7 +402,7 @@ async def mount_ltfs(request: LtfsMountRequest, db = Depends(get_db)):
 
         # 记录日志
         await log_tool_operation(
-            db, OperationType.TAPE_MOUNT, "LTFS挂载",
+            OperationType.TAPE_MOUNT, "LTFS挂载",
             result.returncode == 0,
             {"device_path": request.device_path, "mount_point": request.mount_point},
             stderr if result.returncode != 0 else None
@@ -409,7 +423,7 @@ async def mount_ltfs(request: LtfsMountRequest, db = Depends(get_db)):
 
 
 @router.post("/linux/ltfs-unmount")
-async def unmount_ltfs(request: LtfsUnmountRequest, db = Depends(get_db)):
+async def unmount_ltfs(request: LtfsUnmountRequest):
     """卸载 LTFS 文件系统"""
     try:
         # 尝试使用 fusermount（FUSE）
@@ -454,7 +468,7 @@ async def unmount_ltfs(request: LtfsUnmountRequest, db = Depends(get_db)):
 
         # 记录日志
         await log_tool_operation(
-            db, OperationType.TAPE_UNMOUNT, "LTFS卸载",
+            OperationType.TAPE_UNMOUNT, "LTFS卸载",
             success,
             {"mount_point": request.mount_point, "eject_after": request.eject_after},
             stderr if not success else None
@@ -522,7 +536,7 @@ async def check_ltfs_mount():
 
 # ===== 组合流程API =====
 @router.post("/linux/prepare")
-async def prepare_tape(request: PrepareTapeRequest, db = Depends(get_db)):
+async def prepare_tape(request: PrepareTapeRequest):
     """准备磁带（检查状态、格式化、倒带）"""
     try:
         operator = get_tape_operator()
@@ -553,7 +567,7 @@ async def prepare_tape(request: PrepareTapeRequest, db = Depends(get_db)):
 
         # 记录日志
         await log_tool_operation(
-            db, OperationType.TAPE_FORMAT, "准备磁带",
+            OperationType.TAPE_FORMAT, "准备磁带",
             result.get("success", False),
             {
                 "device_path": request.device_path,

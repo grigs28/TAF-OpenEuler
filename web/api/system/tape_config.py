@@ -520,42 +520,49 @@ async def get_tape_drive_history(request: Request, limit: int = 50, offset: int 
         settings = get_settings()
         database_url = settings.DATABASE_URL
         
-        # 检查是否为openGauss
-        from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-        
-        if is_redis():
-            # Redis模式：使用Redis查询操作日志
-            from utils.redis_operation_log import query_operation_logs_redis
-            
+        # 使用 openGauss 原生 SQL 查询
+        from utils.scheduler.db_utils import get_opengauss_connection
+
+        async with get_opengauss_connection() as conn:
             # 查询磁带机相关操作日志（resource_type = 'tape_drive' 或操作名称包含'磁带机'）
-            logs = await query_operation_logs_redis(
-                resource_type=None,  # 先获取所有，然后在Python中过滤
-                operation_name_pattern=None,
-                operation_description_pattern=None,
-                limit=limit * 2,  # 多获取一些，因为可能被过滤掉
-                offset=0
-            )
-            
-            # 过滤磁带机相关的日志
+            sql = """
+                SELECT
+                    id, operation_time, resource_name,
+                    operation_name, operation_description, username,
+                    success, result_message, error_message, operation_type
+                FROM operation_logs
+                WHERE resource_type = $1
+                   OR operation_name LIKE $2
+                   OR operation_description LIKE $3
+                ORDER BY operation_time DESC
+                LIMIT $4 OFFSET $5
+            """
+
+            rows = await conn.fetch(sql, "tape_drive", "%磁带机%", "%磁带机%", limit, offset)
+
             history = []
-            for log in logs:
-                if (log.get('resource_type') == 'tape_drive' or
-                    '磁带机' in (log.get('operation_name') or '') or
-                    '磁带机' in (log.get('operation_description') or '')):
-                    history.append({
-                        "id": log.get('id'),
-                        "time": log.get('operation_time'),
-                        "operation": log.get('operation_name') or log.get('operation_description') or "",
-                        "device_name": log.get('resource_name') or "",
-                        "username": log.get('username') or "system",
-                        "success": log.get('success', True),
-                        "message": log.get('result_message') or log.get('error_message') or log.get('operation_description') or "",
-                        "operation_type": log.get('operation_type', '')
-                    })
-            
-            # 应用分页
-            history = history[offset:offset + limit]
-            
+            for row in rows:
+                operation_name = row['operation_name'] or row['operation_description'] or ""
+                # 如果operation_type是枚举值，转换为字符串
+                operation_type = row['operation_type']
+                if hasattr(operation_type, 'value'):
+                    operation_type = operation_type.value
+                else:
+                    operation_type = str(operation_type) if operation_type else ""
+
+                message = row['result_message'] or row['error_message'] or row['operation_description'] or ""
+
+                history.append({
+                    "id": row['id'],
+                    "time": row['operation_time'].isoformat() if row['operation_time'] else None,
+                    "operation": operation_name,
+                    "device_name": row['resource_name'] or "",
+                    "username": row['username'] or "system",
+                    "success": row['success'],
+                    "message": message,
+                    "operation_type": operation_type
+                })
+
             duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
             await log_system(
                 level=LogLevel.INFO,
@@ -565,117 +572,12 @@ async def get_tape_drive_history(request: Request, limit: int = 50, offset: int 
                 function="get_tape_drive_history",
                 duration_ms=duration_ms
             )
-            
+
             return {
                 "success": True,
                 "history": history,
                 "count": len(history)
             }
-        
-        if not is_opengauss():
-            # 非openGauss数据库，使用SQLAlchemy
-            from config.database import db_manager
-            from models.system_log import OperationLog
-            from sqlalchemy import select, desc, or_
-            
-            # 检查AsyncSessionLocal是否可用
-            if not db_manager.AsyncSessionLocal or not callable(db_manager.AsyncSessionLocal):
-                logger.warning("SQLAlchemy AsyncSessionLocal不可用，返回空列表")
-                return {
-                    "success": True,
-                    "history": [],
-                    "count": 0
-                }
-            
-            async with db_manager.AsyncSessionLocal() as session:
-                # 查询磁带机相关操作日志（resource_type = 'tape_drive' 或操作名称包含'磁带机'）
-                query = select(OperationLog).where(
-                    or_(
-                        OperationLog.resource_type == "tape_drive",
-                        OperationLog.operation_name.like("%磁带机%"),
-                        OperationLog.operation_description.like("%磁带机%")
-                    )
-                ).order_by(desc(OperationLog.operation_time)).limit(limit).offset(offset)
-                
-                result = await session.execute(query)
-                operation_logs = result.scalars().all()
-                
-                history = []
-                for log in operation_logs:
-                    history.append({
-                        "id": log.id,
-                        "time": log.operation_time.isoformat() if log.operation_time else None,
-                        "operation": log.operation_name or log.operation_description or "",
-                        "device_name": log.resource_name or "",
-                        "username": log.username or "system",
-                        "success": log.success,
-                        "message": log.result_message or log.error_message or log.operation_description or "",
-                        "operation_type": log.operation_type.value if hasattr(log.operation_type, 'value') else str(log.operation_type)
-                    })
-                
-                return {
-                    "success": True,
-                    "history": history,
-                    "count": len(history)
-                }
-        else:
-            # 使用openGauss原生SQL
-            # 使用连接池
-            async with get_opengauss_connection() as conn:
-                # 查询磁带机相关操作日志（resource_type = 'tape_drive' 或操作名称包含'磁带机'）
-                sql = """
-                    SELECT 
-                        id, operation_time, resource_name, 
-                        operation_name, operation_description, username,
-                        success, result_message, error_message, operation_type
-                    FROM operation_logs
-                    WHERE resource_type = $1 
-                       OR operation_name LIKE $2 
-                       OR operation_description LIKE $3
-                    ORDER BY operation_time DESC
-                    LIMIT $4 OFFSET $5
-                """
-                
-                rows = await conn.fetch(sql, "tape_drive", "%磁带机%", "%磁带机%", limit, offset)
-                
-                history = []
-                for row in rows:
-                    operation_name = row['operation_name'] or row['operation_description'] or ""
-                    # 如果operation_type是枚举值，转换为字符串
-                    operation_type = row['operation_type']
-                    if hasattr(operation_type, 'value'):
-                        operation_type = operation_type.value
-                    else:
-                        operation_type = str(operation_type) if operation_type else ""
-                    
-                    message = row['result_message'] or row['error_message'] or row['operation_description'] or ""
-                    
-                    history.append({
-                        "id": row['id'],
-                        "time": row['operation_time'].isoformat() if row['operation_time'] else None,
-                        "operation": operation_name,
-                        "device_name": row['resource_name'] or "",
-                        "username": row['username'] or "system",
-                        "success": row['success'],
-                        "message": message,
-                        "operation_type": operation_type
-                    })
-                
-                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                await log_system(
-                    level=LogLevel.INFO,
-                    category=LogCategory.TAPE,
-                    message=f"获取磁带机操作历史成功: {len(history)} 条记录",
-                    module="web.api.system.tape_config",
-                    function="get_tape_drive_history",
-                    duration_ms=duration_ms
-                )
-                
-                return {
-                    "success": True,
-                    "history": history,
-                    "count": len(history)
-                }
     
     except Exception as e:
         duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)

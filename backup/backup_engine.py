@@ -27,7 +27,6 @@ except ImportError:
     TQDM_AVAILABLE = False
 
 from config.settings import get_settings
-from config.database import get_db
 from models.backup import BackupTask, BackupSet, BackupFile, BackupTaskStatus, BackupTaskType, BackupFileType
 from models.system_log import OperationLog, OperationType, LogLevel, LogCategory
 from tape.tape_manager import TapeManager
@@ -724,11 +723,9 @@ class BackupEngine:
             
             # 使用原子操作：只有当任务状态为 PENDING 时才能更新为 RUNNING
             # 如果任务已经被其他进程更新，这个操作会失败（影响行数为0）
-            from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
-            from config.database import db_manager
-            
-            if is_opengauss():
-                async with get_opengauss_connection() as conn:
+            from utils.scheduler.db_utils import get_opengauss_connection
+
+            async with get_opengauss_connection() as conn:
                     # 原子更新：只有状态为 PENDING 的任务才能更新为 RUNNING
                     result = await conn.execute(
                         """
@@ -781,56 +778,8 @@ class BackupEngine:
                         logger.info(f"任务 {task_id} 状态已原子更新为 RUNNING（影响行数: {result}）")
                         backup_task.status = BackupTaskStatus.RUNNING
                         backup_task.started_at = task_start_time
-            elif is_sqlite() and db_manager.AsyncSessionLocal and callable(db_manager.AsyncSessionLocal):
-                # SQLite 版本：使用 SQLAlchemy
-                async with db_manager.AsyncSessionLocal() as session:
-                    from models.backup import BackupTask as BackupTaskModel
-                    from sqlalchemy import update
-                    
-                    # 原子更新：只有状态为 PENDING 的任务才能更新为 RUNNING
-                    stmt = update(BackupTaskModel).where(
-                        BackupTaskModel.id == task_id,
-                        BackupTaskModel.status == BackupTaskStatus.PENDING
-                    ).values(
-                        status=BackupTaskStatus.RUNNING,
-                        started_at=task_start_time,
-                        updated_at=task_start_time
-                    )
-                    result = await session.execute(stmt)
-                    await session.commit()
-                    
-                    if result.rowcount == 0:
-                        # 更新失败，说明任务已经被其他进程更新或状态不是 PENDING
-                        logger.warning(f"任务 {task_id} 状态更新失败：任务可能已被其他进程更新或状态不是 PENDING")
-                        # 验证当前状态
-                        verify_task = await session.get(BackupTaskModel, task_id)
-                        if verify_task:
-                            if verify_task.status == BackupTaskStatus.RUNNING:
-                                logger.warning(f"任务 {task_id} 已被其他进程更新为 RUNNING，跳过本次执行")
-                            else:
-                                logger.warning(f"任务 {task_id} 当前状态为 {verify_task.status}，不是 PENDING，无法更新为 RUNNING")
-                        else:
-                            logger.error(f"任务 {task_id} 不存在")
-                        
-                        # 使用后台任务记录日志
-                        asyncio.create_task(log_system(
-                            level=LogLevel.WARNING,
-                            category=LogCategory.BACKUP,
-                            message=f"任务 {task_id} 状态更新失败，可能已被其他进程执行",
-                            module="backup.backup_engine",
-                            function="execute_backup_task",
-                            task_id=task_id
-                        ))
-                        return False
-                    else:
-                        logger.info(f"任务 {task_id} 状态已原子更新为 RUNNING（影响行数: {result.rowcount}）")
-                        backup_task.status = BackupTaskStatus.RUNNING
-                        backup_task.started_at = task_start_time
-            else:
-                # Redis 或其他模式：使用原有方法（但这不是原子操作，可能存在并发问题）
-                logger.warning("Redis 模式或其他模式不支持原子状态更新，可能存在并发问题")
-                await self.backup_db.update_task_status(backup_task, BackupTaskStatus.RUNNING)
-                backup_task.started_at = task_start_time
+            # 任务状态已原子更新为 RUNNING
+            logger.info(f"任务 {task_id} 状态已原子更新为 RUNNING")
             
             # 使用后台任务记录日志，避免阻塞
             asyncio.create_task(log_operation(
@@ -998,36 +947,24 @@ class BackupEngine:
             # 注意：只有文件压缩任务可以标记任务状态为 COMPLETED
             # 这里只处理失败情况，成功情况由压缩任务处理
             if not success:
-                from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection
-                
-                if is_opengauss():
-                    # 使用连接池
-                    async with get_opengauss_connection() as conn:
-                        await conn.execute(
-                            """
-                            UPDATE backup_tasks
-                            SET status = $1::backuptaskstatus,
-                                completed_at = $2,
-                                error_message = $3,
-                                updated_at = $4
-                            WHERE id = $5
-                            """,
-                            BackupTaskStatus.FAILED.value,
-                            backup_task.completed_at,
-                            getattr(backup_task, 'error_message', None),  # 安全获取 error_message
-                            datetime.now(),
-                            backup_task.id
-                        )
-                elif is_redis():
-                    # Redis模式：不需要提交事务，直接跳过
-                    pass
-                elif is_sqlite():
-                    # SQLite模式：使用 SQLAlchemy
-                    from config.database import get_db
-                    if is_sqlite() and db_manager.AsyncSessionLocal and callable(db_manager.AsyncSessionLocal):
-                        async for db in get_db():
-                            await db.commit()
-                    # 其他情况跳过
+                from utils.scheduler.db_utils import get_opengauss_connection
+
+                async with get_opengauss_connection() as conn:
+                    await conn.execute(
+                        """
+                        UPDATE backup_tasks
+                        SET status = $1::backuptaskstatus,
+                            completed_at = $2,
+                            error_message = $3,
+                            updated_at = $4
+                        WHERE id = $5
+                        """,
+                        BackupTaskStatus.FAILED.value,
+                        backup_task.completed_at,
+                        getattr(backup_task, 'error_message', None),  # 安全获取 error_message
+                        datetime.now(),
+                        backup_task.id
+                    )
 
             logger.info(f"========== 备份任务执行完成 ==========")
             logger.info(f"任务名称: {task_name}")

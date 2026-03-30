@@ -14,11 +14,10 @@ from datetime import datetime
 from typing import List, Optional, Dict
 from pathlib import Path
 
-from config.database import get_db
 from config.settings import get_settings
 from models.backup import BackupTask, BackupTaskStatus, BackupTaskType
 from utils.network_path import validate_network_path
-from utils.scheduler.db_utils import is_sqlite, get_sqlite_connection
+from utils.scheduler.db_utils import get_opengauss_connection
 
 logger = logging.getLogger(__name__)
 
@@ -99,123 +98,78 @@ class BackupTaskManager:
                 created_by=kwargs.get('created_by', 'system')
             )
 
-            # 保存到数据库 - 使用原生 openGauss / SQLite SQL
-            from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
-            
-            if is_opengauss():
-                # 使用连接池
-                async with get_opengauss_connection() as conn:
-                    # 插入备份任务
-                    task_id = await conn.fetchval(
-                        """
-                        INSERT INTO backup_tasks 
-                        (task_name, task_type, description, status, source_paths, exclude_patterns,
-                         compression_enabled, encryption_enabled, retention_days, scheduled_time,
-                         created_by, created_at, updated_at)
-                        VALUES ($1, $2::backuptasktype, $3, $4::backuptaskstatus, $5::jsonb, $6::jsonb,
-                                $7, $8, $9, $10, $11, $12, $13)
-                        RETURNING id
-                        """,
-                        task_name,
-                        task_type.value,
-                        kwargs.get('description', ''),
-                        'PENDING',  # BackupTaskStatus.PENDING
-                        json.dumps(source_paths) if source_paths else None,
-                        json.dumps(kwargs.get('exclude_patterns', [])) if kwargs.get('exclude_patterns') else None,
-                        kwargs.get('compression_enabled', True),
-                        kwargs.get('encryption_enabled', False),
-                        kwargs.get('retention_days', self.settings.DEFAULT_RETENTION_MONTHS * 30),
-                        kwargs.get('scheduled_time'),
-                        kwargs.get('created_by', 'system'),
-                        datetime.now(),
-                        datetime.now()
-                    )
-                    backup_task.id = task_id
-
-                    # ========= 多表方案：为该任务创建 backup_files 分组和物理表 =========
-                    # 物理表名采用固定前缀 + 任务ID，避免 SQL 注入
-                    table_name = f"backup_files_{task_id:06d}"
-                    
-                    # 1. 在 backup_files_groups 中创建元数据记录
-                    backup_files_group_id = await conn.fetchval(
-                        """
-                        INSERT INTO backup_files_groups (table_name, task_id)
-                        VALUES ($1, $2)
-                        RETURNING id
-                        """,
-                        table_name,
-                        task_id,
-                    )
-                    
-                    # 2. 更新 backup_tasks 表，写入 group_id 和 table_name
-                    await conn.execute(
-                        """
-                        UPDATE backup_tasks
-                        SET backup_files_group_id = $1,
-                            backup_files_table = $2
-                        WHERE id = $3
-                        """,
-                        backup_files_group_id,
-                        table_name,
-                        task_id,
-                    )
-                    
-                    # 3. 为该任务创建物理表（基于 backup_files_template 结构）
-                    # 注意：表名不能用参数占位符，只能通过受控字符串拼接
-                    create_sql = f"""
-                    CREATE TABLE IF NOT EXISTS {table_name} (
-                        LIKE backup_files_template INCLUDING ALL
-                    )
+            # 保存到数据库 - 使用原生 openGauss SQL
+            async with get_opengauss_connection() as conn:
+                # 插入备份任务
+                task_id = await conn.fetchval(
                     """
-                    await conn.execute(create_sql)
-                    
-                    # openGauss / psycopg3 binary protocol 需要显式提交事务
-                    actual_conn = conn._conn if hasattr(conn, "_conn") else conn
-                    try:
-                        await actual_conn.commit()
-                    except Exception as commit_err:
-                        logger.warning(f"[备份任务] 提交创建任务及其 backup_files 分组/表事务失败（可能已自动提交）: {commit_err}")
-            else:
-                # SQLite 版本：使用原生 SQL
-                import json as json_module
-                
-                async with get_sqlite_connection() as conn:
-                    # 准备数据
-                    source_paths_json = json_module.dumps(backup_task.source_paths) if backup_task.source_paths else None
-                    exclude_patterns_json = json_module.dumps(backup_task.exclude_patterns) if backup_task.exclude_patterns else None
-                    result_summary_json = json_module.dumps(backup_task.result_summary) if backup_task.result_summary else None
-                    
-                    # 插入备份任务
-                    cursor = await conn.execute("""
-                        INSERT INTO backup_tasks (
-                            task_name, task_type, description, status, source_paths, exclude_patterns,
-                            compression_enabled, encryption_enabled, retention_days, scheduled_time,
-                            created_by, created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """, (
-                        task_name,
-                        backup_task.task_type.value if hasattr(backup_task.task_type, 'value') else str(backup_task.task_type),
-                        backup_task.description or '',
-                        backup_task.status.value if hasattr(backup_task.status, 'value') else str(backup_task.status),
-                        source_paths_json,
-                        exclude_patterns_json,
-                        backup_task.compression_enabled,
-                        backup_task.encryption_enabled,
-                        backup_task.retention_days,
-                        backup_task.scheduled_time,
-                        backup_task.created_by or 'system',
-                        datetime.now(),
-                        datetime.now()
-                    ))
-                    await conn.commit()
-                    
-                    # 查询插入的记录获取 id
-                    cursor = await conn.execute("""
-                        SELECT id FROM backup_tasks WHERE task_name = ? ORDER BY id DESC LIMIT 1
-                    """, (task_name,))
-                    row = await cursor.fetchone()
-                    if row:
-                        backup_task.id = row[0]
+                    INSERT INTO backup_tasks
+                    (task_name, task_type, description, status, source_paths, exclude_patterns,
+                     compression_enabled, encryption_enabled, retention_days, scheduled_time,
+                     created_by, created_at, updated_at)
+                    VALUES ($1, $2::backuptasktype, $3, $4::backuptaskstatus, $5::jsonb, $6::jsonb,
+                            $7, $8, $9, $10, $11, $12, $13)
+                    RETURNING id
+                    """,
+                    task_name,
+                    task_type.value,
+                    kwargs.get('description', ''),
+                    'PENDING',  # BackupTaskStatus.PENDING
+                    json.dumps(source_paths) if source_paths else None,
+                    json.dumps(kwargs.get('exclude_patterns', [])) if kwargs.get('exclude_patterns') else None,
+                    kwargs.get('compression_enabled', True),
+                    kwargs.get('encryption_enabled', False),
+                    kwargs.get('retention_days', self.settings.DEFAULT_RETENTION_MONTHS * 30),
+                    kwargs.get('scheduled_time'),
+                    kwargs.get('created_by', 'system'),
+                    datetime.now(),
+                    datetime.now()
+                )
+                backup_task.id = task_id
+
+                # ========= 多表方案：为该任务创建 backup_files 分组和物理表 =========
+                # 物理表名采用固定前缀 + 任务ID，避免 SQL 注入
+                table_name = f"backup_files_{task_id:06d}"
+
+                # 1. 在 backup_files_groups 中创建元数据记录
+                backup_files_group_id = await conn.fetchval(
+                    """
+                    INSERT INTO backup_files_groups (table_name, task_id)
+                    VALUES ($1, $2)
+                    RETURNING id
+                    """,
+                    table_name,
+                    task_id,
+                )
+
+                # 2. 更新 backup_tasks 表，写入 group_id 和 table_name
+                await conn.execute(
+                    """
+                    UPDATE backup_tasks
+                    SET backup_files_group_id = $1,
+                        backup_files_table = $2
+                    WHERE id = $3
+                    """,
+                    backup_files_group_id,
+                    table_name,
+                    task_id,
+                )
+
+                # 3. 为该任务创建物理表（基于 backup_files_template 结构）
+                # 注意：表名不能用参数占位符，只能通过受控字符串拼接
+                create_sql = f"""
+                CREATE TABLE IF NOT EXISTS {table_name} (
+                    LIKE backup_files_template INCLUDING ALL
+                )
+                """
+                await conn.execute(create_sql)
+
+                # openGauss / psycopg3 binary protocol 需要显式提交事务
+                actual_conn = conn._conn if hasattr(conn, "_conn") else conn
+                try:
+                    await actual_conn.commit()
+                except Exception as commit_err:
+                    logger.warning(f"[备份任务] 提交创建任务及其 backup_files 分组/表事务失败（可能已自动提交）: {commit_err}")
 
             logger.info(f"创建备份任务成功: {task_name}")
             return backup_task
@@ -262,171 +216,124 @@ class BackupTaskManager:
                 except Exception as e:
                     logger.debug(f"从压缩工作线程获取进度失败: {str(e)}")
             
-            from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
-            
-            if is_opengauss():
-                # 优先从内存中的任务对象获取所有实时统计（全部使用内存数据）
-                # 尝试从多个来源获取：task_manager._current_task 或 backup_engine._current_task
-                in_memory_total_files = None
-                in_memory_total_bytes = None
-                in_memory_processed_files = None
-                in_memory_processed_bytes = None
-                in_memory_compressed_bytes = None
-                in_memory_scan_status = None
-                
-                # 1. 从 task_manager._current_task 获取
-                if self._current_task and self._current_task.id == task_id:
-                    in_memory_total_files = getattr(self._current_task, 'total_files', None)
-                    in_memory_total_bytes = getattr(self._current_task, 'total_bytes', None)
-                    in_memory_processed_files = getattr(self._current_task, 'processed_files', None)
-                    in_memory_processed_bytes = getattr(self._current_task, 'processed_bytes', None)
-                    in_memory_compressed_bytes = getattr(self._current_task, 'compressed_bytes', None)
-                    in_memory_scan_status = getattr(self._current_task, 'scan_status', None)
-                
-                # 2. 如果获取不到，尝试从 backup_engine._current_task 获取
-                if (in_memory_total_files is None or in_memory_total_bytes is None or 
-                    in_memory_processed_files is None or in_memory_processed_bytes is None or
-                    in_memory_scan_status is None):
-                    try:
-                        from web.api.backup.utils import get_system_instance
-                        system = get_system_instance(None)  # 尝试不传request
-                        if system and system.backup_engine:
-                            backup_engine = system.backup_engine
-                            if backup_engine._current_task and backup_engine._current_task.id == task_id:
-                                if in_memory_total_files is None:
-                                    in_memory_total_files = getattr(backup_engine._current_task, 'total_files', None)
-                                if in_memory_total_bytes is None:
-                                    in_memory_total_bytes = getattr(backup_engine._current_task, 'total_bytes', None)
-                                if in_memory_processed_files is None:
-                                    in_memory_processed_files = getattr(backup_engine._current_task, 'processed_files', None)
-                                if in_memory_processed_bytes is None:
-                                    in_memory_processed_bytes = getattr(backup_engine._current_task, 'processed_bytes', None)
-                                if in_memory_compressed_bytes is None:
-                                    in_memory_compressed_bytes = getattr(backup_engine._current_task, 'compressed_bytes', None)
-                                if in_memory_scan_status is None:
-                                    in_memory_scan_status = getattr(backup_engine._current_task, 'scan_status', None)
-                    except Exception:
-                        pass
-                
-                # 使用连接池
-                async with get_opengauss_connection() as conn:
-                    row = await conn.fetchrow(
-                        """
-                        SELECT id, task_name, task_type, status, progress_percent, 
-                               total_files, total_bytes, processed_files, processed_bytes, compressed_bytes,
-                               scan_status, started_at, completed_at, error_message, result_summary,
-                               source_paths, tape_device, tape_id, description
-                        FROM backup_tasks
-                        WHERE id = $1
-                        """,
-                        task_id
-                    )
-                    
-                    if row:
-                        # 解析 source_paths
-                        source_paths = None
-                        if row['source_paths']:
-                            try:
-                                if isinstance(row['source_paths'], str):
-                                    source_paths = json.loads(row['source_paths'])
-                                else:
-                                    source_paths = row['source_paths']
-                            except:
-                                source_paths = None
-                        
-                        # 计算压缩率
-                        compression_ratio = 0.0
-                        if row['processed_bytes'] and row['processed_bytes'] > 0 and row['compressed_bytes']:
-                            compression_ratio = float(row['compressed_bytes']) / float(row['processed_bytes'])
-                        
-                        # 所有统计字段：优先使用内存中的实时统计，其次回退到数据库字段
-                        total_files_value = in_memory_total_files if in_memory_total_files is not None else (row['total_files'] or 0)
-                        total_bytes_value = in_memory_total_bytes if in_memory_total_bytes is not None else (row['total_bytes'] or 0)
-                        processed_files_value = in_memory_processed_files if in_memory_processed_files is not None else (row['processed_files'] or 0)
-                        processed_bytes_value = in_memory_processed_bytes if in_memory_processed_bytes is not None else (row['processed_bytes'] or 0)
-                        compressed_bytes_value = in_memory_compressed_bytes if in_memory_compressed_bytes is not None else (row['compressed_bytes'] or 0)
-                        scan_status_value = in_memory_scan_status if in_memory_scan_status is not None else row.get('scan_status')
-                        
-                        # 计算进度百分比（基于内存统计）
-                        progress_percent_value = 0.0
-                        if total_files_value > 0 and processed_files_value >= 0:
-                            # 有总文件数，计算进度百分比（即使 processed_files 为 0 也要计算）
-                            progress_percent_value = min(100.0, (processed_files_value / total_files_value) * 100.0)
-                        elif row.get('progress_percent') is not None:
-                            # 没有总文件数，使用数据库中的进度百分比（包括 0 值）
-                            progress_percent_value = float(row['progress_percent'])
-                        # 如果 total_files 为 0，说明扫描刚开始，进度为 0% 是正常的，但仍需要返回 0.0
-                        
-                        return {
-                            'id': row['id'],
-                            'task_name': row['task_name'],
-                            'task_type': row['task_type'],
-                            'status': row['status'],
-                            'progress_percent': progress_percent_value,
-                            'total_files': total_files_value,  # 优先使用内存统计
-                            'total_bytes': total_bytes_value,  # 优先使用内存统计
-                            'processed_files': processed_files_value,  # 优先使用内存统计
-                            'processed_bytes': processed_bytes_value,  # 优先使用内存统计
-                            'compressed_bytes': compressed_bytes_value,  # 优先使用内存统计
-                            'compression_ratio': compression_ratio,
-                            'scan_status': scan_status_value,  # 优先使用内存统计
-                            'started_at': row['started_at'],
-                            'completed_at': row['completed_at'],
-                            'error_message': row['error_message'],
-                            'result_summary': row['result_summary'],
-                            'source_paths': source_paths,
-                            'tape_device': row['tape_device'],
-                            'tape_id': row['tape_id'],
-                            'description': row['description'],
-                            'current_compression_progress': current_compression_progress
-                        }
-            else:
-                # 非 openGauss 使用 SQLAlchemy
-                async for db in get_db():
-                    backup_task = await db.get(BackupTask, task_id)
-                    if backup_task:
-                        # 解析 source_paths
-                        source_paths = None
-                        if backup_task.source_paths:
-                            try:
-                                if isinstance(backup_task.source_paths, str):
-                                    source_paths = json.loads(backup_task.source_paths)
-                                else:
-                                    source_paths = backup_task.source_paths
-                            except:
-                                source_paths = None
-                        
-                        # 计算压缩率
-                        compression_ratio = 0.0
-                        if backup_task.processed_bytes and backup_task.processed_bytes > 0 and backup_task.compressed_bytes:
-                            compression_ratio = float(backup_task.compressed_bytes) / float(backup_task.processed_bytes)
-                        
-                        result = {
-                            'id': backup_task.id,
-                            'task_name': backup_task.task_name,
-                            'task_type': backup_task.task_type,
-                            'status': backup_task.status,
-                            'progress_percent': backup_task.progress_percent,
-                            'total_files': backup_task.total_files,
-                            'total_bytes': backup_task.total_bytes,
-                            'processed_files': backup_task.processed_files,
-                            'processed_bytes': backup_task.processed_bytes,
-                            'compressed_bytes': backup_task.compressed_bytes or 0,
-                            'compression_ratio': compression_ratio,
-                            'started_at': backup_task.started_at,
-                            'completed_at': backup_task.completed_at,
-                            'error_message': backup_task.error_message,
-                            'result_summary': backup_task.result_summary,
-                            'source_paths': source_paths,
-                            'tape_device': backup_task.tape_device,
-                            'tape_id': backup_task.tape_id,
-                            'description': backup_task.description
-                        }
-                        # 添加运行时的压缩进度信息
-                        if current_compression_progress:
-                            result['current_compression_progress'] = current_compression_progress
-                        return result
-            
+            from utils.scheduler.db_utils import get_opengauss_connection
+
+            # 优先从内存中的任务对象获取所有实时统计（全部使用内存数据）
+            # 尝试从多个来源获取：task_manager._current_task 或 backup_engine._current_task
+            in_memory_total_files = None
+            in_memory_total_bytes = None
+            in_memory_processed_files = None
+            in_memory_processed_bytes = None
+            in_memory_compressed_bytes = None
+            in_memory_scan_status = None
+
+            # 1. 从 task_manager._current_task 获取
+            if self._current_task and self._current_task.id == task_id:
+                in_memory_total_files = getattr(self._current_task, 'total_files', None)
+                in_memory_total_bytes = getattr(self._current_task, 'total_bytes', None)
+                in_memory_processed_files = getattr(self._current_task, 'processed_files', None)
+                in_memory_processed_bytes = getattr(self._current_task, 'processed_bytes', None)
+                in_memory_compressed_bytes = getattr(self._current_task, 'compressed_bytes', None)
+                in_memory_scan_status = getattr(self._current_task, 'scan_status', None)
+
+            # 2. 如果获取不到，尝试从 backup_engine._current_task 获取
+            if (in_memory_total_files is None or in_memory_total_bytes is None or
+                in_memory_processed_files is None or in_memory_processed_bytes is None or
+                in_memory_scan_status is None):
+                try:
+                    from web.api.backup.utils import get_system_instance
+                    system = get_system_instance(None)  # 尝试不传request
+                    if system and system.backup_engine:
+                        backup_engine = system.backup_engine
+                        if backup_engine._current_task and backup_engine._current_task.id == task_id:
+                            if in_memory_total_files is None:
+                                in_memory_total_files = getattr(backup_engine._current_task, 'total_files', None)
+                            if in_memory_total_bytes is None:
+                                in_memory_total_bytes = getattr(backup_engine._current_task, 'total_bytes', None)
+                            if in_memory_processed_files is None:
+                                in_memory_processed_files = getattr(backup_engine._current_task, 'processed_files', None)
+                            if in_memory_processed_bytes is None:
+                                in_memory_processed_bytes = getattr(backup_engine._current_task, 'processed_bytes', None)
+                            if in_memory_compressed_bytes is None:
+                                in_memory_compressed_bytes = getattr(backup_engine._current_task, 'compressed_bytes', None)
+                            if in_memory_scan_status is None:
+                                in_memory_scan_status = getattr(backup_engine._current_task, 'scan_status', None)
+                except Exception:
+                    pass
+
+            # 使用连接池
+            async with get_opengauss_connection() as conn:
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, task_name, task_type, status, progress_percent,
+                           total_files, total_bytes, processed_files, processed_bytes, compressed_bytes,
+                           scan_status, started_at, completed_at, error_message, result_summary,
+                           source_paths, tape_device, tape_id, description
+                    FROM backup_tasks
+                    WHERE id = $1
+                    """,
+                    task_id
+                )
+
+                if row:
+                    # 解析 source_paths
+                    source_paths = None
+                    if row['source_paths']:
+                        try:
+                            if isinstance(row['source_paths'], str):
+                                source_paths = json.loads(row['source_paths'])
+                            else:
+                                source_paths = row['source_paths']
+                        except:
+                            source_paths = None
+
+                    # 计算压缩率
+                    compression_ratio = 0.0
+                    if row['processed_bytes'] and row['processed_bytes'] > 0 and row['compressed_bytes']:
+                        compression_ratio = float(row['compressed_bytes']) / float(row['processed_bytes'])
+
+                    # 所有统计字段：优先使用内存中的实时统计，其次回退到数据库字段
+                    total_files_value = in_memory_total_files if in_memory_total_files is not None else (row['total_files'] or 0)
+                    total_bytes_value = in_memory_total_bytes if in_memory_total_bytes is not None else (row['total_bytes'] or 0)
+                    processed_files_value = in_memory_processed_files if in_memory_processed_files is not None else (row['processed_files'] or 0)
+                    processed_bytes_value = in_memory_processed_bytes if in_memory_processed_bytes is not None else (row['processed_bytes'] or 0)
+                    compressed_bytes_value = in_memory_compressed_bytes if in_memory_compressed_bytes is not None else (row['compressed_bytes'] or 0)
+                    scan_status_value = in_memory_scan_status if in_memory_scan_status is not None else row.get('scan_status')
+
+                    # 计算进度百分比（基于内存统计）
+                    progress_percent_value = 0.0
+                    if total_files_value > 0 and processed_files_value >= 0:
+                        # 有总文件数，计算进度百分比（即使 processed_files 为 0 也要计算）
+                        progress_percent_value = min(100.0, (processed_files_value / total_files_value) * 100.0)
+                    elif row.get('progress_percent') is not None:
+                        # 没有总文件数，使用数据库中的进度百分比（包括 0 值）
+                        progress_percent_value = float(row['progress_percent'])
+                    # 如果 total_files 为 0，说明扫描刚开始，进度为 0% 是正常的，但仍需要返回 0.0
+
+                    return {
+                        'id': row['id'],
+                        'task_name': row['task_name'],
+                        'task_type': row['task_type'],
+                        'status': row['status'],
+                        'progress_percent': progress_percent_value,
+                        'total_files': total_files_value,  # 优先使用内存统计
+                        'total_bytes': total_bytes_value,  # 优先使用内存统计
+                        'processed_files': processed_files_value,  # 优先使用内存统计
+                        'processed_bytes': processed_bytes_value,  # 优先使用内存统计
+                        'compressed_bytes': compressed_bytes_value,  # 优先使用内存统计
+                        'compression_ratio': compression_ratio,
+                        'scan_status': scan_status_value,  # 优先使用内存统计
+                        'started_at': row['started_at'],
+                        'completed_at': row['completed_at'],
+                        'error_message': row['error_message'],
+                        'result_summary': row['result_summary'],
+                        'source_paths': source_paths,
+                        'tape_device': row['tape_device'],
+                        'tape_id': row['tape_id'],
+                        'description': row['description'],
+                        'current_compression_progress': current_compression_progress
+                    }
+
             return None
         except Exception as e:
             logger.error(f"获取任务状态失败: {str(e)}")
@@ -434,78 +341,44 @@ class BackupTaskManager:
     
     async def cancel_task(self, task_id: int) -> bool:
         """取消任务
-        
+
         Args:
             task_id: 任务ID
-            
+
         Returns:
             bool: 如果取消成功返回True，否则返回False
         """
         try:
-            from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
-            
-            if is_opengauss():
-                # 使用连接池
-                async with get_opengauss_connection() as conn:
-                    # 更新任务状态为取消
-                    await conn.execute(
-                        """
-                        UPDATE backup_tasks
-                        SET status = $1::backuptaskstatus, updated_at = $2
-                        WHERE id = $3 AND status = $4::backuptaskstatus
-                        """,
-                        'CANCELLED',  # BackupTaskStatus.CANCELLED
-                        datetime.now(),
-                        task_id,
-                        'RUNNING'  # BackupTaskStatus.RUNNING
-                    )
-                    
-                    # 检查是否更新成功
-                    row = await conn.fetchrow(
-                        """
-                        SELECT id FROM backup_tasks WHERE id = $1 AND status = $2::backuptaskstatus
-                        """,
-                        task_id,
-                        'CANCELLED'
-                    )
-                    
-                    if row:
-                        logger.info(f"任务已取消: {task_id}")
-                        return True
-            else:
-                # 检查是否是 Redis 模式
-                from utils.scheduler.db_utils import is_redis
-                if is_redis():
-                    # Redis 模式：使用 Redis 更新
-                    from backup.redis_backup_db import KEY_PREFIX_BACKUP_TASK, _get_redis_key, update_task_status_redis
-                    from models.backup import BackupTask
-                    from config.redis_db import get_redis_client
-                    redis = await get_redis_client()
-                    task_key = _get_redis_key(KEY_PREFIX_BACKUP_TASK, task_id)
-                    task_data = await redis.hgetall(task_key)
-                    if task_data:
-                        task_dict = {k if isinstance(k, str) else k.decode('utf-8'): 
-                                    v if isinstance(v, str) else (v.decode('utf-8') if isinstance(v, bytes) else str(v))
-                                    for k, v in task_data.items()}
-                        task_status = task_dict.get('status', '').lower()
-                        if task_status == 'running':
-                            # 创建一个临时的 BackupTask 对象用于更新
-                            backup_task = type('BackupTask', (), {'id': task_id})()
-                            await update_task_status_redis(backup_task, BackupTaskStatus.CANCELLED)
-                            logger.info(f"任务已取消: {task_id}")
-                            return True
-                    return False
-                elif is_sqlite():
-                    # SQLite 版本：使用 SQLAlchemy
-                    async for db in get_db():
-                        backup_task = await db.get(BackupTask, task_id)
-                        if backup_task and backup_task.status == BackupTaskStatus.RUNNING:
-                            backup_task.status = BackupTaskStatus.CANCELLED
-                            backup_task.updated_at = datetime.now()
-                            await db.commit()
-                            logger.info(f"任务已取消: {task_id}")
-                            return True
-            
+            from utils.scheduler.db_utils import get_opengauss_connection
+
+            # 使用连接池
+            async with get_opengauss_connection() as conn:
+                # 更新任务状态为取消
+                await conn.execute(
+                    """
+                    UPDATE backup_tasks
+                    SET status = $1::backuptaskstatus, updated_at = $2
+                    WHERE id = $3 AND status = $4::backuptaskstatus
+                    """,
+                    'CANCELLED',  # BackupTaskStatus.CANCELLED
+                    datetime.now(),
+                    task_id,
+                    'RUNNING'  # BackupTaskStatus.RUNNING
+                )
+
+                # 检查是否更新成功
+                row = await conn.fetchrow(
+                    """
+                    SELECT id FROM backup_tasks WHERE id = $1 AND status = $2::backuptaskstatus
+                    """,
+                    task_id,
+                    'CANCELLED'
+                )
+
+                if row:
+                    logger.info(f"任务已取消: {task_id}")
+                    return True
+
             return False
         except Exception as e:
             logger.error(f"取消任务失败: {str(e)}")

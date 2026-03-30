@@ -8,10 +8,10 @@ Backup Management API - Task Operations
 import logging
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
-from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection, is_sqlite, get_sqlite_connection
+from utils.scheduler.db_utils import get_opengauss_connection
 from utils.log_utils import log_operation
 from models.system_log import OperationType
-from .utils import get_system_instance, _normalize_status_value
+from .utils import get_system_instance
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -30,52 +30,17 @@ async def cancel_backup_task(task_id: int, http_request: Request):
 
         # 先获取任务信息用于日志
         task_info = None
-        if is_redis():
-            # Redis 模式：使用 Redis 查询
-            from backup.redis_backup_db import KEY_PREFIX_BACKUP_TASK, _get_redis_key
-            from config.redis_db import get_redis_client
-            redis = await get_redis_client()
-            task_key = _get_redis_key(KEY_PREFIX_BACKUP_TASK, task_id)
-            task_data = await redis.hgetall(task_key)
-            if task_data:
-                task_dict = {k if isinstance(k, str) else k.decode('utf-8'): 
-                            v if isinstance(v, str) else (v.decode('utf-8') if isinstance(v, bytes) else str(v))
-                            for k, v in task_data.items()}
+        # 使用连接池
+        async with get_opengauss_connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT task_name, status FROM backup_tasks WHERE id = $1",
+                task_id
+            )
+            if row:
                 task_info = {
-                    "task_name": task_dict.get('task_name', ''),
-                    "status": task_dict.get('status', 'pending')
+                    "task_name": row["task_name"],
+                    "status": row["status"].value if hasattr(row["status"], "value") else str(row["status"])
                 }
-        elif is_opengauss():
-            # 使用连接池
-            async with get_opengauss_connection() as conn:
-                row = await conn.fetchrow(
-                    "SELECT task_name, status FROM backup_tasks WHERE id = $1",
-                    task_id
-                )
-                if row:
-                    task_info = {
-                        "task_name": row["task_name"],
-                        "status": row["status"].value if hasattr(row["status"], "value") else str(row["status"])
-                    }
-        elif is_sqlite():
-            # 使用原生SQL查询（SQLite）
-            async with get_sqlite_connection() as conn:
-                cursor = await conn.execute(
-                    "SELECT task_name, status FROM backup_tasks WHERE id = ?",
-                    (task_id,)
-                )
-                row = await cursor.fetchone()
-                if row:
-                    # 处理状态值
-                    status_raw = row[1]
-                    if isinstance(status_raw, str):
-                        status_value = status_raw
-                    else:
-                        status_value = _normalize_status_value(status_raw)
-                    task_info = {
-                        "task_name": row[0],
-                        "status": status_value
-                    }
 
         success = await system.backup_engine.cancel_task(task_id)
         

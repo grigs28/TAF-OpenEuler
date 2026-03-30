@@ -9,7 +9,7 @@ import logging
 import json
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
-from utils.scheduler.db_utils import is_opengauss, is_redis, get_opengauss_connection, is_sqlite, get_sqlite_connection
+from utils.scheduler.db_utils import get_opengauss_connection
 from models.system_log import OperationType
 from utils.log_utils import log_operation
 from .models import BackupTaskUpdate
@@ -29,39 +29,15 @@ async def update_backup_task(
     
     try:
         # 验证：只能更新模板
-        if is_opengauss():
-            # 使用连接池
-            async with get_opengauss_connection() as conn:
-                row = await conn.fetchrow(
-                    "SELECT is_template FROM backup_tasks WHERE id = $1",
-                    task_id
-                )
-                if not row:
-                    raise HTTPException(status_code=404, detail="备份任务不存在")
-                if not row["is_template"]:
-                    raise HTTPException(status_code=400, detail="只能更新备份任务模板，不能更新执行记录")
-        else:
-            # 检查是否为Redis数据库
-            from utils.scheduler.db_utils import is_redis
-            
-            if is_redis():
-                logger.warning("[Redis模式] 更新备份任务模板暂未实现，抛出HTTPException")
-                raise HTTPException(status_code=501, detail="Redis模式下更新备份任务模板暂未实现，请使用Redis相关API")
-            
-            if not is_sqlite():
-                from utils.scheduler.db_utils import is_opengauss
-                db_type = "openGauss" if is_opengauss() else "未知类型"
-                logger.warning(f"[{db_type}模式] 当前数据库类型不支持使用SQLite连接更新备份任务模板，抛出HTTPException")
-                raise HTTPException(status_code=400, detail=f"{db_type}模式下不支持使用SQLite连接更新备份任务模板")
-            
-            # 使用原生SQL查询（SQLite）
-            async with get_sqlite_connection() as conn:
-                cursor = await conn.execute("SELECT is_template FROM backup_tasks WHERE id = ?", (task_id,))
-                row = await cursor.fetchone()
-                if not row:
-                    raise HTTPException(status_code=404, detail="备份任务不存在")
-                if not row[0]:  # is_template
-                    raise HTTPException(status_code=400, detail="只能更新备份任务模板，不能更新执行记录")
+        async with get_opengauss_connection() as conn:
+            row = await conn.fetchrow(
+                "SELECT is_template FROM backup_tasks WHERE id = $1",
+                task_id
+            )
+            if not row:
+                raise HTTPException(status_code=404, detail="备份任务不存在")
+            if not row["is_template"]:
+                raise HTTPException(status_code=400, detail="只能更新备份任务模板，不能更新执行记录")
         
         import json
         
@@ -93,109 +69,56 @@ async def update_backup_task(
         
         updates["updated_at"] = datetime.now()
         
-        if is_opengauss():
-            # 使用原生SQL更新（使用连接池）
-            async with get_opengauss_connection() as conn:
-                # 构建更新SQL
-                set_clauses = []
-                params = []
-                param_index = 1
-                
-                for key, value in updates.items():
-                    if key == "source_paths" or key == "exclude_patterns":
-                        set_clauses.append(f"{key} = ${param_index}::json")
-                    elif key == "task_type":
-                        set_clauses.append(f"task_type = CAST(${param_index} AS backuptasktype)")
-                    elif key == "updated_at":
-                        set_clauses.append(f"updated_at = ${param_index}")
-                    else:
-                        set_clauses.append(f"{key} = ${param_index}")
-                    params.append(value)
-                    param_index += 1
-                
-                params.append(task_id)
-                update_sql = f"""
-                    UPDATE backup_tasks
-                    SET {', '.join(set_clauses)}
-                    WHERE id = ${param_index}
-                """
-                await conn.execute(update_sql, *params)
-                
-                # 记录操作日志
-                client_ip = http_request.client.host if http_request.client else None
-                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                await log_operation(
-                    operation_type=OperationType.UPDATE,
-                    resource_type="backup",
-                    resource_id=str(task_id),
-                    resource_name=f"备份任务模板: {updates.get('task_name', task_id)}",
-                    operation_name="更新备份任务模板",
-                    operation_description=f"更新备份任务模板: {updates.get('task_name', task_id)}",
-                    category="backup",
-                    success=True,
-                    result_message="备份任务模板已更新",
-                    old_values={},
-                    new_values=updates,
-                    changed_fields=list(updates.keys()),
-                    ip_address=client_ip,
-                    request_method="PUT",
-                    request_url=str(http_request.url),
-                    duration_ms=duration_ms
-                )
-                
-                return {"success": True, "message": "备份任务模板已更新"}
-        else:
-            # 使用原生SQL更新（SQLite）
-            async with get_sqlite_connection() as conn:
-                # 构建更新SQL
-                set_clauses = []
-                params = []
-                
-                for key, value in updates.items():
-                    if key == "updated_at":
-                        set_clauses.append(f"{key} = ?")
-                        params.append(value)
-                    else:
-                        set_clauses.append(f"{key} = ?")
-                        params.append(value)
-                
-                params.append(task_id)
-                update_sql = f"""
-                    UPDATE backup_tasks
-                    SET {', '.join(set_clauses)}
-                    WHERE id = ?
-                """
-                await conn.execute(update_sql, params)
-                await conn.commit()
-                
-                # 获取任务名称用于日志
-                cursor = await conn.execute("SELECT task_name FROM backup_tasks WHERE id = ?", (task_id,))
-                row = await cursor.fetchone()
-                task_name = row[0] if row else str(task_id)
-                
-                # 记录操作日志
-                client_ip = http_request.client.host if http_request.client else None
-                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                await log_operation(
-                    operation_type=OperationType.UPDATE,
-                    resource_type="backup",
-                    resource_id=str(task_id),
-                    resource_name=f"备份任务模板: {task_name}",
-                    operation_name="更新备份任务模板",
-                    operation_description=f"更新备份任务模板: {task_name}",
-                    category="backup",
-                    success=True,
-                    result_message="备份任务模板已更新",
-                    old_values={},
-                    new_values=updates,
-                    changed_fields=list(updates.keys()),
-                    ip_address=client_ip,
-                    request_method="PUT",
-                    request_url=str(http_request.url),
-                    duration_ms=duration_ms
-                )
-                
-                return {"success": True, "message": "备份任务模板已更新"}
+        # 使用原生SQL更新（使用连接池）
+        async with get_opengauss_connection() as conn:
+            # 构建更新SQL
+            set_clauses = []
+            params = []
+            param_index = 1
+
+            for key, value in updates.items():
+                if key == "source_paths" or key == "exclude_patterns":
+                    set_clauses.append(f"{key} = ${param_index}::json")
+                elif key == "task_type":
+                    set_clauses.append(f"task_type = CAST(${param_index} AS backuptasktype)")
+                elif key == "updated_at":
+                    set_clauses.append(f"updated_at = ${param_index}")
+                else:
+                    set_clauses.append(f"{key} = ${param_index}")
+                params.append(value)
+                param_index += 1
+
+            params.append(task_id)
+            update_sql = f"""
+                UPDATE backup_tasks
+                SET {', '.join(set_clauses)}
+                WHERE id = ${param_index}
+            """
+            await conn.execute(update_sql, *params)
+
+            # 记录操作日志
+            client_ip = http_request.client.host if http_request.client else None
+            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            await log_operation(
+                operation_type=OperationType.UPDATE,
+                resource_type="backup",
+                resource_id=str(task_id),
+                resource_name=f"备份任务模板: {updates.get('task_name', task_id)}",
+                operation_name="更新备份任务模板",
+                operation_description=f"更新备份任务模板: {updates.get('task_name', task_id)}",
+                category="backup",
+                success=True,
+                result_message="备份任务模板已更新",
+                old_values={},
+                new_values=updates,
+                changed_fields=list(updates.keys()),
+                ip_address=client_ip,
+                request_method="PUT",
+                request_url=str(http_request.url),
+                duration_ms=duration_ms
+            )
+
+            return {"success": True, "message": "备份任务模板已更新"}
     
     except HTTPException:
         raise

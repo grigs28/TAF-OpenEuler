@@ -7,19 +7,11 @@ Database Management Module
 
 import asyncio
 import logging
-from typing import AsyncGenerator, Optional
-from sqlalchemy import create_engine, MetaData
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
-from sqlalchemy.orm import sessionmaker, Session
-from sqlalchemy.pool import StaticPool, NullPool
+from typing import Optional
 
 from .settings import get_settings
-from models.base import Base
 
 logger = logging.getLogger(__name__)
-
-# 元数据
-metadata = MetaData()
 
 
 class DatabaseManager:
@@ -27,10 +19,6 @@ class DatabaseManager:
 
     def __init__(self):
         self.settings = get_settings()
-        self.engine = None
-        self.async_engine = None
-        self.SessionLocal = None
-        self.AsyncSessionLocal = None
         self._initialized = False
         self._is_opengauss_cache: Optional[bool] = None
 
@@ -79,48 +67,9 @@ class DatabaseManager:
             # 构建数据库URL
             raw_database_url = self.settings.DATABASE_URL
             database_url = self._build_database_url()
-            async_database_url = self._build_async_database_url()
 
-            # 根据数据库类型创建引擎
-            # 对于openGauss，需要特殊处理以避免版本解析错误
-            is_opengauss = self.is_opengauss_database()
-
-            # 对于openGauss，完全不创建SQLAlchemy引擎，避免版本解析错误
-            if is_opengauss:
-                logger.info("检测到openGauss数据库，跳过SQLAlchemy引擎创建，将使用原生SQL查询")
-                self.engine = None
-                self.async_engine = None
-                self.AsyncSessionLocal = None
-                self.SessionLocal = None
-            else:
-                # PostgreSQL支持连接池
-                connect_args = {}
-                self.engine = create_engine(
-                    database_url,
-                    pool_size=self.settings.DB_POOL_SIZE,
-                    max_overflow=self.settings.DB_MAX_OVERFLOW,
-                    echo=self.settings.DEBUG,
-                    pool_pre_ping=True,
-                    connect_args=connect_args
-                )
-                self.async_engine = create_async_engine(
-                    async_database_url,
-                    pool_size=self.settings.DB_POOL_SIZE,
-                    max_overflow=self.settings.DB_MAX_OVERFLOW,
-                    echo=self.settings.DEBUG,
-                    pool_pre_ping=True,
-                    connect_args=connect_args
-                )
-                self.AsyncSessionLocal = async_sessionmaker(
-                    self.async_engine,
-                    class_=AsyncSession,
-                    expire_on_commit=False
-                )
-                self.SessionLocal = sessionmaker(
-                    autocommit=False,
-                    autoflush=False,
-                    bind=self.engine
-                )
+            # openGauss使用原生SQL，不创建SQLAlchemy引擎
+            logger.info("openGauss数据库，跳过SQLAlchemy引擎创建，将使用原生SQL查询")
 
             # 创建表
             await self.create_tables()
@@ -156,31 +105,18 @@ class DatabaseManager:
             # 导入所有模型以确保它们被注册
             from models import backup, tape, user, system_log, system_config, scheduled_task
 
-            database_url = self.settings.DATABASE_URL
-
-            if self.is_opengauss_database():
-                # 对于openGauss，使用psycopg3（优先）或psycopg2（回退）直接创建表，避免版本检查问题
+            # 使用psycopg3（优先）或psycopg2（回退）直接创建表
+            try:
+                import psycopg
+                driver_name = "psycopg3"
+            except ImportError:
                 try:
-                    import psycopg
-                    driver_name = "psycopg3"
+                    import psycopg2
+                    driver_name = "psycopg2"
                 except ImportError:
-                    try:
-                        import psycopg2
-                        driver_name = "psycopg2"
-                    except ImportError:
-                        driver_name = "psycopg2/psycopg3（未安装）"
-                logger.info(f"检测到openGauss数据库，将使用{driver_name}创建表...")
-                await self._create_tables_with_psycopg2()
-            else:
-                # PostgreSQL使用SQLAlchemy引擎来创建表
-                with self.engine.begin() as conn:
-                    Base.metadata.create_all(conn)
-                logger.info("数据库表创建完成")
-
-                # 检查并添加缺失的字段（字段迁移）
-                await self._migrate_missing_columns_postgresql()
-                # 关键修复：确保路径、文件名字段是 TEXT 类型（对于已存在的表）
-                await self._ensure_text_fields_postgresql()
+                    driver_name = "psycopg2/psycopg3（未安装）"
+            logger.info(f"将使用{driver_name}创建数据库表...")
+            await self._create_tables_with_psycopg2()
 
         except Exception as e:
             logger.error(f"创建数据库表失败: {str(e)}")
@@ -240,8 +176,8 @@ class DatabaseManager:
             # 使用原生 SQL 创建表，不依赖 SQLAlchemy（符合规则：严禁 SQLAlchemy 解析 openGauss）
             # 从模型定义中提取表结构信息，生成原生 SQL
             from utils.sql_generator import get_table_definition_from_model, generate_create_table_sql
-            from models.base import Base
-            
+            from models.base import Base  # noqa: F401 - Base.metadata 用于获取表结构元数据
+
             with conn.cursor() as cur:
                 # 先创建枚举类型（明确定义所有枚举类型）
                 from models.scheduled_task import ScheduleType, ScheduledTaskStatus, TaskActionType
@@ -753,8 +689,7 @@ class DatabaseManager:
         """
         try:
             from models.backup import BackupTask, BackupSet
-            from sqlalchemy.sql import sqltypes
-            
+
             # 定义需要迁移的字段（表名 -> [(字段名, SQL类型, 默认值), ...]）
             migrations = {
                 'backup_tasks': [
@@ -923,80 +858,6 @@ class DatabaseManager:
             logger.warning(f"索引创建过程发生异常: {str(e)}，但不影响表创建流程", exc_info=True)
             # 不抛出异常，避免影响主流程
     
-    async def _migrate_missing_columns_postgresql(self):
-        """检查并添加缺失的字段（字段迁移）- PostgreSQL/非openGauss数据库
-        
-        使用SQLAlchemy引擎执行迁移
-        """
-        try:
-            from sqlalchemy import text, inspect
-            from models.backup import BackupTask, BackupSet
-            
-            # 定义需要迁移的字段（表名 -> [(字段名, SQL类型, 默认值, 注释), ...]）
-            migrations = {
-                'backup_tasks': [
-                    ('compressed_bytes', 'BIGINT', '0', '压缩后字节数'),
-                    ('scan_status', 'VARCHAR(50)', "'pending'", '扫描状态'),
-                    ('scan_completed_at', 'TIMESTAMPTZ', None, '扫描完成时间'),
-                    ('operation_stage', 'VARCHAR(50)', None, '操作阶段（scan/compress/copy/finalize）'),
-                ],
-                'backup_sets': [
-                    ('compressed_bytes', 'BIGINT', '0', '压缩后字节数'),
-                    ('compression_ratio', 'REAL', None, '压缩比'),
-                ],
-                'backup_files': [
-                    ('directory_path', 'VARCHAR(1000)', None, '目录路径'),
-                    ('display_name', 'VARCHAR(255)', None, '展示名称'),
-                    ('is_copy_success', 'BOOLEAN', 'FALSE', '是否复制成功'),
-                    ('copy_status_at', 'TIMESTAMPTZ', None, '复制状态更新时间'),
-                ],
-            }
-            
-            if self.engine is None:
-                return
-            
-            inspector = inspect(self.engine)
-            added_columns = []
-            existing_columns = []
-            
-            async with self.async_engine.begin() as conn:
-                for table_name, columns in migrations.items():
-                    # 检查表是否存在
-                    if not inspector.has_table(table_name):
-                        continue
-                    
-                    # 获取表中现有的所有列名
-                    existing_cols = {col['name'] for col in inspector.get_columns(table_name)}
-                    
-                    # 检查每个需要迁移的字段
-                    for col_name, col_type, default_value, comment in columns:
-                        if col_name not in existing_cols:
-                            # 字段不存在，需要添加
-                            default_clause = f"DEFAULT {default_value}" if default_value is not None else ""
-                            alter_sql = f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type} {default_clause}"
-                            await conn.execute(text(alter_sql))
-                            added_columns.append(f"{table_name}.{col_name}")
-                            
-                            # 添加注释（如果提供）
-                            if comment:
-                                try:
-                                    comment_sql = text(f"COMMENT ON COLUMN {table_name}.{col_name} IS '{comment}'")
-                                    await conn.execute(comment_sql)
-                                except Exception as comment_err:
-                                    logger.debug(f"添加字段注释失败 {table_name}.{col_name}: {str(comment_err)}")
-                        else:
-                            existing_columns.append(f"{table_name}.{col_name}")
-                
-                # 汇总输出
-                if added_columns:
-                    logger.info(f"添加了 {len(added_columns)} 个缺失字段: {', '.join(added_columns)}")
-                if existing_columns:
-                    logger.debug(f"跳过 {len(existing_columns)} 个已存在的字段")
-                    
-        except Exception as e:
-            logger.warning(f"字段迁移检查失败: {str(e)}，但不影响表创建流程")
-            # 不抛出异常，避免影响主流程
-    
     def _migrate_column_lengths(self, cur):
         """修改现有字段的类型（字段类型迁移）- openGauss
         将路径、文件名相关字段从 VARCHAR 改为 TEXT 类型（无长度限制）
@@ -1101,278 +962,36 @@ class DatabaseManager:
             logger.error(f"这可能导致长文件名/路径无法同步到数据库")
             # 不抛出异常，避免影响主流程，但记录详细错误信息
     
-    async def _ensure_text_fields_postgresql(self):
-        """确保路径、文件名字段是 TEXT 类型（PostgreSQL初始化时调用）"""
-        try:
-            from sqlalchemy import text, inspect
-            
-            if self.async_engine is None:
-                logger.debug("异步引擎未初始化，跳过字段类型检查")
-                return
-            
-            inspector = inspect(self.engine)
-            
-            # 检查 backup_files 表是否存在
-            if not inspector.has_table('backup_files'):
-                logger.debug("backup_files 表不存在，跳过字段类型检查")
-                return
-            
-            logger.info("========== 强制检查 backup_files 表字段类型（PostgreSQL）==========")
-            logger.info("确保路径、文件名、展示名称字段为 TEXT 类型（无长度限制）...")
-            
-            # 需要检查的字段
-            text_fields = [
-                ('file_name', '文件名'),
-                ('file_path', '文件路径'),
-                ('directory_path', '目录路径'),
-                ('display_name', '展示名称'),
-            ]
-            
-            modified_fields = []
-            skipped_fields = []
-            error_fields = []
-            
-            async with self.async_engine.begin() as conn:
-                # 获取表中现有字段的类型信息
-                existing_cols = {}
-                for col in inspector.get_columns('backup_files'):
-                    col_name = col['name']
-                    col_type = col['type']
-                    type_name = col_type.__class__.__name__
-                    if type_name == 'VARCHAR':
-                        existing_cols[col_name] = {'type': 'VARCHAR', 'length': col_type.length}
-                    elif type_name == 'TEXT' or str(col_type) == 'TEXT':
-                        existing_cols[col_name] = {'type': 'TEXT', 'length': None}
-                
-                # 检查每个字段
-                for field_name, comment in text_fields:
-                    try:
-                        if field_name not in existing_cols:
-                            logger.warning(f"字段 backup_files.{field_name} 不存在，跳过")
-                            continue
-                        
-                        current_type = existing_cols[field_name]['type']
-                        current_length = existing_cols[field_name]['length']
-                        
-                        if current_type == 'TEXT':
-                            skipped_fields.append(field_name)
-                            logger.debug(f"backup_files.{field_name} 已是 TEXT 类型，无需修改")
-                            continue
-                        
-                        if current_type == 'VARCHAR':
-                            logger.info(f"将 backup_files.{field_name} 从 VARCHAR({current_length}) 改为 TEXT...")
-                            try:
-                                alter_sql = text(f"ALTER TABLE backup_files ALTER COLUMN {field_name} TYPE TEXT USING {field_name}::TEXT")
-                                await conn.execute(alter_sql)
-                                modified_fields.append(field_name)
-                                logger.info(f"✅ 成功将 backup_files.{field_name} 改为 TEXT 类型")
-                            except Exception as alter_err:
-                                error_fields.append(f"{field_name} ({str(alter_err)})")
-                                logger.error(f"❌ 修改 backup_files.{field_name} 失败: {str(alter_err)}")
-                    except Exception as check_err:
-                        error_fields.append(f"{field_name} (检查失败: {str(check_err)})")
-                        logger.error(f"❌ 检查 backup_files.{field_name} 失败: {str(check_err)}")
-            
-            # 汇总输出
-            if modified_fields:
-                logger.info(f"========== ✅ 成功修改了 {len(modified_fields)} 个字段为 TEXT: {', '.join(modified_fields)} ==========")
-            if skipped_fields:
-                logger.info(f"跳过 {len(skipped_fields)} 个已是 TEXT 类型的字段: {', '.join(skipped_fields)}")
-            if error_fields:
-                logger.error(f"========== ❌ {len(error_fields)} 个字段修改失败: ==========")
-                for err_field in error_fields:
-                    logger.error(f"   - {err_field}")
-                logger.error(f"这会导致长文件名/路径无法同步到数据库！")
-            else:
-                logger.info("========== 字段类型检查完成，所有字段都是 TEXT 类型 ==========")
-                
-        except Exception as e:
-            logger.error(f"字段类型检查失败: {str(e)}", exc_info=True)
-            # 不抛出异常，避免影响应用启动
-    
-    async def _migrate_column_lengths_postgresql(self):
-        """修改现有字段的类型（字段类型迁移）- PostgreSQL/非openGauss数据库
-        将路径、文件名相关字段从 VARCHAR 改为 TEXT 类型（无长度限制）
-        
-        使用SQLAlchemy引擎执行迁移
-        """
-        try:
-            from sqlalchemy import text, inspect
-            
-            # 定义需要修改类型的字段（表名 -> [(字段名, 注释), ...]）
-            text_migrations = {
-                'backup_files': [
-                    ('file_name', '文件名'),
-                    ('file_path', '文件路径'),
-                    ('directory_path', '目录路径'),
-                ],
-            }
-            
-            if self.engine is None:
-                logger.debug("引擎未初始化，跳过字段类型迁移")
-                return
-            
-            inspector = inspect(self.engine)
-            modified_columns = []
-            skipped_columns = []
-            error_columns = []
-            
-            logger.info("========== 开始检查字段类型迁移（VARCHAR -> TEXT，PostgreSQL）==========")
-            logger.info("注意：如果数据库字段仍然是 VARCHAR(255)，需要执行此迁移将字段改为 TEXT 类型")
-            
-            async with self.async_engine.begin() as conn:
-                for table_name, columns in text_migrations.items():
-                    # 检查表是否存在
-                    if not inspector.has_table(table_name):
-                        logger.debug(f"表 {table_name} 不存在，跳过字段类型迁移")
-                        continue
-                    
-                    # 获取表中现有字段的类型信息
-                    existing_cols = {}
-                    for col in inspector.get_columns(table_name):
-                        col_name = col['name']
-                        col_type = col['type']
-                        type_name = col_type.__class__.__name__
-                        if type_name == 'VARCHAR':
-                            existing_cols[col_name] = {'type': 'VARCHAR', 'length': col_type.length}
-                        elif type_name == 'TEXT' or str(col_type) == 'TEXT':
-                            existing_cols[col_name] = {'type': 'TEXT', 'length': None}
-                    
-                    # 检查每个需要修改类型的字段
-                    for col_name, comment in columns:
-                        if col_name not in existing_cols:
-                            # 字段不存在，跳过
-                            logger.debug(f"字段 {table_name}.{col_name} 不存在，跳过")
-                            continue
-                        
-                        current_type = existing_cols[col_name]['type']
-                        current_length = existing_cols[col_name]['length']
-                        
-                        # 如果已经是 TEXT 类型，跳过
-                        if current_type == 'TEXT':
-                            skipped_columns.append(f"{table_name}.{col_name} (已是 TEXT 类型)")
-                            logger.debug(f"字段 {table_name}.{col_name} 已是 TEXT 类型，跳过")
-                            continue
-                        
-                        # 如果是 VARCHAR 类型，改为 TEXT
-                        if current_type == 'VARCHAR':
-                            try:
-                                logger.info(f"正在修改字段类型: {table_name}.{col_name} (VARCHAR({current_length}) -> TEXT)")
-                                # 使用 USING 子句确保数据转换成功
-                                alter_sql = text(f"ALTER TABLE {table_name} ALTER COLUMN {col_name} TYPE TEXT USING {col_name}::TEXT")
-                                await conn.execute(alter_sql)
-                                modified_columns.append(f"{table_name}.{col_name} (VARCHAR({current_length}) -> TEXT)")
-                                logger.info(f"✅ 成功修改字段类型: {table_name}.{col_name} (VARCHAR({current_length}) -> TEXT)")
-                                
-                                # 更新注释（如果提供）
-                                if comment:
-                                    try:
-                                        comment_sql = text(f"COMMENT ON COLUMN {table_name}.{col_name} IS '{comment}'")
-                                        await conn.execute(comment_sql)
-                                    except Exception as comment_err:
-                                        logger.debug(f"更新字段注释失败 {table_name}.{col_name}: {str(comment_err)}")
-                            except Exception as alter_err:
-                                error_msg = f"{table_name}.{col_name}: {str(alter_err)}"
-                                error_columns.append(error_msg)
-                                logger.error(f"❌ 修改字段类型失败: {error_msg}")
-                
-                # 汇总输出
-                if modified_columns:
-                    logger.info(f"✅ 成功修改了 {len(modified_columns)} 个字段类型: {', '.join(modified_columns)}")
-                if skipped_columns:
-                    logger.info(f"跳过 {len(skipped_columns)} 个已是 TEXT 类型的字段（无需迁移）")
-                if error_columns:
-                    logger.error(f"❌ {len(error_columns)} 个字段类型修改失败:")
-                    for error_col in error_columns:
-                        logger.error(f"   - {error_col}")
-                    logger.error(f"这些字段可能仍然是 VARCHAR(255)，长文件名/路径可能无法同步")
-                
-                # 如果没有任何字段被修改，且表存在，记录信息
-                if not modified_columns and not skipped_columns and not error_columns:
-                    logger.info("未找到需要迁移的字段（表可能不存在或字段已迁移）")
-                    
-        except Exception as e:
-            logger.error(f"========== 字段类型迁移检查失败（PostgreSQL）==========")
-            logger.error(f"错误信息: {str(e)}", exc_info=True)
-            logger.error(f"这可能导致长文件名/路径无法同步到数据库")
-            # 不抛出异常，避免影响主流程，但记录详细错误信息
-
-    def get_sync_session(self) -> Session:
-        """获取同步数据库会话"""
-        if not self._initialized:
-            raise RuntimeError("数据库未初始化")
-        if self.SessionLocal is None:
-            raise RuntimeError("openGauss数据库不支持SQLAlchemy同步会话，请使用原生SQL查询")
-        return self.SessionLocal()
-
-    async def get_async_session(self) -> AsyncGenerator[AsyncSession, None]:
-        """获取异步数据库会话"""
-        if not self._initialized:
-            raise RuntimeError("数据库未初始化")
-        if self.AsyncSessionLocal is None:
-            raise RuntimeError("openGauss数据库不支持SQLAlchemy异步会话，请使用原生SQL查询（asyncpg）")
-
-        async with self.AsyncSessionLocal() as session:
-            try:
-                yield session
-            except Exception:
-                await session.rollback()
-                raise
-            finally:
-                await session.close()
-
-    async def execute_sql(self, sql: str, params: dict = None):
-        """执行原生SQL"""
-        if self.async_engine is None:
-            raise RuntimeError("openGauss数据库不支持SQLAlchemy，请使用asyncpg直接执行SQL查询")
-        async with self.async_engine.begin() as conn:
-            result = await conn.execute(sql, params or {})
-            return result
-
     async def close(self):
         """关闭数据库连接"""
-        try:
-            if self.async_engine:
-                await self.async_engine.dispose()
-            if self.engine:
-                self.engine.dispose()
-            logger.info("数据库连接已关闭")
-        except Exception as e:
-            logger.error(f"关闭数据库连接时发生错误: {str(e)}")
+        logger.info("数据库连接已关闭")
 
     async def health_check(self) -> bool:
         """数据库健康检查"""
         try:
-            if self.is_opengauss_database():
-                import asyncpg
-                import re
+            import asyncpg
+            import re
 
-                database_url = self.settings.DATABASE_URL
-                if database_url.startswith("opengauss://"):
-                    database_url = database_url.replace("opengauss://", "postgresql://", 1)
-                pattern = r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)'
-                match = re.match(pattern, database_url)
-                if not match:
-                    return False
-                username, password, host, port, database = match.groups()
-                conn = await asyncpg.connect(
-                    host=host,
-                    port=int(port),
-                    user=username,
-                    password=password,
-                    database=database,
-                    timeout=5
-                )
-                try:
-                    await conn.execute("SELECT 1")
-                finally:
-                    await conn.close()
-            else:
-                from sqlalchemy import text
-                if not self.async_engine:
-                    raise RuntimeError("异步引擎未初始化")
-                async with self.async_engine.begin() as conn:
-                    await conn.execute(text("SELECT 1"))
+            database_url = self.settings.DATABASE_URL
+            if database_url.startswith("opengauss://"):
+                database_url = database_url.replace("opengauss://", "postgresql://", 1)
+            pattern = r'postgresql://([^:]+):([^@]+)@([^:]+):(\d+)/(.+)'
+            match = re.match(pattern, database_url)
+            if not match:
+                return False
+            username, password, host, port, database = match.groups()
+            conn = await asyncpg.connect(
+                host=host,
+                port=int(port),
+                user=username,
+                password=password,
+                database=database,
+                timeout=5
+            )
+            try:
+                await conn.execute("SELECT 1")
+            finally:
+                await conn.close()
             return True
         except Exception as e:
             logger.error(f"数据库健康检查失败: {str(e)}")
@@ -1381,14 +1000,3 @@ class DatabaseManager:
 
 # 全局数据库管理器实例
 db_manager = DatabaseManager()
-
-
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """依赖注入：获取数据库会话"""
-    async for session in db_manager.get_async_session():
-        yield session
-
-
-def get_sync_db():
-    """依赖注入：获取同步数据库会话"""
-    return db_manager.get_sync_session()

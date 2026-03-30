@@ -180,12 +180,7 @@ class BackupScanner:
                     # 使用批量数据库写入器提升写入性能
                     if backup_set_db_id:
                         # 检查数据库类型，Redis不使用SQLite内存数据库
-                        from utils.scheduler.db_utils import is_redis
-                        is_redis_db = is_redis()
-                        
-                        # Redis本身是内存数据库，不需要SQLite内存数据库层
-                        # 只有在SQLite/openGauss模式下才使用内存数据库写入器（实时读取最新配置）
-                        use_memory_db = getattr(settings, 'USE_MEMORY_DB', True) and not is_redis_db
+                        use_memory_db = getattr(settings, 'USE_MEMORY_DB', True)
 
                         if use_memory_db:
                             sync_batch_size = getattr(settings, 'MEMORY_DB_SYNC_BATCH_SIZE', 3000)
@@ -211,7 +206,7 @@ class BackupScanner:
                                 f"sync_batch={sync_batch_size}, interval={sync_interval}s)"
                             )
                         else:
-                            # 回退到批量写入器（Redis模式或不使用内存数据库时）（实时读取最新配置）
+                            # 回退到批量写入器（不使用内存数据库时）（实时读取最新配置）
                             # 不使用内存数据库时，批次大小由 SCAN_UPDATE_INTERVAL 控制
                             batch_size = update_interval  # 使用扫描进度更新间隔作为批次大小
                             max_queue_size = getattr(settings, 'DB_QUEUE_MAX_SIZE', 50000)
@@ -225,10 +220,7 @@ class BackupScanner:
                             )
                             await batch_writer.start()  # 启动批量写入器（顺序执行模式，不使用队列）
                             
-                            if is_redis_db:
-                                logger.info(f"[Redis模式] Redis本身是内存数据库，直接使用批量写入器写入Redis (batch_size={batch_size})")
-                            else:
-                                logger.info(f"批量写入器已启动（顺序执行模式，不使用队列，直接写入数据库）(batch_size={batch_size})")
+                            logger.info(f"批量写入器已启动（顺序执行模式）(batch_size={batch_size})")
                     
                     # 使用ES扫描器进行流式扫描
                     # ES扫描器直接顺序写内存数据库：ES扫描器传过来多少写多少，一批次全部写入内存数据库
@@ -284,30 +276,15 @@ class BackupScanner:
                                             for file_path, error_msg in failed_files[:5]:  # 只记录前5个
                                                 logger.debug(f"[后台扫描-ES] 失败文件: {file_path[:200]}, 错误: {error_msg}")
                                 else:
-                                    # 不使用内存数据库时，使用批量写入器（Redis或openGauss直接写入）
-                                    from utils.scheduler.db_utils import is_redis
-                                    is_redis_db = is_redis()
-                                    
-                                    if is_redis_db:
-                                        # Redis模式：直接批量写入
-                                        logger.debug(f"[Redis批量写入] 一次性写入 {batch_size} 个文件到数据库")
-                                        try:
-                                            await batch_writer._process_batch_redis(file_batch)
-                                            logger.info(f"[Redis批量写入] ✅ 已成功一次性写入 {batch_size} 个文件到数据库")
-                                        except Exception as batch_error:
-                                            logger.error(f"[Redis批量写入] ❌ 一次性写入失败: {str(batch_error)}", exc_info=True)
-                                            # 不清空批次，下次循环会重试（不丢弃数据）
-                                            raise
-                                    else:
-                                        # openGauss模式：顺序执行模式，直接同步写入数据库，等待全部写入完成后再继续扫描
-                                        try:
-                                            logger.debug(f"[后台扫描-ES] 开始同步写入批次到数据库: {batch_size} 个文件")
-                                            await batch_writer.write_batch_sync(file_batch)
-                                            logger.debug(f"[后台扫描-ES] ✅ 批次已全部写入数据库: {batch_size} 个文件")
-                                        except Exception as batch_error:
-                                            # 批量写入失败，记录错误但不中断扫描
-                                            logger.error(f"[后台扫描-ES] ❌ 批量写入失败: {str(batch_error)}", exc_info=True)
-                                            # 继续处理下一批次，不中断扫描
+                                    # 不使用内存数据库时，直接同步写入数据库
+                                    try:
+                                        logger.debug(f"[后台扫描-ES] 开始同步写入批次到数据库: {batch_size} 个文件")
+                                        await batch_writer.write_batch_sync(file_batch)
+                                        logger.debug(f"[后台扫描-ES] ✅ 批次已全部写入数据库: {batch_size} 个文件")
+                                    except Exception as batch_error:
+                                        # 批量写入失败，记录错误但不中断扫描
+                                        logger.error(f"[后台扫描-ES] ❌ 批量写入失败: {str(batch_error)}", exc_info=True)
+                                        # 继续处理下一批次，不中断扫描
                             except Exception as e:
                                 # 其他错误，记录但不中断扫描，不丢弃数据
                                 logger.error(f"[后台扫描-ES] ❌ 批量写入文件失败: {e}，数据未丢弃，将在下次同步时重试", exc_info=True)
@@ -431,13 +408,8 @@ class BackupScanner:
                 # 使用批量数据库写入器提升写入性能
 
                 if backup_set_db_id:
-                    # 检查数据库类型，Redis不使用SQLite内存数据库
-                    from utils.scheduler.db_utils import is_redis
-                    is_redis_db = is_redis()
-                    
-                    # Redis本身是内存数据库，不需要SQLite内存数据库层
-                    # 只有在SQLite/openGauss模式下才使用内存数据库写入器（实时读取最新配置）
-                    use_memory_db = getattr(settings, 'USE_MEMORY_DB', True) and not is_redis_db
+                    # 检查是否使用内存数据库写入器
+                    use_memory_db = getattr(settings, 'USE_MEMORY_DB', True)
 
                     if use_memory_db:
                         sync_batch_size = getattr(settings, 'MEMORY_DB_SYNC_BATCH_SIZE', 5000)
@@ -460,7 +432,7 @@ class BackupScanner:
                         await memory_writer.initialize()
                         logger.info(f"内存数据库写入器已启动 (sync_batch={sync_batch_size}, interval={sync_interval}s)")
                     else:
-                        # 回退到批量写入器（实时读取最新配置）
+                        # 回退到批量写入器
                         batch_size = getattr(settings, 'DB_BATCH_SIZE', 1000)
                         max_queue_size = getattr(settings, 'DB_QUEUE_MAX_SIZE', 5000)
 
@@ -470,12 +442,8 @@ class BackupScanner:
                             batch_size=batch_size,
                             max_queue_size=max_queue_size
                         )
-                        await batch_writer.start()  # 启动批量写入器（顺序执行模式，不使用队列）
-                        
-                        if is_redis_db:
-                            logger.info(f"[Redis模式] Redis本身是内存数据库，直接使用批量写入器写入Redis (batch_size={batch_size})")
-                        else:
-                            logger.info(f"批量写入器已启动（顺序执行模式，不使用队列）(batch_size={batch_size})")
+                        await batch_writer.start()
+                        logger.info(f"批量写入器已启动（顺序执行模式）(batch_size={batch_size})")
                 
                 # 文件扫描顺序写入内存数据库：使用SCAN_UPDATE_INTERVAL作为批次大小
                 # 扫描器返回的每个批次大小 = SCAN_UPDATE_INTERVAL，直接写入内存数据库，无需再次累积

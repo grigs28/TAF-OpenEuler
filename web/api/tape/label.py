@@ -15,7 +15,7 @@ from pydantic import BaseModel
 from .models import WriteTapeLabelRequest, UpdateTapeRequest
 from models.system_log import OperationType, LogCategory, LogLevel
 from utils.log_utils import log_operation, log_system
-from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection, is_sqlite, is_redis, get_sqlite_connection
+from utils.scheduler.db_utils import get_opengauss_connection
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -147,26 +147,13 @@ async def write_tape_label(request: WriteTapeLabelRequest, http_request: Request
         if not system:
             raise HTTPException(status_code=500, detail="系统未初始化")
         
-        # 检查是否为Redis数据库
-        from utils.scheduler.db_utils import is_redis
-        
-        if is_redis():
-            logger.warning(f"[Redis模式] 写入磁带标签暂未实现: {request.tape_id}")
-            raise HTTPException(status_code=501, detail="Redis模式下暂不支持写入磁带标签功能")
-        
         # 从数据库中获取磁带的过期时间等信息
         from config.settings import get_settings
         from utils.db_connection_helper import get_psycopg_connection_from_url
-        
+
         settings = get_settings()
         database_url = settings.DATABASE_URL
-        
-        # 检查是否为 SQLite
-        if is_sqlite():
-            # SQLite 版本暂不支持写入标签（需要实现）
-            logger.warning(f"[SQLite模式] 写入磁带标签暂未实现: {request.tape_id}")
-            raise HTTPException(status_code=501, detail="SQLite模式下暂不支持写入磁带标签功能")
-        
+
         # 使用统一的连接辅助函数（支持 psycopg2 和 psycopg3）
         conn, is_psycopg3 = get_psycopg_connection_from_url(database_url, prefer_psycopg3=True)
         try:
