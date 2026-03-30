@@ -30,7 +30,8 @@ class CompressionWorker:
         file_move_worker=None,
         backup_notifier=None,
         tape_file_mover=None,
-        file_group_prefetcher=None
+        file_group_prefetcher=None,
+        in_memory_store=None
     ):
         self.backup_task = backup_task
         self.settings = settings
@@ -41,6 +42,7 @@ class CompressionWorker:
         self.backup_notifier = backup_notifier
         self.tape_file_mover = tape_file_mover
         self.file_group_prefetcher = file_group_prefetcher
+        self.in_memory_store = in_memory_store
 
         # 检查是否使用预取模式（openGauss模式且有预取器）
         self.use_prefetcher = is_opengauss() and file_group_prefetcher is not None
@@ -86,6 +88,20 @@ class CompressionWorker:
             )
         else:
             self.db_updater = None
+
+    async def _get_scan_status(self) -> str:
+        """获取扫描状态（优先从内存对象读取，避免数据库查询）
+
+        扫描器在两种模式下都会设置 backup_task.scan_status 属性：
+        - DB模式：simple_scanner.scan_and_write() 设置 backup_task.scan_status = "completed"
+        - 内存模式：同上
+        因此优先读取内存属性，减少数据库查询
+        """
+        # 优先从内存中的 backup_task 对象读取
+        scan_status = getattr(self.backup_task, 'scan_status', None)
+        if scan_status:
+            return scan_status
+        return await self.backup_db.get_scan_status(self.backup_task.id)
 
     def start(self):
         """启动压缩处理任务"""
@@ -200,7 +216,7 @@ class CompressionWorker:
             scan_status = getattr(self.backup_task, "scan_status", None)
             if not scan_status and self.backup_task.id:
                 try:
-                    scan_status = await self.backup_db.get_scan_status(self.backup_task.id)
+                    scan_status = await self._get_scan_status()
                 except Exception:
                     pass
             
@@ -288,7 +304,7 @@ class CompressionWorker:
                         continue
                     
                     # 检查停止条件：扫描完成 + 文件组预取无内容 + 队列为空 + 预取器已停止 + 所有压缩文件压缩完成 + 预取器执行次数 > 0
-                    scan_status = await self.backup_db.get_scan_status(self.backup_task.id)
+                    scan_status = await self._get_scan_status()
                     prefetch_loop_count = getattr(self.file_group_prefetcher, 'prefetch_loop_count', 0) if self.file_group_prefetcher else 0
                     is_rescanning = getattr(self.file_group_prefetcher, 'is_rescanning_missing_files', False) if self.file_group_prefetcher else False
                     
@@ -465,7 +481,7 @@ class CompressionWorker:
                 # 同时检查并调整并行批次数量
                 if self.use_prefetcher:
                     await self._adjust_parallel_batches()
-                scan_status = await self.backup_db.get_scan_status(self.backup_task.id)
+                scan_status = await self._get_scan_status()
                 if scan_status != 'completed':
                     logger.info(f"获取文件组超时，但扫描未完成（状态={scan_status}），继续等待...")
                     # 如果有正在运行的任务，等待它们完成
@@ -486,7 +502,7 @@ class CompressionWorker:
             except Exception as e:
                 logger.error(f"处理文件组失败: {str(e)}", exc_info=True)
                 # 发生异常时也检查扫描状态
-                scan_status = await self.backup_db.get_scan_status(self.backup_task.id)
+                scan_status = await self._get_scan_status()
                 if scan_status != 'completed':
                     logger.info(f"处理文件组异常，但扫描未完成（状态={scan_status}），继续等待...")
                     # 如果有正在运行的任务，等待它们完成
@@ -835,7 +851,7 @@ class CompressionWorker:
                 )
 
                 if not file_groups:
-                    scan_status = await self.backup_db.get_scan_status(self.backup_task.id)
+                    scan_status = await self._get_scan_status()
                     if scan_status == 'completed':
                         logger.info("所有文件组处理完成")
                         break
@@ -872,7 +888,7 @@ class CompressionWorker:
             except Exception as e:
                 logger.error(f"处理文件组失败: {str(e)}", exc_info=True)
                 # 发生异常时检查扫描状态，如果扫描未完成，继续等待
-                scan_status = await self.backup_db.get_scan_status(self.backup_task.id)
+                scan_status = await self._get_scan_status()
                 if scan_status != 'completed':
                     logger.info(f"处理文件组异常，但扫描未完成（状态={scan_status}），继续等待...")
                     await asyncio.sleep(2)
@@ -1016,105 +1032,109 @@ class CompressionWorker:
                     self.total_size += compressed_size
                     self.total_original_size += original_size
                     
-                    # 只更新 chunk_number（不更新 is_copy_success，因为预取时已设置）
-                    # 这样 get_compressed_files_count 才能查询到已压缩的文件（chunk_number IS NOT NULL）
-                    try:
-                        # 获取 chunk_number（使用 group_idx + 1 作为 chunk_number）
-                        chunk_number = group_idx + 1
-                        # 获取文件路径列表
-                        file_paths = [f.get('file_path') or f.get('path') for f in processed_file_group if f.get('file_path') or f.get('path')]
-                        
-                        if file_paths:
-                            # 使用数据库更新器异步批量更新（openGauss模式）
-                            if self.db_updater:
-                                # 提交给更新器，由更新器批量处理
-                                await self.db_updater.submit_compressed_files(
-                                    group_idx=group_idx,
-                                    file_paths=file_paths,
-                                    chunk_number=chunk_number,
-                                    compressed_size=compressed_size,
-                                    original_size=original_size
-                                )
-                                logger.info(
-                                    f"[压缩工作器] ✅ 已提交压缩文件组 #{group_idx + 1} 给调度器: "
-                                    f"{len(file_paths)} 个文件, chunk_number={chunk_number}, "
-                                    f"压缩大小={format_bytes(compressed_size)}"
-                                )
-                            else:
-                                # SQLite/Redis 模式：使用 mark_files_as_copied（它会处理这些模式）
-                                # 但只更新 chunk_number 相关字段
-                                compressed_file_info = {
-                                    'compressed_size': compressed_size,
-                                    'compression_enabled': compressed_info.get('compression_enabled', True),
-                                    'checksum': compressed_info.get('checksum')
-                                }
-                                archive_path = compressed_info.get('path') or ''
-                                await self.backup_db.mark_files_as_copied(
-                                    backup_set=self.backup_set,
-                                    file_group=processed_file_group,
-                                    compressed_file=compressed_file_info,
-                                    tape_file_path=archive_path,
-                                    chunk_number=chunk_number
-                                )
-                                logger.info(f"[#{group_idx + 1}] ✅ 已更新 chunk_number={chunk_number}，文件数={len(processed_file_group)}")
-                    except Exception as update_error:
-                        logger.error(f"[#{group_idx + 1}] ⚠️ 提交压缩文件信息失败: {str(update_error)}", exc_info=True)
-                    
-                    # 从数据库读取当前值，然后累加（避免并发问题）
-                    from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
-                    if is_opengauss():
-                        async with get_opengauss_connection() as conn:
-                            row = await conn.fetchrow(
-                                "SELECT processed_files, processed_bytes, compressed_bytes, total_files FROM backup_tasks WHERE id = $1",
-                                self.backup_task.id
-                            )
-                            if row:
-                                current_processed_files = row['processed_files'] or 0
-                                current_processed_bytes = row['processed_bytes'] or 0
-                                current_compressed_bytes = row['compressed_bytes'] or 0
-                                total_files_to_process = row['total_files'] or 0
-                            else:
-                                current_processed_files = 0
-                                current_processed_bytes = 0
-                                current_compressed_bytes = 0
-                                total_files_to_process = getattr(self.backup_task, 'total_files', 0) or 0
-                    else:
-                        # SQLite/Redis 模式：从backup_task对象读取
-                        current_processed_files = getattr(self.backup_task, 'processed_files', 0) or 0
-                        current_processed_bytes = getattr(self.backup_task, 'processed_bytes', 0) or 0
-                        current_compressed_bytes = getattr(self.backup_task, 'compressed_bytes', 0) or 0
+                    # 纯内存模式：跳过所有数据库操作（不写chunk_number、不更新DB进度）
+                    if self.in_memory_store is not None:
+                        # 只更新内存中的backup_task统计
                         total_files_to_process = getattr(self.backup_task, 'total_files', 0) or 0
-                    
-                    # 累加新值
-                    new_processed_files = current_processed_files + total_files
-                    new_processed_bytes = current_processed_bytes + original_size
-                    new_compressed_bytes = current_compressed_bytes + compressed_size
-                    
-                    # 计算进度百分比
-                    if total_files_to_process > 0:
-                        new_progress_percent = min(100.0, (new_processed_files / total_files_to_process) * 100.0)
+                        new_progress_percent = min(100.0, (self.processed_files / total_files_to_process) * 100.0) if total_files_to_process > 0 else 0.0
+                        self.backup_task.processed_files = self.processed_files
+                        self.backup_task.processed_bytes = self.total_original_size
+                        self.backup_task.compressed_bytes = self.total_size
+                        self.backup_task.progress_percent = new_progress_percent
+
+                        logger.info(
+                            f"[#{group_idx + 1}] ✅ 压缩完成（内存模式）: {total_files} 个文件, "
+                            f"原始大小: {format_bytes(original_size)}, 压缩后: {format_bytes(compressed_size)}, "
+                            f"累计: {self.processed_files}/{total_files_to_process} 个文件 ({new_progress_percent:.1f}%)"
+                        )
                     else:
-                        new_progress_percent = getattr(self.backup_task, 'progress_percent', 0.0) or 0.0
-                    
-                    # 更新backup_task对象
-                    self.backup_task.processed_files = new_processed_files
-                    self.backup_task.processed_bytes = new_processed_bytes
-                    self.backup_task.compressed_bytes = new_compressed_bytes
-                    self.backup_task.progress_percent = new_progress_percent
-                    
-                    # 更新数据库（使用update_scan_progress，它会更新这些字段）
-                    await self.backup_db.update_scan_progress(
-                        self.backup_task,
-                        new_processed_files,  # scanned_count
-                        new_processed_files,  # valid_count
-                        None  # operation_status (不更新，保持description中的压缩进度)
-                    )
-                    
-                    logger.info(
-                        f"[#{group_idx + 1}] ✅ 压缩完成并已移动到final: {total_files} 个文件, "
-                        f"原始大小: {format_bytes(original_size)}, 压缩后: {format_bytes(compressed_size)}, "
-                        f"累计: {new_processed_files}/{total_files_to_process} 个文件 ({new_progress_percent:.1f}%)"
-                    )
+                        # 数据库模式：更新chunk_number和DB进度
+                        try:
+                            chunk_number = group_idx + 1
+                            file_paths = [f.get('file_path') or f.get('path') for f in processed_file_group if f.get('file_path') or f.get('path')]
+
+                            if file_paths:
+                                if self.db_updater:
+                                    await self.db_updater.submit_compressed_files(
+                                        group_idx=group_idx,
+                                        file_paths=file_paths,
+                                        chunk_number=chunk_number,
+                                        compressed_size=compressed_size,
+                                        original_size=original_size
+                                    )
+                                    logger.info(
+                                        f"[压缩工作器] ✅ 已提交压缩文件组 #{group_idx + 1} 给调度器: "
+                                        f"{len(file_paths)} 个文件, chunk_number={chunk_number}, "
+                                        f"压缩大小={format_bytes(compressed_size)}"
+                                    )
+                                else:
+                                    compressed_file_info = {
+                                        'compressed_size': compressed_size,
+                                        'compression_enabled': compressed_info.get('compression_enabled', True),
+                                        'checksum': compressed_info.get('checksum')
+                                    }
+                                    archive_path = compressed_info.get('path') or ''
+                                    await self.backup_db.mark_files_as_copied(
+                                        backup_set=self.backup_set,
+                                        file_group=processed_file_group,
+                                        compressed_file=compressed_file_info,
+                                        tape_file_path=archive_path,
+                                        chunk_number=chunk_number
+                                    )
+                                    logger.info(f"[#{group_idx + 1}] ✅ 已更新 chunk_number={chunk_number}，文件数={len(processed_file_group)}")
+                        except Exception as update_error:
+                            logger.error(f"[#{group_idx + 1}] ⚠️ 提交压缩文件信息失败: {str(update_error)}", exc_info=True)
+
+                        # 从数据库读取当前值，然后累加（避免并发问题）
+                        from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection
+                        if is_opengauss():
+                            async with get_opengauss_connection() as conn:
+                                row = await conn.fetchrow(
+                                    "SELECT processed_files, processed_bytes, compressed_bytes, total_files FROM backup_tasks WHERE id = $1",
+                                    self.backup_task.id
+                                )
+                                if row:
+                                    current_processed_files = row['processed_files'] or 0
+                                    current_processed_bytes = row['processed_bytes'] or 0
+                                    current_compressed_bytes = row['compressed_bytes'] or 0
+                                    total_files_to_process = row['total_files'] or 0
+                                else:
+                                    current_processed_files = 0
+                                    current_processed_bytes = 0
+                                    current_compressed_bytes = 0
+                                    total_files_to_process = getattr(self.backup_task, 'total_files', 0) or 0
+                        else:
+                            current_processed_files = getattr(self.backup_task, 'processed_files', 0) or 0
+                            current_processed_bytes = getattr(self.backup_task, 'processed_bytes', 0) or 0
+                            current_compressed_bytes = getattr(self.backup_task, 'compressed_bytes', 0) or 0
+                            total_files_to_process = getattr(self.backup_task, 'total_files', 0) or 0
+
+                        new_processed_files = current_processed_files + total_files
+                        new_processed_bytes = current_processed_bytes + original_size
+                        new_compressed_bytes = current_compressed_bytes + compressed_size
+
+                        if total_files_to_process > 0:
+                            new_progress_percent = min(100.0, (new_processed_files / total_files_to_process) * 100.0)
+                        else:
+                            new_progress_percent = getattr(self.backup_task, 'progress_percent', 0.0) or 0.0
+
+                        self.backup_task.processed_files = new_processed_files
+                        self.backup_task.processed_bytes = new_processed_bytes
+                        self.backup_task.compressed_bytes = new_compressed_bytes
+                        self.backup_task.progress_percent = new_progress_percent
+
+                        await self.backup_db.update_scan_progress(
+                            self.backup_task,
+                            new_processed_files,
+                            new_processed_files,
+                            None
+                        )
+
+                        logger.info(
+                            f"[#{group_idx + 1}] ✅ 压缩完成并已移动到final: {total_files} 个文件, "
+                            f"原始大小: {format_bytes(original_size)}, 压缩后: {format_bytes(compressed_size)}, "
+                            f"累计: {new_processed_files}/{total_files_to_process} 个文件 ({new_progress_percent:.1f}%)"
+                        )
                 
                 archive_path = compressed_info.get('path') if compressed_info else None
 
@@ -1123,3 +1143,4 @@ class CompressionWorker:
         except Exception as e:
             logger.error(f"[#{group_idx + 1}] ❌ 压缩失败: {str(e)}", exc_info=True)
             raise
+

@@ -42,7 +42,8 @@ class BackupScanner:
         source_paths: List[str],
         exclude_patterns: List[str],
         backup_set: BackupSet,
-        restart: bool = False
+        restart: bool = False,
+        in_memory_store=None,
     ):
         """独立的后台扫描任务，专门更新卡片中的总文件数和总字节数
         
@@ -85,6 +86,7 @@ class BackupScanner:
                         exclude_patterns=exclude_patterns,
                         backup_set=backup_set,
                         restart=restart,
+                        in_memory_store=in_memory_store,
                     )
                     return
                 else:

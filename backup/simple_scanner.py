@@ -29,6 +29,19 @@ from config.settings import get_settings
 logger = logging.getLogger(__name__)
 
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def _conditional_db_connection(use_memory_mode):
+    """条件性数据库连接：内存模式返回None，否则打开openGauss连接"""
+    if use_memory_mode:
+        yield None, None
+    else:
+        async with get_opengauss_connection() as conn:
+            actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+            yield conn, actual_conn
+
+
 class SimpleScanner:
     """简洁扫描器 - 完全按照 test_scan_direct_write.py 的方法"""
     
@@ -49,29 +62,35 @@ class SimpleScanner:
         exclude_patterns: List[str],
         backup_set: BackupSet,
         restart: bool = False,
+        in_memory_store=None,
     ):
         """
         简洁扫描和写入 - 完全按照 test_scan_direct_write.py 的方法
-        
+
         Args:
             backup_task: 备份任务对象
             source_paths: 源路径列表
             exclude_patterns: 排除模式列表
             backup_set: 备份集对象
             restart: 是否重新扫描（清理旧数据）
+            in_memory_store: 可选的 InMemoryFileStore（纯内存扫描模式，跳过数据库写入）
         """
+        use_memory_mode = in_memory_store is not None
+        write_verb = "已缓存" if use_memory_mode else "已写入"
         backup_set_db_id = getattr(backup_set, "id", None)
         logger.info(
             f"[简洁扫描] backup_task_id={getattr(backup_task, 'id', 'N/A')}, "
-            f"backup_set_id={backup_set_db_id}, source_paths={source_paths}, exclude_patterns={exclude_patterns}"
+            f"backup_set_id={backup_set_db_id}, source_paths={source_paths}, exclude_patterns={exclude_patterns}, "
+            f"memory_mode={use_memory_mode}"
         )
-        
+
         # 初始化/清理状态：同时在内存和数据库中设置 scan_status = 'running'
         try:
             if backup_task and backup_task.id:
                 backup_task.scan_status = "running"
+                # 内存模式也需要更新数据库 scan_status，其他组件可能查数据库
                 await self.backup_db.update_scan_status(backup_task.id, "running")
-            if restart and backup_set_db_id:
+            if not use_memory_mode and restart and backup_set_db_id:
                 # 清理原有 backup_files 记录，重新扫描
                 await self.backup_db.clear_backup_files_for_set(backup_set_db_id)
         except Exception as e:
@@ -108,28 +127,30 @@ class SimpleScanner:
         }
         
         # 从内存获取分表名（backup_task.backup_files_table）
+        # 内存模式不需要表名（压缩后才写入数据库）
         table_name = None
-        if backup_task:
-            table_name = getattr(backup_task, "backup_files_table", None)
-            if table_name and isinstance(table_name, str) and table_name.startswith("backup_files_"):
-                logger.debug(f"[简洁扫描] 从内存获取分表名: {table_name}")
-            else:
-                # 如果内存中没有，回退到查询数据库（仅一次）
-                if backup_set_db_id:
-                    try:
-                        from utils.scheduler.db_utils import get_backup_files_table_by_set_id
-                        async with get_opengauss_connection() as conn:
-                            table_name = await get_backup_files_table_by_set_id(conn, backup_set_db_id)
-                            # 同时更新内存中的 backup_task，供后续使用
-                            if backup_task and table_name:
-                                backup_task.backup_files_table = table_name
-                            logger.debug(f"[简洁扫描] 从数据库获取分表名: {table_name}")
-                    except Exception as e:
-                        logger.warning(f"[简洁扫描] 获取分表名失败: {e}")
-        
-        if not table_name:
-            logger.error("[简洁扫描] 无法获取分表名，扫描无法继续")
-            return
+        if not use_memory_mode:
+            if backup_task:
+                table_name = getattr(backup_task, "backup_files_table", None)
+                if table_name and isinstance(table_name, str) and table_name.startswith("backup_files_"):
+                    logger.debug(f"[简洁扫描] 从内存获取分表名: {table_name}")
+                else:
+                    # 如果内存中没有，回退到查询数据库（仅一次）
+                    if backup_set_db_id:
+                        try:
+                            from utils.scheduler.db_utils import get_backup_files_table_by_set_id
+                            async with get_opengauss_connection() as conn:
+                                table_name = await get_backup_files_table_by_set_id(conn, backup_set_db_id)
+                                # 同时更新内存中的 backup_task，供后续使用
+                                if backup_task and table_name:
+                                    backup_task.backup_files_table = table_name
+                                logger.debug(f"[简洁扫描] 从数据库获取分表名: {table_name}")
+                        except Exception as e:
+                            logger.warning(f"[简洁扫描] 获取分表名失败: {e}")
+
+            if not table_name:
+                logger.error("[简洁扫描] 无法获取分表名，扫描无法继续")
+                return
         
         # 批次大小（与测试程序一致）
         batch_size = getattr(self.settings, "SCAN_UPDATE_INTERVAL", 10000) or 10000
@@ -142,12 +163,19 @@ class SimpleScanner:
         
         current_batch = []  # 当前批次
         batch_number = 0    # 批次编号
-        
-        # 打开单个数据库连接（在整个扫描过程中保持连接，与测试程序一致）
-        async with get_opengauss_connection() as conn:
-            # 获取实际连接对象（用于 commit/rollback）
-            actual_conn = conn._conn if hasattr(conn, '_conn') else conn
-            
+
+        # 定义批次写入辅助函数（根据模式路由到内存或数据库）
+        async def _flush_batch(batch, batch_num):
+            """写入一个批次的文件记录"""
+            if use_memory_mode:
+                return await in_memory_store.add_files(batch)
+            else:
+                return await self._write_batch_to_db(
+                    conn, actual_conn, batch, backup_set_db_id, table_name, batch_num
+                )
+
+        # 打开数据库连接（仅在数据库模式下；内存模式使用空连接）
+        async with _conditional_db_connection(use_memory_mode) as (conn, actual_conn):
             # 主扫描循环（与测试程序完全一致）
             expanded_paths = []  # 展开后的路径列表
             for idx, source_path_str in enumerate(source_paths):
@@ -196,8 +224,8 @@ class SimpleScanner:
                             
                             # 达到批次大小，写入数据库（与测试程序一致）
                             if len(current_batch) >= batch_size:
-                                written_count = await self._write_batch_to_db(
-                                    conn, actual_conn, current_batch, backup_set_db_id, table_name, batch_number
+                                written_count = await _flush_batch(
+                                    current_batch, batch_number
                                 )
                                 stats['total_written'] += written_count
                                 stats['total_failed'] += (len(current_batch) - written_count)
@@ -220,7 +248,7 @@ class SimpleScanner:
                                 elapsed = time.time() - stats['start_time']
                                 files_per_sec = stats['total_written'] / elapsed if elapsed > 0 else 0
                                 logger.info(
-                                    f"[简洁扫描] 批次 {batch_number}: 已写入 {stats['total_written']:,} 个文件, "
+                                    f"[简洁扫描] 批次 {batch_number}: {write_verb} {stats['total_written']:,} 个文件, "
                                     f"总容量: {format_bytes(stats['total_bytes'])}, "
                                     f"速度: {files_per_sec:.0f} 文件/秒, "
                                     f"耗时: {elapsed:.1f}秒"
@@ -306,8 +334,8 @@ class SimpleScanner:
                                                     
                                                     # 达到批次大小，写入数据库（与测试程序一致）
                                                     if len(current_batch) >= batch_size:
-                                                        written_count = await self._write_batch_to_db(
-                                                            conn, actual_conn, current_batch, backup_set_db_id, table_name, batch_number
+                                                        written_count = await _flush_batch(
+                                                            current_batch, batch_number
                                                         )
                                                         stats['total_written'] += written_count
                                                         stats['total_failed'] += (len(current_batch) - written_count)
@@ -330,7 +358,7 @@ class SimpleScanner:
                                                         elapsed = time.time() - stats['start_time']
                                                         files_per_sec = stats['total_written'] / elapsed if elapsed > 0 else 0
                                                         logger.info(
-                                                            f"[简洁扫描] 批次 {batch_number}: 已写入 {stats['total_written']:,} 个文件, "
+                                                            f"[简洁扫描] 批次 {batch_number}: {write_verb} {stats['total_written']:,} 个文件, "
                                                             f"总容量: {format_bytes(stats['total_bytes'])}, "
                                                             f"速度: {files_per_sec:.0f} 文件/秒, "
                                                             f"耗时: {elapsed:.1f}秒"
@@ -345,13 +373,13 @@ class SimpleScanner:
                                                         files_per_sec = stats['total_scanned'] / elapsed if elapsed > 0 else 0
                                                         bytes_per_sec = stats['total_bytes'] / elapsed if elapsed > 0 else 0
                                                         
-                                                        # 计算待写入文件数（已扫描 - 已写入 - 失败）
+                                                        # 计算待缓存/写入文件数（已扫描 - 已写入 - 失败）
                                                         pending_to_write = max(0, stats['total_scanned'] - stats['total_written'] - stats['total_failed'])
                                                         
                                                         logger.info(
                                                             f"[简洁扫描] 进度: 已扫描 {stats['total_scanned']:,} 个文件, "
-                                                            f"已写入 {stats['total_written']:,} 个文件, "
-                                                            f"待写入 {pending_to_write:,} 个文件, "
+                                                            f"{write_verb} {stats['total_written']:,} 个文件, "
+                                                            f"待{write_verb} {pending_to_write:,} 个文件, "
                                                             f"总容量: {format_bytes(stats['total_bytes'])}, "
                                                             f"扫描速度: {files_per_sec:.0f} 文件/秒, "
                                                             f"写入速度: {format_bytes(bytes_per_sec)}/秒, "
@@ -395,9 +423,9 @@ class SimpleScanner:
             
             # 写入剩余的批次（与测试程序一致）
             if current_batch:
-                logger.info(f"[简洁扫描] 写入最后批次 ({len(current_batch)} 个文件)...")
-                written_count = await self._write_batch_to_db(
-                    conn, actual_conn, current_batch, backup_set_db_id, table_name, batch_number
+                logger.info(f"[简洁扫描] {'缓存' if use_memory_mode else '写入'}最后批次 ({len(current_batch)} 个文件)...")
+                written_count = await _flush_batch(
+                    current_batch, batch_number
                 )
                 stats['total_written'] += written_count
                 stats['total_failed'] += (len(current_batch) - written_count)
@@ -418,7 +446,7 @@ class SimpleScanner:
                 # 输出最终批次进度
                 elapsed = time.time() - stats['start_time']
                 logger.info(
-                    f"[简洁扫描] 最后批次完成: 已写入 {stats['total_written']:,} 个文件, "
+                    f"[简洁扫描] 最后批次完成: {write_verb} {stats['total_written']:,} 个文件, "
                     f"总容量: {format_bytes(stats['total_bytes'])}, "
                     f"耗时: {elapsed:.1f}秒"
                 )
@@ -427,6 +455,7 @@ class SimpleScanner:
         if backup_task:
             backup_task.total_files = stats["total_written"]
             backup_task.total_bytes = stats["total_bytes"]
+            # 内存模式和数据库模式都需要同步 total_files/total_bytes 到数据库
             try:
                 if hasattr(self.backup_db, "update_scan_progress_only"):
                     await self.backup_db.update_scan_progress_only(
@@ -438,27 +467,28 @@ class SimpleScanner:
                 logger.debug(
                     f"[简洁扫描] 扫描结束时同步扫描统计到数据库失败（忽略继续）: {sync_err}"
                 )
-            
-            # 使用已有的阶段描述机制，将紧凑统计信息写入 description -> operation_status（供UI显示）
-            try:
-                if hasattr(self.backup_db, "update_task_stage_with_description"):
-                    summary_desc = (
-                        f"[扫描完成] "
-                        f"扫描 {stats['total_scanned']:,} 个文件 "
-                        f"({format_bytes(stats['total_scanned_bytes'])}), "
-                        f"写入 {stats['total_written']:,} 个, "
-                        f"失败 {stats['total_failed']:,} 个, "
-                        f"排除 {stats['excluded_count']:,} 个"
+
+            if not use_memory_mode:
+                # 数据库模式：更新阶段描述
+                try:
+                    if hasattr(self.backup_db, "update_task_stage_with_description"):
+                        summary_desc = (
+                            f"[扫描完成] "
+                            f"扫描 {stats['total_scanned']:,} 个文件 "
+                            f"({format_bytes(stats['total_scanned_bytes'])}), "
+                            f"写入 {stats['total_written']:,} 个, "
+                            f"失败 {stats['total_failed']:,} 个, "
+                            f"排除 {stats['excluded_count']:,} 个"
+                        )
+                        await self.backup_db.update_task_stage_with_description(
+                            backup_task,
+                            "scan",
+                            summary_desc,
+                        )
+                except Exception as stage_err:
+                    logger.debug(
+                        f"[简洁扫描] 更新扫描阶段描述失败（忽略继续）: {stage_err}"
                     )
-                    await self.backup_db.update_task_stage_with_description(
-                        backup_task,
-                        "scan",
-                        summary_desc,
-                    )
-            except Exception as stage_err:
-                logger.debug(
-                    f"[简洁扫描] 更新扫描阶段描述失败（忽略继续）: {stage_err}"
-                )
         
         elapsed = time.time() - stats["start_time"]
         files_per_sec = (
@@ -469,17 +499,22 @@ class SimpleScanner:
         logger.info("=" * 80)
         logger.info("[简洁扫描] ========== 扫描完成 ==========")
         logger.info(f"  扫描到: {stats['total_scanned']:,} 个文件 ({format_bytes(stats['total_scanned_bytes'])})")
-        logger.info(f"  成功写入: {stats['total_written']:,} 个文件 ({format_bytes(stats['total_written_bytes'])})")
+        logger.info(f"  成功{write_verb}: {stats['total_written']:,} 个文件 ({format_bytes(stats['total_written_bytes'])})")
         logger.info(f"  失败: {stats['total_failed']:,} 个文件 ({format_bytes(stats['total_failed_bytes'])})")
         logger.info(f"  排除: {stats['excluded_count']:,} 个文件")
-        logger.info(f"  总耗时: {elapsed:.2f} 秒, 写入速度: {files_per_sec:.0f} 文件/秒")
+        logger.info(f"  总耗时: {elapsed:.2f} 秒, {write_verb}速度: {files_per_sec:.0f} 文件/秒")
         logger.info("=" * 80)
         
-        # 扫描全部结束后，在内存和数据库中设置 scan_status = 'completed'
+        # 扫描全部结束后，设置 scan_status = 'completed'
         if backup_task and backup_task.id:
             try:
                 backup_task.scan_status = "completed"
-                await self.backup_db.update_scan_status(backup_task.id, "completed")
+                if use_memory_mode:
+                    await in_memory_store.set_scan_completed()
+                    # 内存模式也需要更新数据库的 scan_status，backup_engine 判定任务完成时查数据库
+                    await self.backup_db.update_scan_status(backup_task.id, "completed")
+                else:
+                    await self.backup_db.update_scan_status(backup_task.id, "completed")
             except Exception as e:
                 logger.warning(f"[简洁扫描] 更新扫描状态为 completed 失败（忽略继续）: {e}")
     

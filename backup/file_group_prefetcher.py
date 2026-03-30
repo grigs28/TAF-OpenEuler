@@ -32,11 +32,13 @@ class FileGroupPrefetcher:
         backup_db: BackupDB,
         backup_set: BackupSet,
         backup_task: BackupTask,
-        parallel_batches: Optional[int] = None
+        parallel_batches: Optional[int] = None,
+        in_memory_store=None,
     ):
         self.backup_db = backup_db
         self.backup_set = backup_set
         self.backup_task = backup_task
+        self.in_memory_store = in_memory_store
         
         # 获取并行批次数量（默认从配置读取）
         if parallel_batches is None:
@@ -151,10 +153,153 @@ class FileGroupPrefetcher:
         # 如果累计数为0，可能是还没有文件放入队列，使用当前队列中的文件数
         # 但这种情况应该很少见，因为进度更新通常在文件放入队列后才开始
         return self.queued_files_count
+
+    async def _prefetch_from_memory(self):
+        """纯内存模式下的预取循环：从 InMemoryFileStore 读取文件并应用三级分组规则
+
+        成组后直接从内存删除，下次始终从头部读取，无需游标定位。
+
+        三级分组规则（与 fetch_pending_files_grouped_by_size 完全一致）：
+        1. 超大文件独立成组：单文件 > MAX_FILE_SIZE * 95%
+        2. 贪心累积：持续累加文件直到组大小 >= MAX_FILE_SIZE * 95%
+        3. 扫描完成兜底：扫描完成后，剩余文件不论大小强制成组
+        """
+        logger.info(
+            f"[文件组预取器-内存模式] ========== 内存预取循环已启动 ==========\n"
+            f"backup_set_id={self.backup_set.id}, backup_task_id={self.backup_task.id}, "
+            f"队列容量={self.queue_maxsize}"
+        )
+
+        settings = get_settings()
+        max_file_size = getattr(settings, 'MAX_FILE_SIZE', 12 * 1024 * 1024 * 1024) or (12 * 1024 * 1024 * 1024)
+        tolerance = max_file_size * 0.05
+        min_group_size = max_file_size - tolerance  # 95% 阈值
+
+        batch_size = max(3000, min(int(max_file_size / (1024 * 1024) * 0.5 * 1000), 50000))
+
+        try:
+            while self._running:
+                self.prefetch_loop_count += 1
+
+                # 始终从头部读取（成组后已删除，无需游标）
+                files = await self.in_memory_store.get_pending_files(batch_size)
+
+                if not files:
+                    scan_done = await self.in_memory_store.is_scan_done()
+                    if scan_done:
+                        # 扫描完成且无文件，发送终止信号
+                        await self.file_group_queue.put(([], -1))
+                        logger.info("[文件组预取器-内存模式] 扫描已完成且无更多文件，发送终止信号")
+                        break
+                    else:
+                        # 扫描未完成，等待新文件
+                        got_new = await self.in_memory_store.wait_for_new_files(timeout=5.0)
+                        if not got_new:
+                            await asyncio.sleep(2.0)
+                        continue
+
+                # 应用三级分组规则
+                current_group = []
+                current_size = 0
+                groups_to_queue = []
+                # 收集所有成组文件的路径，用于最后一次性删除
+                grouped_paths = []
+
+                for file_info in files:
+                    file_size = file_info.get('size', 0) or 0
+
+                    # 第一层：超大文件独立成组
+                    if file_size > min_group_size:
+                        if current_group:
+                            groups_to_queue.append(current_group)
+                            grouped_paths.extend(f.get('path', '') for f in current_group)
+                            current_group = []
+                            current_size = 0
+                        groups_to_queue.append([file_info])
+                        grouped_paths.append(file_info.get('path', ''))
+                        continue
+
+                    # 第二层：贪心累积
+                    current_group.append(file_info)
+                    current_size += file_size
+
+                    if current_size >= min_group_size:
+                        groups_to_queue.append(current_group)
+                        grouped_paths.extend(f.get('path', '') for f in current_group)
+                        current_group = []
+                        current_size = 0
+
+                # 处理剩余的累积文件
+                scan_done = await self.in_memory_store.is_scan_done()
+                if scan_done and current_group:
+                    # 扫描完成，强制成组
+                    groups_to_queue.append(current_group)
+                    grouped_paths.extend(f.get('path', '') for f in current_group)
+                    current_group = []
+                    current_size = 0
+                elif current_group and current_size >= min_group_size * 0.5:
+                    # 未完成扫描但足够大，成组
+                    groups_to_queue.append(current_group)
+                    grouped_paths.extend(f.get('path', '') for f in current_group)
+                    current_group = []
+                    current_size = 0
+
+                # 一次性从内存删除所有成组文件
+                if grouped_paths:
+                    await self.in_memory_store.remove_files(grouped_paths)
+
+                # 将文件组放入队列
+                for group in groups_to_queue:
+                    total_size = sum(f.get('size', 0) for f in group)
+
+                    # 队列满时等待
+                    if self.file_group_queue.full():
+                        logger.debug("[文件组预取器-内存模式] 队列已满，等待...")
+                        await asyncio.sleep(2.0)
+
+                    await self.file_group_queue.put(([group], 0))
+                    self.prefetched_groups += 1
+                    self.total_queued_files_count += len(group)
+                    self.total_queued_size += total_size
+                    self.queued_files_count += len(group)
+
+                    logger.info(
+                        f"[文件组预取器-内存模式] 预取文件组：{len(group)} 个文件，"
+                        f"大小={format_bytes(total_size)}，"
+                        f"累计预取={self.prefetched_groups} 组，"
+                        f"队列={self.file_group_queue.qsize()}/{self.queue_maxsize}"
+                    )
+
+                # 检查扫描是否完成且无剩余文件，发送终止信号
+                if scan_done:
+                    remaining = await self.in_memory_store.get_all_pending_files()
+                    if not remaining:
+                        await self.file_group_queue.put(([], -1))
+                        logger.info("[文件组预取器-内存模式] 所有文件已预取完成，发送终止信号")
+                        break
+
+                await asyncio.sleep(1.0)
+
+        except asyncio.CancelledError:
+            logger.info("[文件组预取器-内存模式] 预取循环被取消")
+        except Exception as e:
+            logger.error(f"[文件组预取器-内存模式] 预取循环异常: {e}", exc_info=True)
+            try:
+                await self.file_group_queue.put(([], -1))
+            except Exception:
+                pass
+        finally:
+            self._running = False
+            logger.info(
+                f"[文件组预取器-内存模式] 预取循环已结束，"
+                f"累计预取 {self.prefetched_groups} 个文件组，"
+                f"累计文件数 {self.total_queued_files_count}，"
+                f"累计大小 {format_bytes(self.total_queued_size)}"
+            )
     
     async def _prefetch_loop(self):
         """预取循环：持续从数据库获取文件组并放入队列
-        
+
         逻辑：
         1. 保证队列始终是 3/3（满状态）
         2. 6秒轮询检测队列大小
@@ -162,6 +307,11 @@ class FileGroupPrefetcher:
         4. 扫描任务完成后，如果不够一组，全库扫描避免遗漏，还不够1组，停止线程
         5. 预取器不能阻塞其他线程（所有操作都是异步的）
         """
+        # 纯内存模式：使用专门的内存预取逻辑
+        if self.in_memory_store is not None:
+            await self._prefetch_from_memory()
+            return
+
         logger.info(
             f"[文件组预取器] ========== 预取循环已启动 ==========\n"
             f"backup_set_id={self.backup_set.id}, backup_task_id={self.backup_task.id}, "

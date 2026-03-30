@@ -40,15 +40,25 @@
         });
     }
 
-    function formatElapsedTime(startedAt, completedAt) {
+    function formatElapsedTime(startedAt, completedAt, status) {
         if (!startedAt) return '-';
 
         // 确保时间戳正确解析，处理带时区的时间格式
         let start, end;
         try {
             start = new Date(startedAt);
-            // 如果是运行中的任务，使用当前时间而不是 completedAt
-            end = completedAt ? new Date(completedAt) : new Date();
+            // 判断任务是否还在运行
+            const isRunning = !status || status === 'running' || status === 'pending';
+            if (completedAt) {
+                // 有 completed_at，使用它
+                end = new Date(completedAt);
+            } else if (isRunning) {
+                // 运行中且无 completed_at，使用当前时间
+                end = new Date();
+            } else {
+                // 非运行状态但没有 completed_at（DB延迟更新），冻结已用时间不再增长
+                return '-';
+            }
 
             // 验证日期是否有效
             if (Number.isNaN(start.getTime())) {
@@ -479,7 +489,7 @@
                     ? speedGBPerHour.toFixed(2) 
                     : speedGBPerHour.toFixed(4);
                 speedBadge.textContent = displayValue;
-                speedBadge.title = `每小时处理: ${displayValue} GB\n已处理数据: ${formatBytes(progressInfo.processedBytes)}\n已用时间: ${formatElapsedTime(task.started_at, task.completed_at)}`;
+                speedBadge.title = `每小时处理: ${displayValue} GB\n已处理数据: ${formatBytes(progressInfo.processedBytes)}\n已用时间: ${formatElapsedTime(task.started_at, task.completed_at, task.status)}`;
 
                 // 为运行中的任务添加ID属性，便于后续更新
                 speedBadge.setAttribute('data-task-speed', task.task_id || task.id);
@@ -890,7 +900,14 @@
 
         const elapsed = document.createElement('div');
         elapsed.className = 'd-flex justify-content-between';
-        elapsed.innerHTML = `<small class="text-muted">已用时间:</small><small class="text-muted">${formatElapsedTime(task.started_at, task.completed_at)}</small>`;
+        const elapsedLabel = document.createElement('small');
+        elapsedLabel.className = 'text-muted';
+        elapsedLabel.textContent = '已用时间:';
+        const elapsedValue = document.createElement('small');
+        elapsedValue.className = 'text-muted';
+        elapsedValue.textContent = formatElapsedTime(task.started_at, task.completed_at, task.status);
+        elapsed.appendChild(elapsedLabel);
+        elapsed.appendChild(elapsedValue);
         body.appendChild(elapsed);
 
         if (task.error_message) {

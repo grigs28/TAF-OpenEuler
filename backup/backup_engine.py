@@ -1217,6 +1217,14 @@ class BackupEngine:
                 raise RuntimeError(error_msg)
 
             # 5. 流式处理：扫描和压缩循环执行
+            # 初始化内存文件存储（提前声明，避免作用域问题）
+            in_memory_store = None
+            if getattr(self.settings, 'SCAN_MEMORY_ONLY', False):
+                from backup.in_memory_file_store import InMemoryFileStore
+                in_memory_store = InMemoryFileStore(backup_set.id)
+                backup_task.in_memory_file_store = in_memory_store
+                logger.info("[备份引擎] 纯内存扫描模式已启用，扫描阶段将跳过数据库写入")
+
             logger.info("开始流式处理：扫描和压缩循环执行...")
             logger.info(f"压缩配置：最大文件大小={format_bytes(self.settings.MAX_FILE_SIZE)}")
 
@@ -1240,13 +1248,17 @@ class BackupEngine:
                     "[扫描文件中] 正在扫描源路径..."
                 )
 
+                # 创建内存文件存储（纯内存扫描模式）
+                # in_memory_store 已在外部初始化，这里不再重复声明
+
                 scan_progress_task = asyncio.create_task(
                     self.backup_scanner.scan_for_progress_update(
                         backup_task,
                         backup_task.source_paths,
                         exclude_patterns,
                         backup_set,
-                        restart=restart_scan
+                        restart=restart_scan,
+                        in_memory_store=in_memory_store
                     )
                 )
                 logger.info("后台扫描任务已启动")
@@ -1312,7 +1324,8 @@ class BackupEngine:
                     backup_db=self.backup_db,
                     backup_set=backup_set,
                     backup_task=backup_task,
-                    parallel_batches=parallel_batches
+                    parallel_batches=parallel_batches,
+                    in_memory_store=in_memory_store
                 )
                 # 在压缩任务开始前启动预取器
                 file_group_prefetcher.start()
@@ -1329,7 +1342,8 @@ class BackupEngine:
                 file_move_worker=None,  # 不再向 file_move_worker 发送消息，它独立扫描 final 目录
                 backup_notifier=self.backup_notifier,
                 tape_file_mover=None,  # 不再使用队列模式，FinalDirMonitor独立监控final目录
-                file_group_prefetcher=file_group_prefetcher  # openGauss模式下的预取器
+                file_group_prefetcher=file_group_prefetcher,  # openGauss模式下的预取器
+                in_memory_store=in_memory_store  # 纯内存扫描模式的文件存储
             )
             compression_worker.start()
             logger.info(f"[备份引擎] 压缩工作线程已启动，使用预取模式: {compression_worker.use_prefetcher}")
