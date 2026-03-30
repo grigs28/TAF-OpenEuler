@@ -128,6 +128,12 @@ export class DirectoryBrowser {
             document.getElementById('selectedPathInput').value = path;
             this.updateBreadcrumb(path);
 
+            // 检查是否为纯服务器地址（如 //192.168.0.79），列出共享
+            if (this._isServerOnlyPath(path)) {
+                await this.browseSmbShares(path);
+                return;
+            }
+
             const response = await SchedulerAPI.browseDirectory(path);
             this.renderDirectoryItems(response.items || []);
 
@@ -145,6 +151,135 @@ export class DirectoryBrowser {
                 throw error;
             }
         }
+    }
+
+    /**
+     * 检查是否为纯服务器地址（如 //192.168.0.79 或 \\192.168.0.79）
+     * 同时支持正斜杠和反斜杠格式
+     */
+    _isServerOnlyPath(path) {
+        if (!path) return false;
+        // 统一转换为正斜杠格式进行匹配
+        const normalized = path.replace(/\\/g, '/');
+        // 匹配 //server 或 //server/ 格式，但不包含共享名
+        // 例如: //192.168.0.79 或 //192.168.0.79/ 会匹配
+        // 但 //192.168.0.79/share 不会匹配
+        const match = normalized.match(/^\/\/([^\/]+)\/?$/);
+        return match !== null;
+    }
+
+    /**
+     * 浏览 SMB 服务器的共享列表
+     */
+    async browseSmbShares(path) {
+        try {
+            // 提取服务器地址
+            const server = path.replace(/\\/g, '/').replace(/^\/\//, '').replace(/\/$/, '');
+
+            const response = await fetch(`/api/system/file-system/smb-shares?server=${encodeURIComponent(server)}`);
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            }
+            const data = await response.json();
+
+            if (!data.success) {
+                throw new Error(data.message || '列出共享失败');
+            }
+
+            // 渲染共享列表
+            this.renderSmbShares(data.shares || [], path);
+
+        } catch (error) {
+            console.error('列出 SMB 共享失败:', error);
+            this.renderNetworkPathError(path, error);
+            if (error.response?.status === 403) {
+                showMessage('无权限访问该服务器', 'error');
+            } else {
+                showMessage(`列出共享失败: ${error.message}`, 'error');
+            }
+        }
+    }
+
+    /**
+     * 渲染 SMB 共享列表
+     */
+    renderSmbShares(shares, serverPath) {
+        const container = document.getElementById('directoryItemsList');
+        if (!container) return;
+
+        if (shares.length === 0) {
+            container.innerHTML = `
+                <div class="text-center text-muted py-5">
+                    <i class="bi bi-server display-4 d-block mb-3"></i>
+                    <p>该服务器没有可访问的共享</p>
+                    <small class="text-muted">请检查 SMB 凭据配置</small>
+                </div>
+            `;
+            return;
+        }
+
+        let html = '<div class="mb-3"><h6 class="text-muted small"><i class="bi bi-server me-1"></i>SMB 共享列表</h6></div>';
+        html += '<div class="list-group">';
+        shares.forEach(share => {
+            const itemId = `share-${share.name.replace(/[^a-zA-Z0-9]/g, '_')}`;
+            html += `
+                <div class="list-group-item list-group-item-action" data-share-path="${escapeHtml(share.full_path)}"
+                     style="cursor: pointer;">
+                    <div class="d-flex align-items-center">
+                        <input type="checkbox" class="form-check-input me-3" id="${itemId}"
+                               data-path="${escapeHtml(share.full_path)}" data-name="${escapeHtml(share.name)}"
+                               style="width: 18px; height: 18px; cursor: pointer; flex-shrink: 0;">
+                        <i class="bi bi-hdd-network me-2 text-primary fs-5"></i>
+                        <div class="flex-grow-1">
+                            <div class="fw-bold">${escapeHtml(share.name)}</div>
+                            <small class="text-muted">${share.type}</small>
+                        </div>
+                        <small class="text-muted text-truncate" style="max-width: 200px;">${escapeHtml(share.full_path)}</small>
+                    </div>
+                </div>
+            `;
+        });
+        html += '</div>';
+
+        container.innerHTML = html;
+
+        // 绑定点击事件：双击进入共享
+        container.querySelectorAll('[data-share-path]').forEach(item => {
+            item.addEventListener('dblclick', async (e) => {
+                e.preventDefault();
+                const path = item.getAttribute('data-share-path');
+                await this.browseDirectory(path);
+            });
+
+            // 单击选中
+            item.addEventListener('click', (e) => {
+                if (e.target.type === 'checkbox') return;
+                e.preventDefault();
+
+                const checkbox = item.querySelector('input[type="checkbox"]');
+                const path = item.getAttribute('data-share-path');
+
+                // 切换复选框状态
+                checkbox.checked = !checkbox.checked;
+                checkbox.dispatchEvent(new Event('change'));
+            });
+        });
+
+        // 绑定复选框变化事件
+        container.querySelectorAll('input[type="checkbox"]').forEach(checkbox => {
+            checkbox.addEventListener('change', (e) => {
+                this.updateSelectedPaths();
+            });
+            checkbox.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+        });
+
+        // 显示全选/清空按钮
+        const selectAllBtn = document.getElementById('selectAllBtn');
+        const clearAllBtn = document.getElementById('clearAllBtn');
+        if (selectAllBtn) selectAllBtn.style.display = 'inline-block';
+        if (clearAllBtn) clearAllBtn.style.display = 'inline-block';
     }
     
     /**

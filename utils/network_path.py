@@ -247,3 +247,116 @@ def cleanup_mounts():
         except Exception as e:
             logger.warning(f"卸载 SMB 共享失败: {mount_key}, {str(e)}")
     _mounted_shares = {}
+
+
+def list_smb_shares(server: str, username: str = None, password: str = None) -> dict:
+    """列出 SMB 服务器的所有共享
+
+    Args:
+        server: SMB 服务器地址（如 192.168.0.79 或 //192.168.0.79）
+        username: SMB 用户名（可选，默认从配置读取）
+        password: SMB 密码（可选，默认从配置读取）
+
+    Returns:
+        dict: {
+            'success': bool,
+            'shares': List[dict],  # [{'name': 'share1', 'type': 'Disk'}, ...]
+            'message': str
+        }
+    """
+    result = {
+        'success': False,
+        'shares': [],
+        'message': ''
+    }
+
+    # 规范化服务器地址
+    server = server.strip().strip('/').replace('\\', '/')
+    if '/' in server:
+        server = server.split('/')[0]
+
+    # 从配置获取凭据
+    domain = None
+    if not username or not password:
+        config_username, config_password, config_domain = _get_smb_credentials()
+        if not username:
+            username = config_username
+        if not password:
+            password = config_password
+        if not domain:
+            domain = config_domain
+
+    # 检查凭据
+    if not username or not password:
+        result['message'] = 'SMB 凭据未配置，请在 .env 文件中设置 SMB_USERNAME 和 SMB_PASSWORD'
+        return result
+
+    # 使用 smbclient 列出共享
+    try:
+        cmd = ['smbclient', '-L', f'//{server}', '-U', f'{username}%{password}']
+        if domain:
+            cmd.extend(['-W', domain])
+
+        logger.info(f"执行命令: smbclient -L //{server} -U {username}***")
+        process = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        if process.returncode != 0:
+            result['message'] = f'连接服务器失败: {process.stderr}'
+            return result
+
+        # 解析输出
+        lines = process.stdout.split('\n')
+        shares = []
+        in_share_list = False
+
+        for line in lines:
+            line = line.strip()
+            # 查找共享列表的开始标记
+            if 'Sharename' in line and 'Type' in line:
+                in_share_list = True
+                continue
+            if in_share_list:
+                # 跳过分隔线
+                if line.startswith('---') or not line:
+                    continue
+                # 结束标记
+                if line.startswith('Server') or line.startswith('Workgroup'):
+                    break
+
+                # 解析共享行: "Sharename  Type  Comment"
+                parts = line.split()
+                if len(parts) >= 2:
+                    share_name = parts[0]
+                    share_type = parts[1]
+
+                    # 跳过空名称
+                    if not share_name:
+                        continue
+
+                    # 只保留 Disk 类型（文件共享），过滤 IPC/Printer/disabled 等
+                    if share_type != 'Disk':
+                        continue
+
+                    shares.append({
+                        'name': share_name,
+                        'type': share_type,
+                        'full_path': f'//{server}/{share_name}'
+                    })
+
+        result['success'] = True
+        result['shares'] = shares
+        result['message'] = f'找到 {len(shares)} 个共享'
+
+    except subprocess.TimeoutExpired:
+        result['message'] = '连接服务器超时'
+    except FileNotFoundError:
+        result['message'] = 'smbclient 命令未找到，请安装 smbclient (apt install smbclient)'
+    except Exception as e:
+        result['message'] = f'列出共享失败: {str(e)}'
+
+    return result

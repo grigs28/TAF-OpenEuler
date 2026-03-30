@@ -23,10 +23,13 @@
                             <i class="bi bi-share me-2"></i>网络路径
                         </h6>
                         <div class="mb-3">
-                            <input type="text" class="form-control form-control-sm" id="networkPathInput" 
-                                   placeholder="例如: \\\\192.168.1.100\\share 或 //server/share">
+                            <input type="text" class="form-control form-control-sm" id="networkPathInput"
+                                   placeholder="//192.168.0.79">
+                            <small class="text-muted mt-1 d-block">
+                                输入服务器地址如 //192.168.0.79 浏览共享列表
+                            </small>
                             <button class="btn btn-sm btn-primary mt-2 w-100" type="button" id="addNetworkPathBtn">
-                                <i class="bi bi-plus-circle me-1"></i>添加网络路径
+                                <i class="bi bi-plus-circle me-1"></i>浏览
                             </button>
                         </div>
                         
@@ -72,6 +75,9 @@
                             <div class="text-center text-muted py-5">
                                 <i class="bi bi-folder-x display-4 d-block mb-3"></i>
                                 <p>请选择驱动器或输入网络路径</p>
+                                <small class="text-muted">
+                                    输入服务器地址如 <code>//192.168.0.79</code> 可浏览该服务器的共享列表
+                                </small>
                             </div>
                         </div>
                     </div>

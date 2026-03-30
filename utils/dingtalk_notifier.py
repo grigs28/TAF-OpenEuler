@@ -263,7 +263,8 @@ class DingTalkNotifier:
 
 """
 
-        await self.send_message(self.default_phone, title, content)
+        from utils.notify import notify
+        await notify(notifier=self, title=title, content=content)
 
     async def send_recovery_notification(self, recovery_name: str, status: str,
                                        details: Optional[Dict] = None):
@@ -302,7 +303,8 @@ class DingTalkNotifier:
             if details:
                 content += f"**错误信息**: {details.get('error', '未知错误')}\n"
 
-        await self.send_message(self.default_phone, title, content)
+        from utils.notify import notify
+        await notify(notifier=self, title=title, content=content)
 
     async def send_tape_notification(self, tape_id: str, action: str,
                                    details: Optional[Dict] = None):
@@ -354,7 +356,8 @@ class DingTalkNotifier:
             if details:
                 content += f"**错误信息**: {details.get('error', '未知错误')}\n"
 
-        await self.send_message(self.default_phone, title, content)
+        from utils.notify import notify
+        await notify(notifier=self, title=title, content=content)
 
     async def send_system_notification(self, title: str, content: str):
         """发送系统通知"""
@@ -362,14 +365,15 @@ class DingTalkNotifier:
         if not self._should_send_notification("notify_system_started"):
             logger.debug("系统启动通知已禁用")
             return
-        
+
         formatted_content = f"""## 系统通知
 
 {content}
 
 **时间**: {format_datetime(now())}
 """
-        await self.send_message(self.default_phone, title, formatted_content)
+        from utils.notify import notify
+        await notify(notifier=self, title=title, content=formatted_content)
 
     async def send_tape_format_notification(self, tape_id: str, status: str, 
                                            error_detail: Optional[str] = None,
@@ -413,7 +417,8 @@ class DingTalkNotifier:
             else:
                 return
             
-            await self.send_message(self.default_phone, title, content)
+            from utils.notify import notify
+            await notify(notifier=self, title=title, content=content)
         except Exception as e:
             logger.error(f"发送磁带格式化通知失败: {str(e)}")
 
@@ -459,7 +464,8 @@ class DingTalkNotifier:
             else:
                 return
 
-            self.send_message_sync(self.default_phone, title, content)
+            from utils.notify import notify_sync
+            notify_sync(notifier=self, title=title, content=content)
         except Exception as e:
             logger.error(f"发送磁带格式化通知失败: {str(e)}")
 
@@ -482,7 +488,8 @@ class DingTalkNotifier:
             content += f"**已使用**: {details.get('used', 'N/A')}\n"
             content += f"**剩余空间**: {details.get('free', 'N/A')}\n"
 
-        await self.send_message(self.default_phone, title, content)
+        from utils.notify import notify
+        await notify(notifier=self, title=title, content=content)
 
     async def test_connection(self) -> bool:
         """测试连接"""

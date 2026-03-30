@@ -197,7 +197,6 @@
                     
                     <!-- 动作配置（根据任务类型动态显示） -->
                     <div class="mb-3" id="actionConfigSection">
-                        <label class="form-label">动作配置</label>
                         
                         <!-- 备份任务配置 -->
                         <div id="backupActionConfig" class="action-config-panel" style="display: none;">
@@ -210,10 +209,9 @@
                                         <i class="bi bi-folder-open me-1"></i>浏览
                                     </button>
                                     </div>
-                                    <div id="backupSourcePathsList" class="mb-2">
+                                    <div id="backupSourcePathsList" class="mb-2" style="max-height: 120px; overflow-y: auto;">
                                         <!-- 已选择的源路径列表 -->
                                     </div>
-                                    <small class="text-muted">可添加多个备份源路径，点击"浏览"选择服务器端目录，或手动输入路径（支持网络路径如 \\\\server\\share）</small>
                                 </div>
                                 <div class="col-md-6 mb-3" id="backupTargetContainer">
                                     <!-- 存储目标：显示目标路径 -->
@@ -246,7 +244,6 @@
                                         <div id="backupTapeDevicesList" class="mb-2">
                                             <!-- 已选择的磁带机列表 -->
                                         </div>
-                                        <small class="text-muted">可添加多个目标磁带机，选择后点击"添加"</small>
                                     </div>
                                 </div>
                             </div>
@@ -268,7 +265,6 @@
                                         <input class="form-check-input" type="checkbox" id="enableSimpleScan" checked>
                                         <label class="form-check-label" for="enableSimpleScan">启用简洁扫描</label>
                                     </div>
-                                    <small class="form-text text-muted">使用简化的扫描和写入逻辑，提高扫描速度</small>
                                 </div>
                                 <div class="col-md-3 mb-3">
                                     <div class="form-check">
@@ -339,9 +335,9 @@
 *.cache
 Thumbs.db
 .DS_Store
+System Volume Information
 $RECYCLE.BIN
-pagefile.sys
-$*</textarea>
+pagefile.sys</textarea>
                         </div>
                     </div>
                     

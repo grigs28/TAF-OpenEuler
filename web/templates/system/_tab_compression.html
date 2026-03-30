@@ -4,7 +4,7 @@
         <h5 class="mb-4">
             <i class="bi bi-archive me-2"></i>压缩配置
         </h5>
-        
+
         <form id="compressionConfigForm">
             <div class="row">
                 <div class="col-md-8">
@@ -14,67 +14,41 @@
                             压缩方法 <span class="text-danger">*</span>
                         </label>
                         <select class="form-select bg-dark text-light" id="compressionMethod" name="compression_method" required>
-                            <option value="pgzip">PGZip (多线程GZip，默认)</option>
-                            <option value="py7zr">py7zr (Python库，不支持多线程)</option>
-                            <option value="7zip_command">7-Zip命令行 (支持多线程，推荐)</option>
+                            <option value="zstd">Zstandard (高压缩效率，推荐)</option>
+                            <option value="pgzip">PGZip (多线程GZip)</option>
                             <option value="tar">tar (仅打包，不压缩)</option>
-                            <option value="zstd">Zstandard (高压缩效率)</option>
                         </select>
                         <small class="form-text text-muted">
-                            选择压缩方法。PGZip默认开启，可在需要更高压缩率时切换到7-Zip或Zstandard。
+                            推荐使用 Zstandard，压缩效率高、速度快。
                         </small>
                     </div>
-                    
-                    <!-- 7-Zip程序路径配置 -->
-                    <div class="mb-3" id="sevenzipPathGroup">
-                        <label for="sevenzipPath" class="form-label">
-                            7-Zip程序路径 <span class="text-danger">*</span>
-                        </label>
-                        <div class="input-group">
-                            <input type="text" class="form-control bg-dark text-light" id="sevenzipPath" 
-                                   name="sevenzip_path" placeholder="C:\Program Files\7-Zip\7z.exe" required>
-                            <button class="btn btn-outline-secondary" type="button" id="browseSevenzipBtn">
-                                <i class="bi bi-folder me-1"></i>浏览
-                            </button>
-                            <button class="btn btn-outline-info" type="button" id="checkSevenzipBtn" title="检查路径有效性">
-                                <i class="bi bi-check-circle me-1"></i>检查
-                            </button>
-                            <button class="btn btn-outline-info" type="button" id="autoFindSevenzipBtn" title="自动查找7-Zip">
-                                <i class="bi bi-search me-1"></i>自动查找
-                            </button>
-                        </div>
-                        <small class="form-text text-muted" id="sevenzipPathHelp">
-                            指定7-Zip可执行文件 (7z.exe) 的完整路径。
-                        </small>
-                        <div id="sevenzipPathStatus" class="mt-2"></div>
-                    </div>
-                    
-                    <!-- Python/PGZip线程数配置 -->
-                    <div class="mb-3" id="compressionThreadsGroup">
+
+                    <!-- PGZip线程数配置 -->
+                    <div class="mb-3" id="compressionThreadsGroup" style="display: none;">
                         <label for="compressionThreads" class="form-label">
-                            Python/PGZip线程数
+                            PGZip线程数
                         </label>
-                        <input type="number" class="form-control bg-dark text-light" id="compressionThreads" 
+                        <input type="number" class="form-control bg-dark text-light" id="compressionThreads"
                                name="compression_threads" min="1" max="64" value="4">
                         <small class="form-text text-muted">
-                            适用于PGZip与py7zr，建议设置为CPU核心数。
+                            PGZip 压缩线程数，建议设置为CPU核心数。
                         </small>
                     </div>
 
                     <!-- zstd线程数 -->
-                    <div class="mb-3" id="zstdThreadsGroup" style="display: none;">
+                    <div class="mb-3" id="zstdThreadsGroup">
                         <label for="zstdThreads" class="form-label">
                             Zstandard线程数
                         </label>
                         <input type="number" class="form-control bg-dark text-light" id="zstdThreads"
                                name="zstd_threads" min="1" max="64" value="4">
                         <small class="form-text text-muted">
-                            用于 Zstandard 压缩模式，控制压缩线程数。
+                            Zstandard 压缩线程数，建议设置为CPU核心数。
                         </small>
                     </div>
-                    
+
                     <!-- PGZip块大小 -->
-                    <div class="mb-3" id="pgzipBlockSizeGroup">
+                    <div class="mb-3" id="pgzipBlockSizeGroup" style="display: none;">
                         <label for="pgzipBlockSize" class="form-label">
                             PGZip块大小 <span class="text-danger">*</span>
                         </label>
@@ -87,52 +61,40 @@
                             控制PGZip的块大小，支持 K/M/G 单位。块越大压缩越快，压缩率略低。
                         </small>
                     </div>
-                    
-                    <!-- 7-Zip命令行线程数配置 -->
-                    <div class="mb-3" id="compressionCommandThreadsGroup">
-                        <label for="compressionCommandThreads" class="form-label">
-                            7-Zip命令行线程数 (-mmt参数) <span class="text-danger">*</span>
-                        </label>
-                        <input type="number" class="form-control bg-dark text-light" id="compressionCommandThreads" 
-                               name="compression_command_threads" min="1" max="64" value="4" required>
-                        <small class="form-text text-muted">
-                            7-Zip命令行工具使用的线程数（-mmt参数）。建议值：CPU核心数。当前CPU核心数: <span id="cpuCount"></span>
-                        </small>
-                    </div>
-                    
+
                     <!-- 压缩级别 -->
                     <div class="mb-3">
                         <label for="compressionLevel" class="form-label">
                             压缩级别 <span class="text-danger">*</span>
                         </label>
-                        <input type="range" class="form-range" id="compressionLevel" name="compression_level" 
-                               min="0" max="9" value="5" oninput="updateCompressionLevelDisplay(this.value, document.getElementById('compressionMethod')?.value || 'pgzip')">
+                        <input type="range" class="form-range" id="compressionLevel" name="compression_level"
+                               min="1" max="22" value="5" oninput="updateCompressionLevelDisplay(this.value, document.getElementById('compressionMethod')?.value || 'zstd')">
                         <div class="d-flex justify-content-between">
-                            <small class="text-muted" id="compressionLevelMin">0 (不压缩)</small>
+                            <small class="text-muted" id="compressionLevelMin">1 (最快)</small>
                             <small class="text-muted" id="compressionLevelDisplay">5 (平衡)</small>
-                            <small class="text-muted" id="compressionLevelMax">9 (最高)</small>
+                            <small class="text-muted" id="compressionLevelMax">22 (最高)</small>
                         </div>
                         <small class="form-text text-muted" id="compressionLevelHelp">
-                            压缩级别：0=不压缩，1-3=快速，4-6=平衡（推荐5），7-9=最高压缩。
+                            压缩级别：1=最快，5=平衡（推荐），10-15=高压缩，16-22=最高压缩（速度较慢）。
                         </small>
                     </div>
-                    
+
                     <!-- 直接压缩到磁带 -->
                     <div class="mb-3">
                         <div class="form-check form-switch">
-                            <input class="form-check-input" type="checkbox" id="compressDirectlyToTape" 
+                            <input class="form-check-input" type="checkbox" id="compressDirectlyToTape"
                                    name="compress_directly_to_tape" checked>
                             <label class="form-check-label" for="compressDirectlyToTape">
                                 直接压缩到磁带机
                             </label>
                         </div>
                         <small class="form-text text-muted">
-                            启用后，压缩文件将直接写入磁带盘符（O盘），跳过 temp/final 目录。禁用后将使用原有流程（先压缩到临时目录，再移动到磁带机）。
+                            启用后，压缩文件将直接写入磁带盘符，跳过 temp/final 目录。禁用后将使用原有流程（先压缩到临时目录，再移动到磁带机）。
                         </small>
                     </div>
                 </div>
             </div>
-            
+
             <!-- 操作按钮 -->
             <div class="row mt-4">
                 <div class="col-md-8">
@@ -146,189 +108,102 @@
 </div>
 
 <script>
-// 显示消息函数（复用scheduler-utils中的实现）
-function showMessage(message, type = 'info') {
-    const alertClass = type === 'success' ? 'alert-success' : 
-                      type === 'error' ? 'alert-danger' : 
+// 显示消息函数
+function showMessage(message, type) {
+    type = type || 'info';
+    const alertClass = type === 'success' ? 'alert-success' :
+                      type === 'error' ? 'alert-danger' :
                       type === 'warning' ? 'alert-warning' : 'alert-info';
-    
+
     const alertDiv = document.createElement('div');
-    alertDiv.className = `alert ${alertClass} alert-dismissible fade show position-fixed top-0 start-50 translate-middle-x mt-3`;
+    alertDiv.className = 'alert ' + alertClass + ' alert-dismissible fade show position-fixed top-0 start-50 translate-middle-x mt-3';
     alertDiv.style.zIndex = '9999';
-    alertDiv.innerHTML = `
-        ${message}
-        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-    `;
-    
+
+    const textNode = document.createTextNode(message + ' ');
+    alertDiv.appendChild(textNode);
+
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'btn-close';
+    closeBtn.setAttribute('data-bs-dismiss', 'alert');
+    alertDiv.appendChild(closeBtn);
+
     document.body.appendChild(alertDiv);
-    
-    setTimeout(() => {
-        alertDiv.remove();
-    }, 3000);
+    setTimeout(function() { alertDiv.remove(); }, 3000);
 }
 
-// 压缩级别配置（根据不同的压缩工具）
-const compressionLevelConfigs = {
+// 压缩级别配置
+var compressionLevelConfigs = {
     'pgzip': { min: 0, max: 9, default: 5, help: '压缩级别：0=不压缩，1-3=快速，4-6=平衡（推荐5），7-9=最高压缩。' },
-    'py7zr': { min: 0, max: 9, default: 5, help: '压缩级别：0=不压缩，1-3=快速，4-6=平衡（推荐5），7-9=最高压缩。' },
-    '7zip_command': { min: 0, max: 9, default: 5, help: '压缩级别：0=不压缩，1-3=快速，4-6=平衡（推荐5），7-9=最高压缩。' },
     'tar': { min: 0, max: 0, default: 0, help: 'tar仅打包，不压缩（级别固定为0）。' },
     'zstd': { min: 1, max: 22, default: 5, help: '压缩级别：1=最快，5=平衡（推荐），10-15=高压缩，16-22=最高压缩（速度较慢）。' }
 };
 
-// 更新压缩级别范围和显示
 function updateCompressionLevelRange(method) {
-    const config = compressionLevelConfigs[method] || compressionLevelConfigs['pgzip'];
-    const levelInput = document.getElementById('compressionLevel');
-    const levelMin = document.getElementById('compressionLevelMin');
-    const levelMax = document.getElementById('compressionLevelMax');
-    const levelHelp = document.getElementById('compressionLevelHelp');
-    
+    var config = compressionLevelConfigs[method] || compressionLevelConfigs['zstd'];
+    var levelInput = document.getElementById('compressionLevel');
+    var levelMin = document.getElementById('compressionLevelMin');
+    var levelMax = document.getElementById('compressionLevelMax');
+    var levelHelp = document.getElementById('compressionLevelHelp');
+
     if (levelInput) {
         levelInput.min = config.min;
         levelInput.max = config.max;
-        
-        // 如果当前值超出范围，设置为默认值
-        const currentValue = parseInt(levelInput.value);
+        var currentValue = parseInt(levelInput.value);
         if (currentValue < config.min || currentValue > config.max) {
             levelInput.value = config.default;
         }
-        
         updateCompressionLevelDisplay(levelInput.value, method);
     }
-    
-    if (levelMin) {
-        if (method === 'zstd') {
-            levelMin.textContent = `${config.min} (最快)`;
-        } else {
-            levelMin.textContent = `${config.min} (不压缩)`;
-        }
-    }
-    
-    if (levelMax) {
-        if (method === 'zstd') {
-            levelMax.textContent = `${config.max} (最高)`;
-        } else {
-            levelMax.textContent = `${config.max} (最高)`;
-        }
-    }
-    
-    if (levelHelp) {
-        levelHelp.textContent = config.help;
-    }
+    if (levelMin) levelMin.textContent = config.min + ' (' + (method === 'zstd' ? '最快' : '不压缩') + ')';
+    if (levelMax) levelMax.textContent = config.max + ' (最高)';
+    if (levelHelp) levelHelp.textContent = config.help;
 }
 
-// 更新压缩级别显示
 function updateCompressionLevelDisplay(value, method) {
-    const display = document.getElementById('compressionLevelDisplay');
-    const config = compressionLevelConfigs[method] || compressionLevelConfigs['pgzip'];
-    const level = parseInt(value);
-    
-    let displayText = '';
+    var display = document.getElementById('compressionLevelDisplay');
+    var level = parseInt(value);
+    var displayText = '';
     if (method === 'zstd') {
-        if (level === 1) {
-            displayText = '1 (最快)';
-        } else if (level >= 2 && level <= 4) {
-            displayText = `${level} (快速)`;
-        } else if (level >= 5 && level <= 9) {
-            displayText = `${level} (平衡)`;
-        } else if (level >= 10 && level <= 15) {
-            displayText = `${level} (高压缩)`;
-        } else {
-            displayText = `${level} (最高)`;
-        }
+        if (level === 1) displayText = '1 (最快)';
+        else if (level <= 4) displayText = level + ' (快速)';
+        else if (level <= 9) displayText = level + ' (平衡)';
+        else if (level <= 15) displayText = level + ' (高压缩)';
+        else displayText = level + ' (最高)';
     } else if (method === 'tar') {
         displayText = '0 (仅打包)';
     } else {
-        const levelNames = {
-            0: '0 (不压缩)',
-            1: '1 (快速)',
-            2: '2 (快速)',
-            3: '3 (快速)',
-            4: '4 (平衡)',
-            5: '5 (平衡)',
-            6: '6 (平衡)',
-            7: '7 (最高)',
-            8: '8 (最高)',
-            9: '9 (最高)'
-        };
-        displayText = levelNames[level] || level;
+        if (level === 0) displayText = '0 (不压缩)';
+        else if (level <= 3) displayText = level + ' (快速)';
+        else if (level <= 6) displayText = level + ' (平衡)';
+        else displayText = level + ' (最高)';
     }
-    
-    if (display) {
-        display.textContent = displayText;
-    }
+    if (display) display.textContent = displayText;
 }
 
-// 压缩配置管理
+function updateCompressionMethodUI(method) {
+    method = method || 'zstd';
+    var threadsGroup = document.getElementById('compressionThreadsGroup');
+    var pgzipBlockSizeGroup = document.getElementById('pgzipBlockSizeGroup');
+    var zstdThreadsGroup = document.getElementById('zstdThreadsGroup');
+
+    threadsGroup.style.display = method === 'pgzip' ? 'block' : 'none';
+    pgzipBlockSizeGroup.style.display = method === 'pgzip' ? 'block' : 'none';
+    zstdThreadsGroup.style.display = method === 'zstd' ? 'block' : 'none';
+}
+
 document.addEventListener('DOMContentLoaded', function() {
-    // 获取CPU核心数
-    const cpuCount = navigator.hardwareConcurrency || 4;
-    const cpuCountEl = document.getElementById('cpuCount');
-    if (cpuCountEl) {
-        cpuCountEl.textContent = cpuCount;
-        // 设置默认线程数为CPU核心数（如果输入框为空）
-        const threadsInput = document.getElementById('compressionCommandThreads');
-        if (threadsInput && !threadsInput.value) {
-            threadsInput.value = cpuCount;
-        }
-    }
-    
-    // 压缩方法改变时的处理
-    const compressionMethodSelect = document.getElementById('compressionMethod');
-    if (compressionMethodSelect) {
-        // 初始化时更新压缩级别范围
-        updateCompressionLevelRange(compressionMethodSelect.value || 'pgzip');
-        
-        compressionMethodSelect.addEventListener('change', function() {
+    var methodSelect = document.getElementById('compressionMethod');
+    if (methodSelect) {
+        updateCompressionLevelRange(methodSelect.value || 'zstd');
+        methodSelect.addEventListener('change', function() {
             updateCompressionMethodUI(this.value);
-            // 更新压缩级别范围和显示
             updateCompressionLevelRange(this.value);
         });
     }
-    
-    // 加载压缩配置（会覆盖初始化的值）
     loadCompressionConfig();
-    
-    // 浏览7-Zip路径按钮
-    const browseBtn = document.getElementById('browseSevenzipBtn');
-    if (browseBtn) {
-        browseBtn.addEventListener('click', function() {
-            // 注意：浏览器安全限制，无法直接使用文件选择器选择可执行文件
-            // 提示用户手动输入路径
-            const path = prompt('请输入7-Zip程序路径 (7z.exe):', 
-                document.getElementById('sevenzipPath').value || 'C:\\Program Files\\7-Zip\\7z.exe');
-            if (path) {
-                document.getElementById('sevenzipPath').value = path;
-                // 自动检查路径
-                checkSevenzipPath(path);
-            }
-        });
-    }
-    
-    // 检查7-Zip路径按钮
-    const checkBtn = document.getElementById('checkSevenzipBtn');
-    if (checkBtn) {
-        checkBtn.addEventListener('click', function() {
-            const path = document.getElementById('sevenzipPath').value;
-            if (path) {
-                checkSevenzipPath(path);
-            } else {
-                showMessage('请先输入7-Zip程序路径', 'warning');
-            }
-        });
-    }
-    
-    // 自动查找7-Zip按钮
-    const autoFindBtn = document.getElementById('autoFindSevenzipBtn');
-    if (autoFindBtn) {
-        autoFindBtn.addEventListener('click', function() {
-            autoFindSevenzip();
-        });
-    }
-    
-    // 重置配置按钮
-    const resetBtn = document.getElementById('resetCompressionConfigBtn');
+
+    var resetBtn = document.getElementById('resetCompressionConfigBtn');
     if (resetBtn) {
         resetBtn.addEventListener('click', function() {
             if (confirm('确定要重置压缩配置为默认值吗？')) {
@@ -338,42 +213,30 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-// 加载压缩配置
 async function loadCompressionConfig() {
     try {
-        const response = await fetch('/api/system/compression');
-        if (!response.ok) {
-            throw new Error('获取配置失败');
-        }
-        const config = await response.json();
-        
-        // 填充表单
-        const methodSelect = document.getElementById('compressionMethod');
+        var response = await fetch('/api/system/compression');
+        if (!response.ok) throw new Error('获取配置失败');
+        var config = await response.json();
+
+        var methodSelect = document.getElementById('compressionMethod');
         if (methodSelect) {
-            const method = config.compression_method || 'pgzip';
+            var method = config.compression_method || 'zstd';
             methodSelect.value = method;
             updateCompressionMethodUI(method);
-            // 更新压缩级别范围和显示
             updateCompressionLevelRange(method);
         }
-        if (config.sevenzip_path) {
-            document.getElementById('sevenzipPath').value = config.sevenzip_path;
-        }
-        const pythonThreadsInput = document.getElementById('compressionThreads');
-        if (pythonThreadsInput) {
-            pythonThreadsInput.value = config.pgzip_threads ?? config.compression_threads ?? pythonThreadsInput.value;
-        }
-        if (config.compression_command_threads !== undefined) {
-            document.getElementById('compressionCommandThreads').value = config.compression_command_threads;
+        var threadsInput = document.getElementById('compressionThreads');
+        if (threadsInput) {
+            threadsInput.value = config.pgzip_threads ?? config.compression_threads ?? threadsInput.value;
         }
         if (config.compression_level !== undefined) {
-            const method = config.compression_method || 'pgzip';
-            const levelInput = document.getElementById('compressionLevel');
+            var method = config.compression_method || 'zstd';
+            var levelInput = document.getElementById('compressionLevel');
             if (levelInput) {
-                const config_level = compressionLevelConfigs[method] || compressionLevelConfigs['pgzip'];
-                const level = Math.max(config_level.min, Math.min(config_level.max, config.compression_level));
-                levelInput.value = level;
-                updateCompressionLevelDisplay(level, method);
+                var cfg = compressionLevelConfigs[method] || compressionLevelConfigs['zstd'];
+                levelInput.value = Math.max(cfg.min, Math.min(cfg.max, config.compression_level));
+                updateCompressionLevelDisplay(levelInput.value, method);
             }
         }
         if (config.compress_directly_to_tape !== undefined) {
@@ -385,190 +248,67 @@ async function loadCompressionConfig() {
         if (config.zstd_threads !== undefined) {
             document.getElementById('zstdThreads').value = config.zstd_threads;
         }
-        
-        // 自动检查7-Zip路径
-        if (config.sevenzip_path) {
-            checkSevenzipPath(config.sevenzip_path);
-        }
-        
     } catch (error) {
         console.error('加载压缩配置失败:', error);
         showMessage('加载压缩配置失败: ' + error.message, 'error');
     }
 }
 
-// 更新压缩方法UI
-function updateCompressionMethodUI(method) {
-    const sevenzipPathGroup = document.getElementById('sevenzipPathGroup');
-    const compressionThreadsGroup = document.getElementById('compressionThreadsGroup');
-    const compressionCommandThreadsGroup = document.getElementById('compressionCommandThreadsGroup');
-    const pgzipBlockSizeGroup = document.getElementById('pgzipBlockSizeGroup');
-    const zstdThreadsGroup = document.getElementById('zstdThreadsGroup');
-    method = method || 'pgzip';
+async function saveCompressionConfig(options) {
+    options = options || {};
+    var silent = options.silent || false;
+    var reload = options.reload !== false;
+    var form = document.getElementById('compressionConfigForm');
+    var formData = new FormData(form);
 
-    if (method === '7zip_command') {
-        sevenzipPathGroup.style.display = 'block';
-        compressionCommandThreadsGroup.style.display = 'block';
-        compressionThreadsGroup.style.display = 'none';
-        pgzipBlockSizeGroup.style.display = 'none';
-        zstdThreadsGroup.style.display = 'none';
-        document.getElementById('sevenzipPath').required = true;
-        document.getElementById('compressionCommandThreads').required = true;
-    } else if (method === 'pgzip') {
-        sevenzipPathGroup.style.display = 'none';
-        compressionCommandThreadsGroup.style.display = 'none';
-        compressionThreadsGroup.style.display = 'block';
-        pgzipBlockSizeGroup.style.display = 'block';
-        zstdThreadsGroup.style.display = 'none';
-        document.getElementById('sevenzipPath').required = false;
-        document.getElementById('compressionCommandThreads').required = false;
-    } else if (method === 'tar') {
-        sevenzipPathGroup.style.display = 'none';
-        compressionCommandThreadsGroup.style.display = 'none';
-        compressionThreadsGroup.style.display = 'none';
-        pgzipBlockSizeGroup.style.display = 'none';
-        zstdThreadsGroup.style.display = 'none';
-        document.getElementById('sevenzipPath').required = false;
-        document.getElementById('compressionCommandThreads').required = false;
-    } else if (method === 'zstd') {
-        sevenzipPathGroup.style.display = 'none';
-        compressionCommandThreadsGroup.style.display = 'none';
-        compressionThreadsGroup.style.display = 'none';
-        pgzipBlockSizeGroup.style.display = 'none';
-        zstdThreadsGroup.style.display = 'block';
-        document.getElementById('sevenzipPath').required = false;
-        document.getElementById('compressionCommandThreads').required = false;
-    } else {
-        sevenzipPathGroup.style.display = 'none';
-        compressionCommandThreadsGroup.style.display = 'none';
-        compressionThreadsGroup.style.display = 'block';
-        pgzipBlockSizeGroup.style.display = 'none';
-        zstdThreadsGroup.style.display = 'none';
-        document.getElementById('sevenzipPath').required = false;
-        document.getElementById('compressionCommandThreads').required = false;
-    }
-}
-
-// 检查7-Zip路径
-async function checkSevenzipPath(path) {
-    const statusDiv = document.getElementById('sevenzipPathStatus');
-    statusDiv.innerHTML = '<div class="spinner-border spinner-border-sm me-2"></div>检查中...';
-    
-    try {
-        const response = await fetch(`/api/system/compression/check-sevenzip?path=${encodeURIComponent(path)}`);
-        const result = await response.json();
-        
-        if (result.is_valid) {
-            statusDiv.innerHTML = '<div class="text-success"><i class="bi bi-check-circle me-1"></i>路径有效</div>';
-        } else {
-            statusDiv.innerHTML = `<div class="text-danger"><i class="bi bi-x-circle me-1"></i>${result.message || '路径无效'}</div>`;
-        }
-    } catch (error) {
-        statusDiv.innerHTML = `<div class="text-danger"><i class="bi bi-x-circle me-1"></i>检查失败: ${error.message}</div>`;
-    }
-}
-
-// 自动查找7-Zip
-async function autoFindSevenzip() {
-    const statusDiv = document.getElementById('sevenzipPathStatus');
-    statusDiv.innerHTML = '<div class="spinner-border spinner-border-sm me-2"></div>查找中...';
-    
-    try {
-        const response = await fetch('/api/system/compression/check-sevenzip');
-        const result = await response.json();
-        
-        if (result.found_paths && result.found_paths.length > 0) {
-            // 使用第一个找到的路径
-            const foundPath = result.found_paths[0].path;
-            document.getElementById('sevenzipPath').value = foundPath;
-            statusDiv.innerHTML = `<div class="text-success"><i class="bi bi-check-circle me-1"></i>已找到: ${foundPath}</div>`;
-            
-            // 自动检查路径
-            checkSevenzipPath(foundPath);
-        } else {
-            statusDiv.innerHTML = '<div class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>未找到7-Zip，请手动指定路径</div>';
-        }
-    } catch (error) {
-        statusDiv.innerHTML = `<div class="text-danger"><i class="bi bi-x-circle me-1"></i>查找失败: ${error.message}</div>`;
-    }
-}
-
-// 保存压缩配置
-async function saveCompressionConfig(options = {}) {
-    const { silent = false, reload = true } = options;
-    const form = document.getElementById('compressionConfigForm');
-    const formData = new FormData(form);
-    
-    const config = {
+    var config = {
         compression_method: formData.get('compression_method'),
-        sevenzip_path: formData.get('sevenzip_path') || undefined,
         compression_threads: parseInt(formData.get('compression_threads')) || undefined,
-        compression_command_threads: parseInt(formData.get('compression_command_threads')) || undefined,
         compression_level: parseInt(formData.get('compression_level')) || undefined,
         compress_directly_to_tape: document.getElementById('compressDirectlyToTape').checked,
         pgzip_block_size: formData.get('pgzip_block_size') || undefined,
         pgzip_threads: parseInt(formData.get('compression_threads')) || undefined,
         zstd_threads: parseInt(formData.get('zstd_threads')) || undefined,
     };
-    
+
     try {
-        const response = await fetch('/api/system/compression', {
+        var response = await fetch('/api/system/compression', {
             method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(config)
         });
-        
         if (!response.ok) {
-            const error = await response.json();
+            var error = await response.json();
             throw new Error(error.detail || '保存失败');
         }
-        
         await response.json();
-        if (!silent) {
-            showMessage('压缩配置保存成功', 'success');
-        }
-        
-        if (reload) {
-            await loadCompressionConfig();
-        }
+        if (!silent) showMessage('压缩配置保存成功', 'success');
+        if (reload) await loadCompressionConfig();
         return true;
-        
     } catch (error) {
         console.error('保存压缩配置失败:', error);
-        if (!silent) {
-            showMessage('保存压缩配置失败: ' + error.message, 'error');
-        }
+        if (!silent) showMessage('保存压缩配置失败: ' + error.message, 'error');
         throw error;
     }
 }
 
-// 重置压缩配置
 async function resetCompressionConfig() {
     try {
-        // 重置为默认值
-        const method = 'pgzip';
+        var method = 'zstd';
         document.getElementById('compressionMethod').value = method;
-        document.getElementById('sevenzipPath').value = 'C:\\Program Files\\7-Zip\\7z.exe';
         document.getElementById('compressionThreads').value = '4';
-        document.getElementById('compressionCommandThreads').value = '4';
-        const config = compressionLevelConfigs[method];
-        document.getElementById('compressionLevel').value = config.default;
+        document.getElementById('zstdThreads').value = '4';
+        var cfg = compressionLevelConfigs[method];
+        document.getElementById('compressionLevel').value = cfg.default;
         document.getElementById('pgzipBlockSize').value = '1G';
         document.getElementById('compressDirectlyToTape').checked = true;
         updateCompressionMethodUI(method);
         updateCompressionLevelRange(method);
-        updateCompressionLevelDisplay(config.default, method);
-        
-        // 保存默认配置
+        updateCompressionLevelDisplay(cfg.default, method);
         await saveCompressionConfig();
-        
     } catch (error) {
         console.error('重置压缩配置失败:', error);
         showMessage('重置压缩配置失败: ' + error.message, 'error');
     }
 }
-
 </script>
-

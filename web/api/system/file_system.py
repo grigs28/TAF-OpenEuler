@@ -151,6 +151,31 @@ async def get_file_system_drives():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/file-system/smb-shares")
+async def list_smb_shares(server: str):
+    """列出 SMB 服务器的所有共享
+
+    参数:
+        server: SMB 服务器地址（如 192.168.0.79 或 //192.168.0.79）
+
+    返回:
+        {
+            "success": bool,
+            "shares": [{"name": "share1", "type": "Disk", "full_path": "//server/share1"}, ...],
+            "message": str
+        }
+    """
+    try:
+        from utils.network_path import list_smb_shares
+
+        result = list_smb_shares(server)
+        return result
+
+    except Exception as e:
+        logger.error(f"列出 SMB 共享失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/file-system/list")
 async def list_file_system(path: str = None):
     """列出指定路径下的目录和文件

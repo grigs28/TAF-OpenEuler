@@ -111,47 +111,56 @@ class FileScanner:
     
     def should_exclude_file(self, file_path: str, exclude_patterns: List[str]) -> bool:
         """检查文件或目录是否应该被排除
-        
-        排除规则匹配文件路径或其任何父目录路径时，文件/目录都会被排除。
-        例如：如果排除规则匹配 "D:\temp"，则 "D:\temp\file.txt" 和 "D:\temp\subdir\file.txt" 都会被排除。
-        
+
+        排除规则支持三种匹配方式：
+        1. 完整路径匹配: fnmatch 匹配整个路径
+        2. 路径段名称匹配: 对路径中每个目录/文件名进行匹配
+           例如模式 "System Volume Information" 会匹配路径中任何位置的该目录名
+        3. 父目录匹配: 如果父目录被排除，其下所有文件也被排除
+
         Args:
             file_path: 文件或目录路径
             exclude_patterns: 排除模式列表（从计划任务 action_config 获取）
-            
+
         Returns:
             bool: 如果文件/目录应该被排除返回 True
         """
         if not exclude_patterns:
             return False
-        
-        # 将路径标准化（统一使用正斜杠或反斜杠）
+
+        # 将路径标准化（统一使用正斜杠）
         normalized_path = file_path.replace('\\', '/')
-        
-        # 检查文件/目录路径本身是否匹配排除规则
+        path_parts = [p for p in normalized_path.split('/') if p]
+
+        # 1. 检查完整路径是否匹配排除规则
         for pattern in exclude_patterns:
             normalized_pattern = pattern.replace('\\', '/')
             if fnmatch.fnmatch(normalized_path, normalized_pattern):
                 return True
-        
-        # 检查文件/目录路径的父目录是否匹配排除规则
-        # 例如：如果排除规则是 "D:/temp/*"，则 "D:/temp/subdir/file.txt" 应该被排除
-        path_parts = normalized_path.split('/')
+
+        # 2. 检查路径中每个段（目录名/文件名）是否匹配排除规则
+        # 这样 "System Volume Information" 可以匹配任何位置的同名目录
+        for part in path_parts:
+            for pattern in exclude_patterns:
+                normalized_pattern = pattern.replace('\\', '/')
+                # 去掉模式中的路径前缀，只保留最后一段用于名称匹配
+                pattern_name = normalized_pattern.rsplit('/', 1)[-1]
+                if fnmatch.fnmatch(part, pattern_name):
+                    return True
+
+        # 3. 检查父目录路径是否匹配排除规则（含通配符）
         for i in range(len(path_parts)):
-            # 构建父目录路径（从根目录到当前层级）
             parent_path = '/'.join(path_parts[:i+1])
             if not parent_path:
                 continue
-            
+
             for pattern in exclude_patterns:
                 normalized_pattern = pattern.replace('\\', '/')
-                # 检查父目录路径是否匹配排除规则
                 if fnmatch.fnmatch(parent_path, normalized_pattern):
                     return True
-                # 检查父目录路径是否匹配通配符模式（如 "D:/temp/*"）
                 if fnmatch.fnmatch(parent_path + '/*', normalized_pattern):
                     return True
-        
+
         return False
     
     async def scan_source_files_streaming(
