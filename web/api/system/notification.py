@@ -180,61 +180,37 @@ async def update_notification_config(config: DingTalkConfig, request: Request):
 
 
 @router.post("/notification/test")
-async def test_notification(phone: str = ""):
-    """测试钉钉通知"""
+async def test_notification(request: Request, phone: str = ""):
+    """测试钉钉通知（发送给数据库中所有启用的通知人员）"""
     try:
-        from config.settings import Settings
-        
-        # 创建新的配置实例，读取最新的.env文件
-        temp_settings = Settings()
-        
-        # 使用提供的手机号或默认手机号
-        target_phone = phone or temp_settings.DINGTALK_DEFAULT_PHONE
-        
-        if not target_phone:
-            return {"success": False, "message": "未指定手机号"}
-        
-        # 手动创建通知器，使用最新的配置
-        from utils.dingtalk_notifier import DingTalkNotifier
-        import aiohttp
-        
-        # 创建临时会话
-        connector = aiohttp.TCPConnector(limit=10, limit_per_host=5)
-        timeout = aiohttp.ClientTimeout(total=30)
-        session = aiohttp.ClientSession(connector=connector, timeout=timeout)
-        
-        try:
-            url = f"{temp_settings.DINGTALK_API_URL}/api/v1/messages/send"
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {temp_settings.DINGTALK_API_KEY}"
-            }
-            
-            payload = {
-                "phone": target_phone,
-                "title": "测试通知",
-                "content": "这是一条测试通知，用于验证钉钉通知配置是否正常工作。",
-                "message_type": "markdown"
-            }
-            
-            async with session.post(url, headers=headers, json=payload) as response:
-                result = await response.json()
-                
-                if result.get('success'):
-                    logger.info(f"钉钉消息发送成功: 测试通知 -> {target_phone}")
-                    return {
-                        "success": True,
-                        "message": f"测试通知发送成功 -> {target_phone}"
-                    }
-                else:
-                    logger.error(f"钉钉消息发送失败: {result.get('message', '未知错误')}")
-                    return {
-                        "success": False,
-                        "message": f"发送失败: {result.get('message', '未知错误')}"
-                    }
-        finally:
-            await session.close()
-            
+        system = request.app.state.system
+        if not system or not hasattr(system, 'dingtalk_notifier') or not system.dingtalk_notifier:
+            return {"success": False, "message": "钉钉通知器未初始化"}
+
+        from utils.notify import notify, get_all_phones
+
+        # 获取所有通知人员（数据库 + 默认手机号 + 额外手机号）
+        extra = [phone] if phone else None
+        phones = await get_all_phones(extra)
+
+        if not phones:
+            return {"success": False, "message": "没有可用的通知人员"}
+
+        # 使用程序中的统一通知函数发送
+        await notify(
+            notifier=system.dingtalk_notifier,
+            title="测试通知",
+            content="这是一条测试通知，用于验证钉钉通知配置是否正常工作。",
+            message_type="markdown",
+            extra_phones=extra
+        )
+
+        logger.info(f"测试通知已发送给: {', '.join(phones)}")
+        return {
+            "success": True,
+            "message": f"测试通知已发送给: {', '.join(phones)}"
+        }
+
     except Exception as e:
         logger.error(f"测试通知失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -553,58 +529,64 @@ async def create_notification_user(user: NotificationUser, request: Request):
     
     try:
         if is_opengauss():
-            # 使用原生SQL插入
-            # 使用连接池
-            async with get_opengauss_connection() as conn:
-                # 检查手机号是否已存在
-                existing = await conn.fetchrow(
-                    "SELECT id FROM notification_users WHERE phone = $1",
-                    user.phone
-                )
-                if existing:
-                    raise ValueError(f"手机号 {user.phone} 已存在")
-                
-                # 插入新记录
-                user_id = await conn.fetchval(
-                    """
-                    INSERT INTO notification_users (phone, name, remark, enabled, created_at, updated_at)
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    RETURNING id
-                    """,
-                    user.phone,
-                    user.name,
-                    user.remark,
-                    user.enabled,
-                    datetime.now(),
-                    datetime.now()
-                )
-                
-                # 记录操作日志
-                client_ip = request.client.host if request.client else None
-                duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
-                await log_operation(
-                    operation_type=OperationType.CREATE,
-                    resource_type="notification",
-                    resource_id=str(user_id),
-                    resource_name=f"通知人员: {user.name} ({user.phone})",
-                    operation_name="创建通知人员",
-                    operation_description=f"创建通知人员: {user.name} ({user.phone})",
-                    category="system",
-                    success=True,
-                    result_message="通知人员创建成功",
-                    new_values={
-                        "phone": user.phone,
-                        "name": user.name,
-                        "remark": user.remark,
-                        "enabled": user.enabled
-                    },
-                    ip_address=client_ip,
-                    request_method="POST",
-                    request_url=str(request.url),
-                    duration_ms=duration_ms
-                )
-                
-                return {"success": True, "message": "通知人员创建成功", "user_id": user_id}
+            # 使用 psycopg 同步连接插入（与添加磁带相同的方式）
+            from utils.db_connection_helper import get_psycopg_connection_from_url, set_autocommit
+            from config.settings import get_settings as _get_settings
+
+            _settings = _get_settings()
+            _conn, _is_psycopg3 = get_psycopg_connection_from_url(_settings.DATABASE_URL, prefer_psycopg3=True)
+            try:
+                set_autocommit(_conn, _is_psycopg3, autocommit=True)
+                with _conn.cursor() as cur:
+                    # 检查手机号是否已存在
+                    cur.execute("SELECT id FROM notification_users WHERE phone = %s", (user.phone,))
+                    if cur.fetchone():
+                        raise ValueError(f"手机号 {user.phone} 已存在")
+
+                    # 插入新记录
+                    cur.execute(
+                        """
+                        INSERT INTO notification_users (phone, name, remark, enabled, created_at, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        RETURNING id
+                        """,
+                        user.phone,
+                        user.name,
+                        user.remark,
+                        user.enabled,
+                        datetime.now(),
+                        datetime.now()
+                    )
+                    user_id = cur.fetchone()[0]
+            finally:
+                _conn.close()
+
+            # 记录操作日志
+            client_ip = request.client.host if request.client else None
+            duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+            await log_operation(
+                operation_type=OperationType.CREATE,
+                resource_type="notification",
+                resource_id=str(user_id),
+                resource_name=f"通知人员: {user.name} ({user.phone})",
+                operation_name="创建通知人员",
+                operation_description=f"创建通知人员: {user.name} ({user.phone})",
+                category="system",
+                success=True,
+                result_message="通知人员创建成功",
+                new_values={
+                    "phone": user.phone,
+                    "name": user.name,
+                    "remark": user.remark,
+                    "enabled": user.enabled
+                },
+                ip_address=client_ip,
+                request_method="POST",
+                request_url=str(request.url),
+                duration_ms=duration_ms
+            )
+
+            return {"success": True, "message": "通知人员创建成功", "user_id": user_id}
         else:
             # 使用SQLAlchemy插入
             from config.database import db_manager

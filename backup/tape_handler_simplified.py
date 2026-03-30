@@ -349,15 +349,60 @@ class TapeHandlerSimplified:
             return False, error_msg
         
         if serial and volume_name != "BACKUP" and (existing_label == "Unknown" or not existing_label):
+            # 使用 psycopg 同步连接注册磁带到数据库（与添加磁带相同的方式）
             try:
-                from backup.tape_label_generator import register_tape_in_database
-                reg_success, reg_msg = await register_tape_in_database(
-                    tape_id=volume_name,
-                    label=volume_name,
-                    serial_number=serial
-                )
-                if reg_success:
-                    logger.info(f"[LTFS] ✅ 磁带已注册到数据库: {volume_name}")
+                from utils.db_connection_helper import get_psycopg_connection_from_url, set_autocommit
+                from config.settings import get_settings as _get_settings
+
+                _settings = _get_settings()
+                _db_url = _settings.DATABASE_URL
+                _conn, _is_psycopg3 = get_psycopg_connection_from_url(_db_url, prefer_psycopg3=True)
+                try:
+                    set_autocommit(_conn, _is_psycopg3, autocommit=True)
+                    with _conn.cursor() as cur:
+                        cur.execute("SELECT 1 FROM tape_cartridges WHERE tape_id = %s", (volume_name,))
+                        _tape_exists = cur.fetchone() is not None
+
+                        if not _tape_exists:
+                            logger.info(f"[LTFS] 数据库中不存在磁带 {volume_name}，开始录入...")
+                            from datetime import datetime
+                            now = datetime.now()
+                            _expiry_month = now.month + 6
+                            _expiry_year = now.year
+                            while _expiry_month > 12:
+                                _expiry_year += 1
+                                _expiry_month -= 12
+                            _expiry_date = datetime(_expiry_year, _expiry_month, 1)
+
+                            cur.execute(
+                                """
+                                INSERT INTO tape_cartridges
+                                (tape_id, label, status, media_type, generation, serial_number, location,
+                                 capacity_bytes, used_bytes, retention_months, notes, manufactured_date, expiry_date, auto_erase, health_score)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                """,
+                                (
+                                    volume_name,
+                                    volume_name,
+                                    'available',
+                                    'LTO',
+                                    9,
+                                    serial,
+                                    '',
+                                    18 * 1024 ** 4,
+                                    0,
+                                    6,
+                                    '备份任务格式化后自动注册',
+                                    now,
+                                    _expiry_date,
+                                    True,
+                                    100
+                                )
+                            )
+                            logger.info(f"[LTFS] ✅ 磁带已注册到数据库: {volume_name}")
+                        else:
+                            logger.info(f"[LTFS] 数据库中已存在磁带 {volume_name}，跳过录入")
+
                     if self.tape_manager:
                         from datetime import datetime
                         new_tape = TapeCartridge(
@@ -371,6 +416,8 @@ class TapeHandlerSimplified:
                         )
                         self.tape_manager.tape_cartridges[volume_name] = new_tape
                         self.tape_manager.current_tape = new_tape
+                finally:
+                    _conn.close()
             except Exception as e:
                 logger.warning(f"[LTFS] 数据库注册异常: {e}")
         

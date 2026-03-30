@@ -321,10 +321,6 @@ class BackupEngine:
             if label != "Unknown":
                 logger.info("[2] 检查LTFS格式和空盘")
 
-                # 先卸载
-                await self.tape_handler.unmount_ltfs()
-                await asyncio.sleep(1)
-
                 self.tape_manager = TapeManager()
                 await self.tape_manager.initialize()
                 self.tape_handler.tape_manager = self.tape_manager
@@ -369,6 +365,78 @@ class BackupEngine:
                     await self._send_tape_error_notification(error_msg)
                     return False
                 logger.info(f"✓ 格式化成功")
+
+                # 格式化成功后，使用 psycopg 同步连接注册磁带到数据库（与添加磁带相同的方式）
+                try:
+                    from utils.db_connection_helper import get_psycopg_connection_from_url, set_autocommit
+                    from config.settings import get_settings as _get_settings
+
+                    _settings = _get_settings()
+                    _db_url = _settings.DATABASE_URL
+                    _conn, _is_psycopg3 = get_psycopg_connection_from_url(_db_url, prefer_psycopg3=True)
+                    try:
+                        set_autocommit(_conn, _is_psycopg3, autocommit=True)
+                        with _conn.cursor() as cur:
+                            cur.execute("SELECT 1 FROM tape_cartridges WHERE tape_id = %s", (new_label.label,))
+                            _tape_exists = cur.fetchone() is not None
+
+                            if not _tape_exists:
+                                logger.info(f"数据库中不存在磁带 {new_label.label}，开始录入...")
+                                _now = datetime.now()
+                                _expiry_month = _now.month + 6
+                                _expiry_year = _now.year
+                                while _expiry_month > 12:
+                                    _expiry_year += 1
+                                    _expiry_month -= 12
+                                _expiry_date = datetime(_expiry_year, _expiry_month, 1)
+
+                                cur.execute(
+                                    """
+                                    INSERT INTO tape_cartridges
+                                    (tape_id, label, status, media_type, generation, serial_number, location,
+                                     capacity_bytes, used_bytes, retention_months, notes, manufactured_date, expiry_date, auto_erase, health_score)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                    """,
+                                    (
+                                        new_label.label,
+                                        new_label.label,
+                                        'available',
+                                        'LTO',
+                                        9,
+                                        new_label.serial_number,
+                                        '',
+                                        18 * 1024 ** 4,
+                                        0,
+                                        6,
+                                        '备份任务格式化后自动注册',
+                                        _now,
+                                        _expiry_date,
+                                        True,
+                                        100
+                                    )
+                                )
+                                logger.info(f"✓ 磁带已注册到数据库: {new_label.label}")
+                            else:
+                                logger.info(f"数据库中已存在磁带 {new_label.label}，跳过录入")
+
+                        # 更新 tape_manager 缓存
+                        if self.tape_manager:
+                            from tape.tape_cartridge import TapeCartridge, TapeStatus
+                            new_tape = TapeCartridge(
+                                tape_id=new_label.label,
+                                label=new_label.label,
+                                status=TapeStatus.AVAILABLE,
+                                generation=9,
+                                serial_number=new_label.serial_number,
+                                capacity_bytes=18 * 1024**4,
+                                created_date=datetime.now()
+                            )
+                            self.tape_manager.tape_cartridges[new_label.label] = new_tape
+                            self.tape_manager.current_tape = new_tape
+                    finally:
+                        _conn.close()
+                except Exception as e:
+                    logger.warning(f"磁带数据库注册异常: {e}")
             else:
                 logger.info("✓ 无需格式化")
 
@@ -1105,15 +1173,11 @@ class BackupEngine:
             
             # 1. 检查磁带设备是否可用
             logger.info("检查磁带设备...")
-            tape_drive = self.settings.TAPE_DRIVE_LETTER
-            # Linux 设备路径直接使用，不添加 :\
-            if not tape_drive.startswith('/dev/'):
-                # 如果是 Windows 盘符格式，转换为 Linux 设备路径
-                tape_drive = '/dev/nst0'
+            tape_drive = self.settings.TAPE_DEVICE_PATH or '/dev/nst0'
             if not os.path.exists(tape_drive):
                 raise RuntimeError(f"磁带设备不存在: {tape_drive}，请检查配置")
             
-            logger.info(f"磁带盘符可用: {tape_drive}")
+            logger.info(f"磁带设备可用: {tape_drive}")
             
             # 2. 获取或创建磁带信息（简化处理）
             tape_id = "TAPE001"  # 默认磁带ID，可以从数据库获取或自动生成
