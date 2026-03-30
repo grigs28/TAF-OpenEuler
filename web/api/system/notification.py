@@ -550,12 +550,14 @@ async def create_notification_user(user: NotificationUser, request: Request):
                         VALUES (%s, %s, %s, %s, %s, %s)
                         RETURNING id
                         """,
-                        user.phone,
-                        user.name,
-                        user.remark,
-                        user.enabled,
-                        datetime.now(),
-                        datetime.now()
+                        (
+                            user.phone,
+                            user.name,
+                            user.remark,
+                            user.enabled,
+                            datetime.now(),
+                            datetime.now()
+                        )
                     )
                     user_id = cur.fetchone()[0]
             finally:
