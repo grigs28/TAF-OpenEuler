@@ -15,6 +15,8 @@ import asyncio
 import logging
 import os
 import time
+import threading
+import queue as queue_module
 from pathlib import Path
 from typing import List, Dict, Optional, Any
 from datetime import datetime, timezone
@@ -155,16 +157,44 @@ class SimpleScanner:
         # 批次大小（与测试程序一致）
         batch_size = getattr(self.settings, "SCAN_UPDATE_INTERVAL", 10000) or 10000
         
-        # 进度输出相关（与测试程序一致）
-        last_progress_time = time.time()
-        progress_interval = 5.0  # 每5秒输出一次进度
-        last_log_count = 0
-        log_interval_count = 10000  # 每10000个文件输出一次详细日志
-        
-        current_batch = []  # 当前批次
-        batch_number = 0    # 批次编号
+        # === 阶段1: UNC/网络路径处理（必须在异步上下文中完成） ===
+        expanded_paths = []
+        for idx, source_path_str in enumerate(source_paths):
+            logger.info(
+                f"[简洁扫描] 扫描源路径 {idx + 1}/{len(source_paths)}: {source_path_str}"
+            )
+            actual_path = source_path_str
+            if is_unc_path(source_path_str):
+                logger.info(f"[简洁扫描] 检测到 UNC 路径，尝试挂载 SMB 共享...")
+                validation = await validate_network_path(source_path_str)
+                if validation.get('valid') and validation.get('expanded_paths'):
+                    actual_path = validation['expanded_paths'][0]
+                    logger.info(f"[简洁扫描] UNC 路径已映射到本地: {source_path_str} -> {actual_path}")
+                    expanded_paths.append(actual_path)
+                else:
+                    logger.warning(f"[简洁扫描] UNC 路径验证失败: {validation.get('message')}")
+                    continue
+            else:
+                expanded_paths.append(actual_path)
 
-        # 定义批次写入辅助函数（根据模式路由到内存或数据库）
+        if not expanded_paths:
+            logger.warning("[简洁扫描] 没有有效的源路径")
+            return
+
+        # === 阶段2: 启动同步扫描线程（os.scandir 在线程中运行，不阻塞事件循环） ===
+        batch_queue: queue_module.Queue = queue_module.Queue()
+        stop_event = threading.Event()
+
+        scan_thread = threading.Thread(
+            target=self._sync_collect_files,
+            args=(expanded_paths, exclude_patterns, batch_size, batch_queue, stop_event),
+            daemon=True,
+            name="simple-scanner",
+        )
+        scan_thread.start()
+        logger.info("[简洁扫描] 文件扫描线程已启动（不阻塞事件循环）")
+
+        # 定义批次写入辅助函数（闭包延迟绑定 conn/actual_conn）
         async def _flush_batch(batch, batch_num):
             """写入一个批次的文件记录"""
             if use_memory_mode:
@@ -174,282 +204,113 @@ class SimpleScanner:
                     conn, actual_conn, batch, backup_set_db_id, table_name, batch_num
                 )
 
+        # === 阶段3: 异步读取队列 + 写入批次（事件循环保持响应） ===
+        loop = asyncio.get_running_loop()
+        batch_number = 0
+
         # 打开数据库连接（仅在数据库模式下；内存模式使用空连接）
         async with _conditional_db_connection(use_memory_mode) as (conn, actual_conn):
-            # 主扫描循环（与测试程序完全一致）
-            expanded_paths = []  # 展开后的路径列表
-            for idx, source_path_str in enumerate(source_paths):
-                logger.info(
-                    f"[简洁扫描] 扫描源路径 {idx + 1}/{len(source_paths)}: {source_path_str}"
-                )
-                
-                # 处理 UNC 网络路径
-                actual_path = source_path_str
-                if is_unc_path(source_path_str):
-                    logger.info(f"[简洁扫描] 检测到 UNC 路径，尝试挂载 SMB 共享...")
-                    validation = await validate_network_path(source_path_str)
-                    if validation.get('valid') and validation.get('expanded_paths'):
-                        actual_path = validation['expanded_paths'][0]
-                        logger.info(f"[简洁扫描] UNC 路径已映射到本地: {source_path_str} -> {actual_path}")
-                        expanded_paths.append(actual_path)
-                    else:
-                        logger.warning(f"[简洁扫描] UNC 路径验证失败: {validation.get('message')}")
-                        continue
-                else:
-                    expanded_paths.append(actual_path)
-            
-            # 使用展开后的路径列表
-            for idx, source_path_str in enumerate(expanded_paths):
-                logger.info(f"[简洁扫描] 扫描本地路径 {idx + 1}/{len(expanded_paths)}: {source_path_str}")
-                
-                source_path = Path(source_path_str)
-                if not source_path.exists():
-                    logger.warning(f"[简洁扫描] 路径不存在，跳过: {source_path_str}")
-                    continue
-                
-                # 单个文件（与测试程序一致）
-                if source_path.is_file():
-                    logger.info(f"[简洁扫描] 处理单个文件: {source_path_str}")
+            # === 异步队列读取 + 批次写入（事件循环保持响应） ===
+            try:
+                while True:
+                    # 从队列读取（run_in_executor 不阻塞事件循环）
                     try:
-                        if self.file_scanner.should_exclude_file(source_path_str, exclude_patterns):
-                            stats["excluded_count"] += 1
-                            continue
-                        file_info = await self.file_scanner.get_file_info(source_path)
-                        if file_info:
-                            # 在扫描到文件时立即统计扫描数量和字节数（与测试程序一致）
-                            file_size = file_info.get('size', 0) or 0
-                            stats['total_scanned'] += 1
-                            stats['total_scanned_bytes'] += file_size
-                            current_batch.append(file_info)
-                            
-                            # 达到批次大小，写入数据库（与测试程序一致）
-                            if len(current_batch) >= batch_size:
-                                written_count = await _flush_batch(
-                                    current_batch, batch_number
-                                )
-                                stats['total_written'] += written_count
-                                stats['total_failed'] += (len(current_batch) - written_count)
-                                # 只统计成功写入的文件大小
-                                batch_bytes = sum(f.get('size', 0) or 0 for f in current_batch[:written_count])
-                                stats['total_bytes'] += batch_bytes
-                                stats['total_written_bytes'] = stats['total_bytes']
-                                # 统计失败的文件大小
-                                failed_bytes = sum(f.get('size', 0) or 0 for f in current_batch[written_count:])
-                                stats['total_failed_bytes'] += failed_bytes
-                                current_batch.clear()
-                                batch_number += 1
-                                
-                                # 更新内存中的任务对象统计信息（供 UI 使用）
-                                if backup_task:
-                                    backup_task.total_files = stats["total_written"]
-                                    backup_task.total_bytes = stats["total_bytes"]
-                                
-                                # 输出批次进度
-                                elapsed = time.time() - stats['start_time']
-                                files_per_sec = stats['total_written'] / elapsed if elapsed > 0 else 0
-                                logger.info(
-                                    f"[简洁扫描] 批次 {batch_number}: {write_verb} {stats['total_written']:,} 个文件, "
-                                    f"总容量: {format_bytes(stats['total_bytes'])}, "
-                                    f"速度: {files_per_sec:.0f} 文件/秒, "
-                                    f"耗时: {elapsed:.1f}秒"
-                                )
-                        else:
-                            stats['excluded_count'] += 1
-                            # 统计被排除的文件大小
-                            excluded_size = file_info.get('size', 0) or 0 if file_info else 0
-                            stats['excluded_bytes'] += excluded_size
-                    except Exception as e:
-                        logger.warning(f"[简洁扫描] 处理文件失败: {source_path_str}, 错误: {str(e)}")
-                        stats['error_count'] += 1
+                        item = await loop.run_in_executor(
+                            None, batch_queue.get, True, 1.0
+                        )
+                    except queue_module.Empty:
+                        if not scan_thread.is_alive() and batch_queue.empty():
+                            break
+                        await asyncio.sleep(0)  # 让出事件循环
                         continue
-                
-                # 目录：使用 os.scandir 递归扫描（与测试程序完全一致）
-                elif source_path.is_dir():
-                    logger.info(f"[简洁扫描] 扫描目录: {source_path_str}")
-                    
-                    # 检查目录本身是否被排除
-                    if self.file_scanner.should_exclude_file(str(source_path), exclude_patterns):
-                        logger.info(f"[简洁扫描] 目录被排除，跳过: {source_path_str}")
-                        stats["excluded_dirs"] += 1
-                        continue
-                    
-                    dirs_to_scan = [source_path]  # 待扫描的目录队列
-                    scanned_dirs = set()  # 已扫描的目录集合（避免重复）
-                    current_dir_count = 0  # 当前目录已扫描文件数
-                    current_dir_str = str(source_path.resolve())
-                    
+
+                    if item[0] == 'done':
+                        # 扫描线程完成，更新最终统计
+                        final_thread_stats = item[1]
+                        stats['total_scanned'] = final_thread_stats.get('total_scanned', stats['total_scanned'])
+                        stats['total_scanned_bytes'] = final_thread_stats.get('total_scanned_bytes', stats['total_scanned_bytes'])
+                        stats['excluded_count'] = final_thread_stats.get('excluded_count', stats['excluded_count'])
+                        stats['excluded_dirs'] = final_thread_stats.get('excluded_dirs', stats['excluded_dirs'])
+                        stats['excluded_bytes'] = final_thread_stats.get('excluded_bytes', stats['excluded_bytes'])
+                        stats['error_count'] = final_thread_stats.get('error_count', stats['error_count'])
+                        stats['error_dirs'] = final_thread_stats.get('error_dirs', stats['error_dirs'])
+                        stats['dirs_scanned'] = final_thread_stats.get('dirs_scanned', stats['dirs_scanned'])
+                        stats['dirs_skipped'] = final_thread_stats.get('dirs_skipped', stats['dirs_skipped'])
+                        stats['symlinks_skipped'] = final_thread_stats.get('symlinks_skipped', stats['symlinks_skipped'])
+                        break
+
+                    if item[0] == 'batch':
+                        _, file_list, thread_stats = item
+
+                        # 同步线程统计
+                        stats['total_scanned'] = thread_stats.get('total_scanned', stats['total_scanned'])
+                        stats['total_scanned_bytes'] = thread_stats.get('total_scanned_bytes', stats['total_scanned_bytes'])
+                        stats['excluded_count'] = thread_stats.get('excluded_count', stats['excluded_count'])
+                        stats['excluded_dirs'] = thread_stats.get('excluded_dirs', stats['excluded_dirs'])
+                        stats['excluded_bytes'] = thread_stats.get('excluded_bytes', stats['excluded_bytes'])
+                        stats['error_count'] = thread_stats.get('error_count', stats['error_count'])
+                        stats['error_dirs'] = thread_stats.get('error_dirs', stats['error_dirs'])
+                        stats['dirs_scanned'] = thread_stats.get('dirs_scanned', stats['dirs_scanned'])
+                        stats['dirs_skipped'] = thread_stats.get('dirs_skipped', stats['dirs_skipped'])
+                        stats['symlinks_skipped'] = thread_stats.get('symlinks_skipped', stats['symlinks_skipped'])
+
+                        # 写入/缓存批次
+                        written_count = await _flush_batch(file_list, batch_number)
+                        stats['total_written'] += written_count
+                        stats['total_failed'] += (len(file_list) - written_count)
+                        batch_bytes = sum(f.get('size', 0) or 0 for f in file_list[:written_count])
+                        stats['total_bytes'] += batch_bytes
+                        stats['total_written_bytes'] = stats['total_bytes']
+                        failed_bytes = sum(f.get('size', 0) or 0 for f in file_list[written_count:])
+                        stats['total_failed_bytes'] += failed_bytes
+                        batch_number += 1
+
+                        if backup_task:
+                            backup_task.total_files = stats["total_written"]
+                            backup_task.total_bytes = stats["total_bytes"]
+
+                        # 批次进度日志
+                        elapsed = time.time() - stats['start_time']
+                        files_per_sec = stats['total_written'] / elapsed if elapsed > 0 else 0
+                        logger.info(
+                            f"[简洁扫描] 批次 {batch_number}: {write_verb} {stats['total_written']:,} 个文件, "
+                            f"总容量: {format_bytes(stats['total_bytes'])}, "
+                            f"速度: {files_per_sec:.0f} 文件/秒, "
+                            f"耗时: {elapsed:.1f}秒"
+                        )
+
+                        # 让出事件循环，让预取器和压缩器有机会运行
+                        await asyncio.sleep(0)
+
+            finally:
+                # 通知扫描线程停止
+                stop_event.set()
+                scan_thread.join(timeout=5.0)
+
+                # 排空队列中剩余的批次
+                while not batch_queue.empty():
                     try:
-                        while dirs_to_scan:
-                            current_dir = dirs_to_scan.pop(0)
-                            current_dir_str = str(current_dir.resolve())
-                            
-                            # 避免重复扫描
-                            if current_dir_str in scanned_dirs:
-                                stats['dirs_skipped'] += 1
-                                continue
-                            scanned_dirs.add(current_dir_str)
-                            stats['dirs_scanned'] += 1
-                            
-                            # 检查目录是否被排除
-                            if self.file_scanner.should_exclude_file(current_dir_str, exclude_patterns):
-                                stats['excluded_dirs'] += 1
-                                continue
-                            
-                            try:
-                                # 使用 os.scandir 扫描目录
-                                with os.scandir(current_dir_str) as entries:
-                                    for entry in entries:
-                                        try:
-                                            entry_path = Path(entry.path)
-                                            entry_path_str = str(entry_path)
-                                            
-                                            # 检查是否被排除
-                                            if self.file_scanner.should_exclude_file(entry_path_str, exclude_patterns):
-                                                stats['excluded_count'] += 1
-                                                # 尝试获取文件大小（如果是文件）
-                                                if entry.is_file(follow_symlinks=False):
-                                                    try:
-                                                        stat = entry.stat()
-                                                        excluded_size = stat.st_size
-                                                        stats['excluded_bytes'] += excluded_size
-                                                    except Exception:
-                                                        pass  # 无法获取大小，跳过
-                                                continue
-                                            
-                                            # 目录：添加到待扫描队列（与测试程序一致，不跟随符号链接）
-                                            if entry.is_dir(follow_symlinks=False):
-                                                dirs_to_scan.append(entry_path)
-                                                continue
-                                            
-                                            # 文件：获取文件信息（与测试程序一致，不跟随符号链接）
-                                            if entry.is_file(follow_symlinks=False):
-                                                file_info = self.file_scanner.get_file_info_from_entry(entry)
-                                                if file_info:
-                                                    # 在扫描到文件时立即统计扫描数量和字节数（与测试程序一致）
-                                                    file_size = file_info.get('size', 0) or 0
-                                                    stats['total_scanned'] += 1
-                                                    stats['total_scanned_bytes'] += file_size
-                                                    current_batch.append(file_info)
-                                                    current_dir_count += 1
-                                                    
-                                                    # 达到批次大小，写入数据库（与测试程序一致）
-                                                    if len(current_batch) >= batch_size:
-                                                        written_count = await _flush_batch(
-                                                            current_batch, batch_number
-                                                        )
-                                                        stats['total_written'] += written_count
-                                                        stats['total_failed'] += (len(current_batch) - written_count)
-                                                        # 只统计成功写入的文件大小
-                                                        batch_bytes = sum(f.get('size', 0) or 0 for f in current_batch[:written_count])
-                                                        stats['total_bytes'] += batch_bytes
-                                                        stats['total_written_bytes'] = stats['total_bytes']
-                                                        # 统计失败的文件大小
-                                                        failed_bytes = sum(f.get('size', 0) or 0 for f in current_batch[written_count:])
-                                                        stats['total_failed_bytes'] += failed_bytes
-                                                        current_batch.clear()
-                                                        batch_number += 1
-                                                        
-                                                        # 更新内存中的任务对象统计信息（供 UI 使用）
-                                                        if backup_task:
-                                                            backup_task.total_files = stats["total_written"]
-                                                            backup_task.total_bytes = stats["total_bytes"]
-                                                        
-                                                        # 输出批次进度
-                                                        elapsed = time.time() - stats['start_time']
-                                                        files_per_sec = stats['total_written'] / elapsed if elapsed > 0 else 0
-                                                        logger.info(
-                                                            f"[简洁扫描] 批次 {batch_number}: {write_verb} {stats['total_written']:,} 个文件, "
-                                                            f"总容量: {format_bytes(stats['total_bytes'])}, "
-                                                            f"速度: {files_per_sec:.0f} 文件/秒, "
-                                                            f"耗时: {elapsed:.1f}秒"
-                                                        )
-                                                    
-                                                    # 定期输出进度（每10000个文件或每5秒，与测试程序一致）
-                                                    current_time = time.time()
-                                                    elapsed_since_last_log = current_time - last_progress_time
-                                                    if (stats['total_scanned'] - last_log_count >= log_interval_count or 
-                                                        elapsed_since_last_log >= progress_interval):
-                                                        elapsed = current_time - stats['start_time']
-                                                        files_per_sec = stats['total_scanned'] / elapsed if elapsed > 0 else 0
-                                                        bytes_per_sec = stats['total_bytes'] / elapsed if elapsed > 0 else 0
-                                                        
-                                                        # 计算待缓存/写入文件数（已扫描 - 已写入 - 失败）
-                                                        pending_to_write = max(0, stats['total_scanned'] - stats['total_written'] - stats['total_failed'])
-                                                        
-                                                        logger.info(
-                                                            f"[简洁扫描] 进度: 已扫描 {stats['total_scanned']:,} 个文件, "
-                                                            f"{write_verb} {stats['total_written']:,} 个文件, "
-                                                            f"待{write_verb} {pending_to_write:,} 个文件, "
-                                                            f"总容量: {format_bytes(stats['total_bytes'])}, "
-                                                            f"扫描速度: {files_per_sec:.0f} 文件/秒, "
-                                                            f"写入速度: {format_bytes(bytes_per_sec)}/秒, "
-                                                            f"当前目录: {current_dir_str[:80]}... ({current_dir_count:,} 个文件), "
-                                                            f"待扫描目录: {len(dirs_to_scan)}"
-                                                        )
-                                                        
-                                                        last_progress_time = current_time
-                                                        last_log_count = stats['total_scanned']
-                                                else:
-                                                    stats['error_count'] += 1
-                                                continue
-                                            
-                                            # 其他情况（符号链接等）简单跳过并计数（与测试程序一致）
-                                            if entry.is_symlink():
-                                                stats['symlinks_skipped'] += 1
-                                            else:
-                                                stats['error_count'] += 1
-                                            
-                                        except (PermissionError, OSError, FileNotFoundError) as e:
-                                            # 权限错误、访问错误等，跳过
-                                            stats['error_count'] += 1
-                                            continue
-                                        except Exception as e:
-                                            logger.warning(
-                                                f"[简洁扫描] 处理条目失败: {entry.path if hasattr(entry, 'path') else 'unknown'}, 错误: {str(e)}"
-                                            )
-                                            stats['error_count'] += 1
-                                            continue
-                            
-                            except (PermissionError, OSError) as e:
-                                # 目录访问错误，跳过
-                                logger.warning(f"[简洁扫描] 无法访问目录: {current_dir_str}, 错误: {str(e)}")
-                                stats['error_dirs'] += 1
-                                continue
-                    
-                    except Exception as e:
-                        logger.warning(f"[简洁扫描] 扫描目录失败: {source_path_str}, 错误: {str(e)}")
-                        stats['error_count'] += 1
-                        continue
-            
-            # 写入剩余的批次（与测试程序一致）
-            if current_batch:
-                logger.info(f"[简洁扫描] {'缓存' if use_memory_mode else '写入'}最后批次 ({len(current_batch)} 个文件)...")
-                written_count = await _flush_batch(
-                    current_batch, batch_number
-                )
-                stats['total_written'] += written_count
-                stats['total_failed'] += (len(current_batch) - written_count)
-                # 只统计成功写入的文件大小
-                batch_bytes = sum(f.get('size', 0) or 0 for f in current_batch[:written_count])
-                stats['total_bytes'] += batch_bytes
-                stats['total_written_bytes'] = stats['total_bytes']
-                # 统计失败的文件大小
-                failed_bytes = sum(f.get('size', 0) or 0 for f in current_batch[written_count:])
-                stats['total_failed_bytes'] += failed_bytes
-                batch_number += 1
-                
-                # 更新内存中的任务对象统计信息（供 UI 使用）
-                if backup_task:
-                    backup_task.total_files = stats["total_written"]
-                    backup_task.total_bytes = stats["total_bytes"]
-                
-                # 输出最终批次进度
-                elapsed = time.time() - stats['start_time']
-                logger.info(
-                    f"[简洁扫描] 最后批次完成: {write_verb} {stats['total_written']:,} 个文件, "
-                    f"总容量: {format_bytes(stats['total_bytes'])}, "
-                    f"耗时: {elapsed:.1f}秒"
-                )
+                        item = batch_queue.get_nowait()
+                        if item[0] == 'batch':
+                            _, file_list, thread_stats = item
+                            written_count = await _flush_batch(file_list, batch_number)
+                            stats['total_written'] += written_count
+                            stats['total_failed'] += (len(file_list) - written_count)
+                            batch_bytes = sum(f.get('size', 0) or 0 for f in file_list[:written_count])
+                            stats['total_bytes'] += batch_bytes
+                            stats['total_written_bytes'] = stats['total_bytes']
+                            batch_number += 1
+                            if backup_task:
+                                backup_task.total_files = stats["total_written"]
+                                backup_task.total_bytes = stats["total_bytes"]
+                        elif item[0] == 'done':
+                            final_thread_stats = item[1]
+                            stats['total_scanned'] = final_thread_stats.get('total_scanned', stats['total_scanned'])
+                            stats['total_scanned_bytes'] = final_thread_stats.get('total_scanned_bytes', stats['total_scanned_bytes'])
+                            stats['excluded_count'] = final_thread_stats.get('excluded_count', stats['excluded_count'])
+                            stats['error_count'] = final_thread_stats.get('error_count', stats['error_count'])
+                    except queue_module.Empty:
+                        break
         
         # 扫描结束：更新内存状态，并做一次最终数据库同步
         if backup_task:
@@ -518,6 +379,218 @@ class SimpleScanner:
             except Exception as e:
                 logger.warning(f"[简洁扫描] 更新扫描状态为 completed 失败（忽略继续）: {e}")
     
+    def _sync_collect_files(
+        self,
+        expanded_paths: List[str],
+        exclude_patterns: List[str],
+        batch_size: int,
+        batch_queue: queue_module.Queue,
+        stop_event: threading.Event,
+    ) -> None:
+        """纯同步文件扫描（在线程中运行，不阻塞事件循环）
+
+        扫描源路径并将文件批次放入队列，供异步主循环消费。
+        通过 stop_event 支持优雅退出。
+
+        队列消息格式：
+        - ('batch', file_list, thread_stats): 一个批次的文件 + 线程统计快照
+        - ('done', final_stats): 扫描完成 + 最终统计
+        """
+        thread_stats = {
+            "total_scanned": 0,
+            "total_scanned_bytes": 0,
+            "excluded_count": 0,
+            "excluded_dirs": 0,
+            "excluded_bytes": 0,
+            "error_count": 0,
+            "error_dirs": 0,
+            "dirs_scanned": 0,
+            "dirs_skipped": 0,
+            "symlinks_skipped": 0,
+        }
+
+        current_batch = []
+        start_time = time.time()
+        last_progress_time = start_time
+        progress_interval = 5.0
+        last_log_count = 0
+        log_interval_count = 10000
+
+        def _put_batch():
+            """将当前批次放入队列"""
+            nonlocal current_batch
+            if current_batch:
+                batch_queue.put(('batch', list(current_batch), dict(thread_stats)))
+                current_batch = []
+
+        try:
+            for idx, source_path_str in enumerate(expanded_paths):
+                if stop_event.is_set():
+                    break
+
+                source_path = Path(source_path_str)
+                if not source_path.exists():
+                    logger.warning(f"[简洁扫描-线程] 路径不存在，跳过: {source_path_str}")
+                    continue
+
+                # 单个文件
+                if source_path.is_file():
+                    try:
+                        if self.file_scanner.should_exclude_file(source_path_str, exclude_patterns):
+                            thread_stats["excluded_count"] += 1
+                            continue
+                        # 用 os.stat 直接构造 file_info（避免 async get_file_info）
+                        try:
+                            stat_result = os.stat(source_path_str)
+                            file_info = {
+                                'path': source_path_str,
+                                'name': os.path.basename(source_path_str),
+                                'size': stat_result.st_size,
+                                'modified_time': datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc),
+                                'is_file': True,
+                                'permissions': oct(stat_result.st_mode)[-3:],
+                            }
+                        except (OSError, PermissionError):
+                            thread_stats["error_count"] += 1
+                            continue
+
+                        file_size = file_info.get('size', 0) or 0
+                        thread_stats['total_scanned'] += 1
+                        thread_stats['total_scanned_bytes'] += file_size
+                        current_batch.append(file_info)
+
+                        if len(current_batch) >= batch_size:
+                            _put_batch()
+                    except Exception as e:
+                        logger.warning(f"[简洁扫描-线程] 处理文件失败: {source_path_str}, 错误: {str(e)}")
+                        thread_stats["error_count"] += 1
+                    continue
+
+                # 目录
+                if not source_path.is_dir():
+                    continue
+
+                if self.file_scanner.should_exclude_file(str(source_path), exclude_patterns):
+                    thread_stats["excluded_dirs"] += 1
+                    continue
+
+                dirs_to_scan = [source_path]
+                scanned_dirs = set()
+                current_dir_count = 0
+                current_dir_str = str(source_path.resolve())
+
+                while dirs_to_scan:
+                    if stop_event.is_set():
+                        break
+
+                    current_dir = dirs_to_scan.pop(0)
+                    try:
+                        current_dir_str = str(current_dir.resolve())
+                    except Exception:
+                        current_dir_str = str(current_dir)
+
+                    if current_dir_str in scanned_dirs:
+                        thread_stats['dirs_skipped'] += 1
+                        continue
+                    scanned_dirs.add(current_dir_str)
+                    thread_stats['dirs_scanned'] += 1
+
+                    if self.file_scanner.should_exclude_file(current_dir_str, exclude_patterns):
+                        thread_stats['excluded_dirs'] += 1
+                        continue
+
+                    try:
+                        with os.scandir(current_dir_str) as entries:
+                            for entry in entries:
+                                if stop_event.is_set():
+                                    break
+                                try:
+                                    entry_path = Path(entry.path)
+                                    entry_path_str = str(entry_path)
+
+                                    if self.file_scanner.should_exclude_file(entry_path_str, exclude_patterns):
+                                        thread_stats['excluded_count'] += 1
+                                        if entry.is_file(follow_symlinks=False):
+                                            try:
+                                                thread_stats["excluded_bytes"] += entry.stat().st_size
+                                            except Exception:
+                                                pass
+                                        continue
+
+                                    if entry.is_dir(follow_symlinks=False):
+                                        dirs_to_scan.append(entry_path)
+                                        continue
+
+                                    if entry.is_file(follow_symlinks=False):
+                                        file_info = self.file_scanner.get_file_info_from_entry(entry)
+                                        if file_info:
+                                            file_size = file_info.get('size', 0) or 0
+                                            thread_stats['total_scanned'] += 1
+                                            thread_stats['total_scanned_bytes'] += file_size
+                                            current_batch.append(file_info)
+                                            current_dir_count += 1
+
+                                            if len(current_batch) >= batch_size:
+                                                _put_batch()
+
+                                            # 定期进度日志
+                                            current_time = time.time()
+                                            if (thread_stats['total_scanned'] - last_log_count >= log_interval_count or
+                                                    current_time - last_progress_time >= progress_interval):
+                                                elapsed = current_time - start_time
+                                                fps = thread_stats['total_scanned'] / elapsed if elapsed > 0 else 0
+                                                logger.info(
+                                                    f"[简洁扫描-线程] 进度: 已扫描 {thread_stats['total_scanned']:,} 个文件, "
+                                                    f"总容量: {format_bytes(thread_stats['total_scanned_bytes'])}, "
+                                                    f"速度: {fps:.0f} 文件/秒, "
+                                                    f"当前目录: {current_dir_str[:80]}... ({current_dir_count:,} 个文件), "
+                                                    f"待扫描目录: {len(dirs_to_scan)}"
+                                                )
+                                                last_progress_time = current_time
+                                                last_log_count = thread_stats['total_scanned']
+                                        else:
+                                            thread_stats['error_count'] += 1
+                                        continue
+
+                                    if entry.is_symlink():
+                                        thread_stats['symlinks_skipped'] += 1
+                                    else:
+                                        thread_stats['error_count'] += 1
+
+                                except (PermissionError, OSError, FileNotFoundError):
+                                    thread_stats['error_count'] += 1
+                                    continue
+                                except Exception as e:
+                                    logger.warning(
+                                        f"[简洁扫描-线程] 处理条目失败: "
+                                        f"{entry.path if hasattr(entry, 'path') else 'unknown'}, 错误: {str(e)}"
+                                    )
+                                    thread_stats['error_count'] += 1
+                                    continue
+
+                    except (PermissionError, OSError) as e:
+                        logger.warning(f"[简洁扫描-线程] 无法访问目录: {current_dir_str}, 错误: {str(e)}")
+                        thread_stats['error_dirs'] += 1
+                        continue
+
+            # 刷出剩余批次
+            _put_batch()
+
+        except Exception as e:
+            logger.error(f"[简洁扫描-线程] 扫描线程异常: {e}", exc_info=True)
+        finally:
+            # 发送完成信号
+            batch_queue.put(('done', dict(thread_stats)))
+            elapsed = time.time() - start_time
+            fps = thread_stats['total_scanned'] / elapsed if elapsed > 0 else 0
+            logger.info(
+                f"[简洁扫描-线程] 扫描线程完成: "
+                f"扫描 {thread_stats['total_scanned']:,} 个文件 "
+                f"({format_bytes(thread_stats['total_scanned_bytes'])}), "
+                f"排除 {thread_stats['excluded_count']:,} 个, "
+                f"耗时: {elapsed:.1f}秒, 速度: {fps:.0f} 文件/秒"
+            )
+
     async def _write_batch_to_db(
         self,
         conn,
