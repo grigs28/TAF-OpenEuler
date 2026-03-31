@@ -82,11 +82,12 @@
                     <div class="form-check form-switch mb-2">
                         <input class="form-check-input" type="checkbox" id="enableTapeFormatBeforeFull">
                         <label class="form-check-label" for="enableTapeFormatBeforeFull">
-                            完整备份前自动格式化磁带（保留卷标信息）
+                            完整备份前自动格式化磁带
                         </label>
                     </div>
                     <small class="form-text text-secondary">
-                        关闭后：完整备份不再自动调用 <code>LtfsCmdFormat.exe</code>，只进行卷标校验，避免误格式化正在使用的磁带。
+                        开启后：完整备份前自动调用 <code>mkltfs</code> 格式化磁带并生成新卷标。
+                        关闭后：仅进行卷标校验，不自动格式化，避免误格式化正在使用的磁带。
                         建议在生产环境中谨慎修改。
                     </small>
                 </div>

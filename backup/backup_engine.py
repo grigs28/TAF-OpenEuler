@@ -201,7 +201,7 @@ class BackupEngine:
         1. 任务是否已执行过（在存活期内）- 仅自动执行时检查，手动运行跳过
         2. 任务是否正在执行
         3. 磁带卷标是否当月（仅当备份目标为磁带时）
-        4. 完整备份前使用 LtfsCmdFormat 格式化（保留卷标信息）
+        4. 完整备份前自动格式化磁带（受 ENABLE_TAPE_FORMAT_BEFORE_FULL 控制）
         
         Args:
             backup_task: 备份任务对象
@@ -336,6 +336,15 @@ class BackupEngine:
             # 3. 格式化检查
             logger.info("[3] 格式化检查")
             need_format = not (label != "Unknown" and is_ltfs and is_empty)
+
+            # 检查自动格式化开关
+            if need_format and not self.settings.ENABLE_TAPE_FORMAT_BEFORE_FULL:
+                logger.warning("⚠️ 需要格式化，但自动格式化已关闭（ENABLE_TAPE_FORMAT_BEFORE_FULL=False）")
+                error_msg = "磁带需要格式化，但自动格式化功能已关闭，请手动格式化后重试"
+                logger.error(f"✗ {error_msg}")
+                await self._send_tape_error_notification(error_msg)
+                return False
+
             if need_format:
                 if label == "Unknown":
                     reason = "无法读取卷标"

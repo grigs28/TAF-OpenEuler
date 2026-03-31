@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     # 磁带配置 (Linux)
     DEFAULT_BLOCK_SIZE: int = 262144  # 256KB
     MAX_VOLUME_SIZE: int = 322122547200  # 300GB
-    # 是否在完整备份前自动格式化磁带（保留卷标信息）
+    # 是否在完整备份前自动格式化磁带
     ENABLE_TAPE_FORMAT_BEFORE_FULL: bool = True
     # ITDT 接口配置
     TAPE_INTERFACE_TYPE: str = "linux"  # linux 使用 mt 命令
