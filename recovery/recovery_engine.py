@@ -1195,12 +1195,8 @@ class RecoveryEngine:
                     groups = []
 
             # 如果没有查询到数据，返回最近6个月的默认组            if not groups:
-                current_date = datetime.now()
-                for i in range(6):
-                    date = current_date.replace(month=((current_date.month - i - 1) % 12) + 1,
-                                               year=current_date.year - ((current_date.month - i - 1) // 12))
-                    group_name = date.strftime('%Y-%m')
-                    groups.append(group_name)
+                from utils.datetime_utils import recent_months
+                groups = recent_months(6)
 
             logger.info(f"查询到 {len(groups)} 个备份组")
             return groups
@@ -1209,11 +1205,6 @@ class RecoveryEngine:
             import traceback
             logger.error(traceback.format_exc())
             # 返回默认的最近6个月
-            current_date = datetime.now()
-            groups = []
-            for i in range(6):
-                date = current_date.replace(month=((current_date.month - i - 1) % 12) + 1,
-                                           year=current_date.year - ((current_date.month - i - 1) // 12))
-                group_name = date.strftime('%Y-%m')
-                groups.append(group_name)
+            from utils.datetime_utils import recent_months
+            groups = recent_months(6)
             return groups

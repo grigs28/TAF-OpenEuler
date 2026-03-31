@@ -88,6 +88,8 @@ class Settings(BaseSettings):
     # 磁带配置 (Linux)
     DEFAULT_BLOCK_SIZE: int = 262144  # 256KB
     MAX_VOLUME_SIZE: int = 322122547200  # 300GB
+    # 磁带设备路径（用于 mt 命令，Linux 下为 /dev/nst0）
+    TAPE_DRIVE_LETTER: str = "/dev/nst0"
     # 是否在完整备份前自动格式化磁带
     ENABLE_TAPE_FORMAT_BEFORE_FULL: bool = True
     # ITDT 接口配置
@@ -151,13 +153,13 @@ class Settings(BaseSettings):
     RECOVERY_TEMP_DIR: str = "temp/recovery"
     BACKUP_COMPRESS_DIR: str = "temp/compress"  # 压缩文件临时目录（先压缩到这里，再移动到磁带机）
     COMPRESS_OUTPUT_DIR: str = "temp/output"  # 压缩输出目录（用于存放最终压缩文件）
-    COMPRESSION_THREADS: int = 4  # Python压缩线程数（py7zr/PGZip）
+    COMPRESSION_THREADS: int = 3  # Python压缩线程数（py7zr/PGZip）
     # 压缩方法配置
     COMPRESSION_METHOD: str = "zstd"  # 压缩方法: "pgzip"、"zstd" 或 "tar"
     # 注意：COMPRESSION_COMMAND_THREADS 默认使用 WEB_WORKERS 的值，在代码中动态获取
     PGZIP_BLOCK_SIZE: str = "1M"  # PGZip块大小（默认1M，可通过.env中的PGZIP_BLOCK_SIZE覆盖）
-    PGZIP_THREADS: int = 4  # PGZip线程数
-    ZSTD_THREADS: int = 4  # Zstandard压缩线程数
+    PGZIP_THREADS: int = 3  # PGZip线程数
+    ZSTD_THREADS: int = 3  # Zstandard压缩线程数
     ZSTD_WRITE_SIZE: int = 1048576  # Zstandard压缩写入缓冲区大小（字节），默认1MB（1048576字节）
 
     # 扫描进度更新配置
@@ -166,8 +168,6 @@ class Settings(BaseSettings):
     # 如需更快速度，可增加到5000（需要更多内存，但写入速度更快）
     SCAN_LOG_INTERVAL_SECONDS: int = 60  # 后台扫描进度日志输出的时间间隔（秒）
     SCAN_WAIT_TIMEOUT: int = 300  # 等待后台扫描写入文件记录的超时时间（秒），默认300秒（5分钟）
-    ENABLE_BACKGROUND_COPY_UPDATE: bool = False  # 是否启用压缩线程后台标记 is_copy_success
-
     # 压缩并行批次配置
     COMPRESSION_PARALLEL_BATCHES: int = 3  # 压缩并行批次数量（默认3），预读取程序队列数为该值+1
     COMPRESSION_BATCHES_REDUCTION: int = 1  # 扫描时减少的并行批次数（默认1），0表示不减少
@@ -175,35 +175,14 @@ class Settings(BaseSettings):
     # 扫描方法配置
     SCAN_METHOD: str = "default"  # 扫描方法: "default" (默认)
     
-    # 简洁扫描配置
-    ENABLE_SIMPLE_SCAN: bool = True  # 是否启用简洁扫描（默认开启），使用简化的扫描和写入逻辑
+    # 简洁扫描配置（已移除开关，始终使用 SimpleScanner）
 
     # 纯内存扫描模式配置
     SCAN_MEMORY_ONLY: bool = False  # 纯内存扫描模式（跳过扫描阶段的数据库写入，压缩后才写入数据库）
     # 启用后：扫描器将文件记录写入内存，预取器从内存读取，压缩完成后一次性写入数据库
     # 优点：减少扫描阶段数据库I/O，提升性能；崩溃时无孤儿记录
     # 注意：需要足够内存存放文件记录（100万文件约500MB）
-    
-    # 目录扫描并发配置
-    SCAN_THREADS: int = 4  # 目录扫描并发线程数（默认4线程，可设置为1-16）
-    # 性能优化：使用多线程并发扫描目录，提升扫描速度
-    # 建议值：1-4线程（I/O密集型），4-8线程（CPU密集型），8-16线程（网络路径）
-    # 注意：线程数过多可能导致内存占用增加和性能下降
-    
-    # 扫描多线程选项（仅当SCAN_METHOD=default时有效）
-    USE_SCAN_MULTITHREAD: bool = True  # 是否使用多线程扫描（默认启用）
-    # 当SCAN_METHOD=default时：
-    # - USE_SCAN_MULTITHREAD=True: 使用并发目录扫描（ConcurrentDirScanner）
-    # - USE_SCAN_MULTITHREAD=False: 使用顺序目录扫描（SequentialDirScanner，基于os.scandir）
-    
-    # 内存数据库配置
-    USE_MEMORY_DB: bool = True  # 是否使用内存数据库（默认启用，性能最优）
-    MEMORY_DB_MAX_FILES: int = 5000000  # 内存数据库中最大文件数（500万）
-    MEMORY_DB_SYNC_BATCH_SIZE: int = 3000  # 内存数据库同步批次大小
-    MEMORY_DB_SYNC_INTERVAL: int = 30  # 内存数据库同步间隔（秒）
-    MEMORY_DB_CHECKPOINT_INTERVAL: int = 300  # 内存数据库检查点间隔（秒）
-    MEMORY_DB_CHECKPOINT_RETENTION_HOURS: int = 24  # 内存数据库检查点保留时间（小时）
-    
+
     # 检查点配置
     USE_CHECKPOINT: bool = False  # 是否启用检查点文件，默认不启用
 

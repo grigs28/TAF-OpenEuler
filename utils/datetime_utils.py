@@ -417,3 +417,54 @@ def normalize_datetime_str(datetime_str: str) -> Optional[str]:
     """规范化日期时间字符串"""
     return DateTimeUtils.normalize_datetime_str(datetime_str)
 
+
+def month_offset(dt: datetime) -> int:
+    """将日期转换为绝对月数（year*12 + month），用于月份差值计算"""
+    return dt.year * 12 + dt.month
+
+
+def month_diff(dt1: datetime, dt2: datetime) -> int:
+    """计算两个日期之间的月份差（dt2 - dt1），自动处理跨年"""
+    return month_offset(dt2) - month_offset(dt1)
+
+
+def is_within_month_range(dt: datetime, center: datetime, offset: int = 1) -> bool:
+    """
+    判断 dt 是否在 center 的 ±offset 个月范围内
+
+    Args:
+        dt: 要判断的日期
+        center: 中心日期
+        offset: 允许的月份偏移量（默认1）
+
+    Returns:
+        True 如果在范围内
+
+    示例:
+        center=2026-03, offset=1 → 有效范围: 2026-02, 2026-03, 2026-04
+        center=2026-01, offset=1 → 有效范围: 2025-12, 2026-01, 2026-02
+    """
+    return abs(month_offset(dt) - month_offset(center)) <= offset
+
+
+def recent_months(count: int = 6, base_date: Optional[datetime] = None) -> list[str]:
+    """
+    生成最近 N 个月的 'YYYY-MM' 列表（从当月往前）
+
+    Args:
+        count: 月份数量
+        base_date: 基准日期（默认当前日期）
+
+    Returns:
+        'YYYY-MM' 字符串列表，如 ['2026-03', '2026-02', '2026-01', '2025-12', ...]
+    """
+    if base_date is None:
+        base_date = datetime.now()
+    base = month_offset(base_date)
+    result = []
+    for i in range(count):
+        total = base - i
+        y, m = divmod(total - 1, 12)
+        result.append(f"{y:04d}-{m + 1:02d}")
+    return result
+

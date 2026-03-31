@@ -45,7 +45,7 @@ class SystemEnvConfig(BaseModel):
     
     # LTFS工具配置
     ltfs_tools_dir: Optional[str] = Field(None, description="LTFS工具目录")
-    tape_drive_letter: Optional[str] = Field(None, description="挂载盘符")
+    ltfs_device_path: Optional[str] = Field(None, description="LTFS SCSI设备路径（如 /dev/sg2）")
     
     # 钉钉通知配置
     dingtalk_api_url: Optional[str] = Field(None, description="钉钉API地址")
@@ -60,30 +60,11 @@ class SystemEnvConfig(BaseModel):
     scan_update_interval: Optional[int] = Field(None, description="后台扫描进度更新间隔（文件数）")
     scan_log_interval_seconds: Optional[int] = Field(None, description="后台扫描进度日志时间间隔（秒）")
     scan_wait_timeout: Optional[int] = Field(None, description="等待后台扫描写入文件记录的超时时间（秒），默认300秒（5分钟）")
-    scan_method: Optional[str] = Field(None, description="扫描方法: default (默认) 或 es (Everything搜索工具)")
-    es_exe_path: Optional[str] = Field(None, description="Everything搜索工具可执行文件路径")
-    use_scan_multithread: Optional[bool] = Field(None, description="是否使用多线程扫描（默认启用），仅当scan_method=default时有效")
-    scan_threads: Optional[int] = Field(None, description="目录扫描并发线程数（默认4，建议1-16）")
+    scan_memory_only: Optional[bool] = Field(None, description="纯内存扫描模式，扫描阶段跳过数据库写入")
     use_checkpoint: Optional[bool] = Field(None, description="是否启用检查点文件，默认不启用")
-    enable_background_copy_update: Optional[bool] = Field(None, description="启用后台标记 is_copy_success（异步 mark_files_as_copied）")
     compression_parallel_batches: Optional[int] = Field(None, description="压缩并行批次数量（默认2），预读取程序队列数为该值+1")
     compression_batches_reduction: Optional[int] = Field(None, description="扫描时减少的并行批次数（默认1），0表示不减少")
 
-    # 内存数据库配置
-    use_memory_db: Optional[bool] = Field(None, description="是否使用内存数据库（默认启用，性能最优）")
-    memory_db_max_files: Optional[int] = Field(None, description="内存数据库中最大文件数（默认500万）")
-    memory_db_sync_batch_size: Optional[int] = Field(None, description="内存数据库同步批次大小（默认5000）")
-    memory_db_sync_interval: Optional[int] = Field(None, description="内存数据库同步间隔（秒，默认30）")
-    memory_db_checkpoint_interval: Optional[int] = Field(None, description="内存数据库检查点间隔（秒，默认300）")
-    memory_db_checkpoint_retention_hours: Optional[int] = Field(None, description="内存数据库检查点保留时间（小时，默认24）")
-    
-    # SQLite 配置
-    sqlite_cache_size: Optional[int] = Field(None, description="SQLite 缓存大小（KB，默认10000）")
-    sqlite_page_size: Optional[int] = Field(None, description="SQLite 页面大小（字节，默认4096）")
-    sqlite_timeout: Optional[float] = Field(None, description="SQLite 连接超时（秒，默认30）")
-    sqlite_journal_mode: Optional[str] = Field(None, description="SQLite 日志模式（WAL/DELETE/TRUNCATE等，默认WAL）")
-    sqlite_synchronous: Optional[str] = Field(None, description="SQLite 同步模式（OFF/NORMAL/FULL/EXTRA，默认NORMAL）")
-    
     # 日志配置
     log_level: Optional[str] = Field(None, description="日志级别")
 
@@ -150,7 +131,7 @@ async def get_env_config():
             
             # LTFS工具配置
             "ltfs_tools_dir": env_vars.get("LTFS_TOOLS_DIR", ""),
-            "tape_drive_letter": env_vars.get("TAPE_DRIVE_LETTER", "O"),
+            "ltfs_device_path": env_vars.get("LTFS_DEVICE_PATH", "/dev/sg2"),
             
             # 钉钉通知配置
             "dingtalk_api_url": env_vars.get("DINGTALK_API_URL", ""),
@@ -166,30 +147,11 @@ async def get_env_config():
             "scan_update_interval": parse_int(env_vars.get("SCAN_UPDATE_INTERVAL"), 500),
             "scan_log_interval_seconds": parse_int(env_vars.get("SCAN_LOG_INTERVAL_SECONDS"), 60),
             "scan_wait_timeout": parse_int(env_vars.get("SCAN_WAIT_TIMEOUT"), 300),
-            "scan_method": env_vars.get("SCAN_METHOD", "default"),
-            "es_exe_path": env_vars.get("ES_EXE_PATH", r"E:\app\TAF\ITDT\ES\es.exe"),
-            "use_scan_multithread": parse_bool(env_vars.get("USE_SCAN_MULTITHREAD"), True),
-            "scan_threads": parse_int(env_vars.get("SCAN_THREADS"), 4),
+            "scan_memory_only": parse_bool(env_vars.get("SCAN_MEMORY_ONLY"), False),
             "use_checkpoint": parse_bool(env_vars.get("USE_CHECKPOINT"), False),
-            "enable_background_copy_update": parse_bool(env_vars.get("ENABLE_BACKGROUND_COPY_UPDATE"), False),
             "compression_parallel_batches": parse_int(env_vars.get("COMPRESSION_PARALLEL_BATCHES"), 3),
             "compression_batches_reduction": parse_int(env_vars.get("COMPRESSION_BATCHES_REDUCTION"), 1),
 
-            # 内存数据库配置
-            "use_memory_db": parse_bool(env_vars.get("USE_MEMORY_DB"), True),
-            "memory_db_max_files": parse_int(env_vars.get("MEMORY_DB_MAX_FILES"), 5000000),
-            "memory_db_sync_batch_size": parse_int(env_vars.get("MEMORY_DB_SYNC_BATCH_SIZE"), 3000),
-            "memory_db_sync_interval": parse_int(env_vars.get("MEMORY_DB_SYNC_INTERVAL"), 30),
-            "memory_db_checkpoint_interval": parse_int(env_vars.get("MEMORY_DB_CHECKPOINT_INTERVAL"), 300),
-            "memory_db_checkpoint_retention_hours": parse_int(env_vars.get("MEMORY_DB_CHECKPOINT_RETENTION_HOURS"), 24),
-            
-            # SQLite 配置
-            "sqlite_cache_size": parse_int(env_vars.get("SQLITE_CACHE_SIZE"), 10000),
-            "sqlite_page_size": parse_int(env_vars.get("SQLITE_PAGE_SIZE"), 4096),
-            "sqlite_timeout": float(env_vars.get("SQLITE_TIMEOUT", 30.0)),
-            "sqlite_journal_mode": env_vars.get("SQLITE_JOURNAL_MODE", "WAL"),
-            "sqlite_synchronous": env_vars.get("SQLITE_SYNCHRONOUS", "NORMAL"),
-            
             # 日志配置
             "log_level": env_vars.get("LOG_LEVEL", "INFO"),
 
@@ -263,8 +225,8 @@ async def update_env_config(config: SystemEnvConfig, request: Request):
         # LTFS工具配置
         if config.ltfs_tools_dir is not None:
             updates["LTFS_TOOLS_DIR"] = config.ltfs_tools_dir
-        if config.tape_drive_letter is not None:
-            updates["TAPE_DRIVE_LETTER"] = config.tape_drive_letter.upper()
+        if config.ltfs_device_path is not None:
+            updates["LTFS_DEVICE_PATH"] = config.ltfs_device_path
         
         # 钉钉通知配置
         if config.dingtalk_api_url is not None:
@@ -288,18 +250,10 @@ async def update_env_config(config: SystemEnvConfig, request: Request):
             updates["SCAN_LOG_INTERVAL_SECONDS"] = str(config.scan_log_interval_seconds)
         if config.scan_wait_timeout is not None:
             updates["SCAN_WAIT_TIMEOUT"] = str(config.scan_wait_timeout)
-        if config.scan_method is not None:
-            updates["SCAN_METHOD"] = config.scan_method
-        if config.es_exe_path is not None:
-            updates["ES_EXE_PATH"] = config.es_exe_path
-        if config.use_scan_multithread is not None:
-            updates["USE_SCAN_MULTITHREAD"] = str(config.use_scan_multithread).lower()
-        if config.scan_threads is not None:
-            updates["SCAN_THREADS"] = str(config.scan_threads)
+        if config.scan_memory_only is not None:
+            updates["SCAN_MEMORY_ONLY"] = str(config.scan_memory_only).lower()
         if config.use_checkpoint is not None:
             updates["USE_CHECKPOINT"] = str(config.use_checkpoint).lower()
-        if config.enable_background_copy_update is not None:
-            updates["ENABLE_BACKGROUND_COPY_UPDATE"] = str(config.enable_background_copy_update).lower()
         if config.compression_parallel_batches is not None:
             # 验证并行批次数范围（至少为1）
             if config.compression_parallel_batches < 1:
@@ -311,32 +265,7 @@ async def update_env_config(config: SystemEnvConfig, request: Request):
                 raise ValueError("COMPRESSION_BATCHES_REDUCTION 必须大于等于 0")
             updates["COMPRESSION_BATCHES_REDUCTION"] = str(config.compression_batches_reduction)
 
-        # 内存数据库配置
-        if config.use_memory_db is not None:
-            updates["USE_MEMORY_DB"] = str(config.use_memory_db).lower()
-        if config.memory_db_max_files is not None:
-            updates["MEMORY_DB_MAX_FILES"] = str(config.memory_db_max_files)
-        if config.memory_db_sync_batch_size is not None:
-            updates["MEMORY_DB_SYNC_BATCH_SIZE"] = str(config.memory_db_sync_batch_size)
-        if config.memory_db_sync_interval is not None:
-            updates["MEMORY_DB_SYNC_INTERVAL"] = str(config.memory_db_sync_interval)
-        if config.memory_db_checkpoint_interval is not None:
-            updates["MEMORY_DB_CHECKPOINT_INTERVAL"] = str(config.memory_db_checkpoint_interval)
-        if config.memory_db_checkpoint_retention_hours is not None:
-            updates["MEMORY_DB_CHECKPOINT_RETENTION_HOURS"] = str(config.memory_db_checkpoint_retention_hours)
-        
-        # SQLite 配置
-        if config.sqlite_cache_size is not None:
-            updates["SQLITE_CACHE_SIZE"] = str(config.sqlite_cache_size)
-        if config.sqlite_page_size is not None:
-            updates["SQLITE_PAGE_SIZE"] = str(config.sqlite_page_size)
-        if config.sqlite_timeout is not None:
-            updates["SQLITE_TIMEOUT"] = str(config.sqlite_timeout)
-        if config.sqlite_journal_mode is not None:
-            updates["SQLITE_JOURNAL_MODE"] = config.sqlite_journal_mode
-        if config.sqlite_synchronous is not None:
-            updates["SQLITE_SYNCHRONOUS"] = config.sqlite_synchronous
-        
+
         # 日志配置
         if config.log_level is not None:
             updates["LOG_LEVEL"] = config.log_level

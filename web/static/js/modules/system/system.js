@@ -6,199 +6,6 @@ document.addEventListener('DOMContentLoaded', function() {
         loadDatabaseConfig();
         loadSystemConfig();
         
-        // 数据库类型切换
-        dbType.addEventListener('change', function() {
-            const dbTypeVal = this.value;
-            const sqliteConfig = document.getElementById('sqliteConfig');
-            const serverDbConfig = document.getElementById('serverDbConfig');
-            const redisConfig = document.getElementById('redisConfig');
-            const redisSpecificConfig = document.getElementById('redisSpecificConfig');
-            const dbDatabaseGroup = document.getElementById('dbDatabaseGroup');
-            const dbUserGroup = document.getElementById('dbUserGroup');
-            const dbIndexGroup = document.getElementById('dbIndexGroup');
-            
-            if (dbTypeVal === 'sqlite') {
-                sqliteConfig.style.display = 'block';
-                serverDbConfig.style.display = 'none';
-                redisConfig.style.display = 'none';
-                if (redisSpecificConfig) redisSpecificConfig.style.display = 'none';
-            } else if (dbTypeVal === 'redis') {
-                sqliteConfig.style.display = 'none';
-                serverDbConfig.style.display = 'none';  // Redis不使用serverDbConfig
-                redisConfig.style.display = 'block';
-                if (redisSpecificConfig) redisSpecificConfig.style.display = 'block';
-                // Redis使用专门的配置项，不使用serverDbConfig
-                if (dbDatabaseGroup) dbDatabaseGroup.style.display = 'none';
-                if (dbUserGroup) dbUserGroup.style.display = 'none';
-                if (dbIndexGroup) dbIndexGroup.style.display = 'none';
-            } else {
-                sqliteConfig.style.display = 'none';
-                serverDbConfig.style.display = 'block';
-                redisConfig.style.display = 'none';
-                if (redisSpecificConfig) redisSpecificConfig.style.display = 'none';
-                // 其他数据库需要用户名和数据库名
-                if (dbDatabaseGroup) dbDatabaseGroup.style.display = 'block';
-                if (dbUserGroup) dbUserGroup.style.display = 'block';
-                if (dbIndexGroup) dbIndexGroup.style.display = 'none';
-            }
-        });
-        
-        // 扫描方法切换
-        const scanMethod = document.getElementById('scanMethod');
-        if (scanMethod) {
-            scanMethod.addEventListener('change', function() {
-                const esExePathGroup = document.getElementById('esExePathGroup');
-                const scanMultithreadGroup = document.getElementById('scanMultithreadGroup');
-                const scanThreadsGroup = document.getElementById('scanThreadsGroup');
-                const useScanMultithread = document.getElementById('useScanMultithread');
-                
-                if (esExePathGroup) {
-                    if (this.value === 'es') {
-                        esExePathGroup.style.display = 'block';
-                        // ES方法时隐藏多线程选项
-                        if (scanMultithreadGroup) scanMultithreadGroup.style.display = 'none';
-                    } else {
-                        esExePathGroup.style.display = 'none';
-                        // 默认方法时显示多线程选项
-                        if (scanMultithreadGroup) scanMultithreadGroup.style.display = 'block';
-                        // 根据多线程选项显示/隐藏线程数输入
-                        if (useScanMultithread && scanThreadsGroup) {
-                            scanThreadsGroup.style.display = useScanMultithread.checked ? 'block' : 'none';
-                        }
-                    }
-                }
-            });
-        }
-        
-        // 多线程选项切换
-        const useScanMultithread = document.getElementById('useScanMultithread');
-        const scanThreadsGroup = document.getElementById('scanThreadsGroup');
-        if (useScanMultithread && scanThreadsGroup) {
-            useScanMultithread.addEventListener('change', function() {
-                scanThreadsGroup.style.display = this.checked ? 'block' : 'none';
-            });
-        }
-        
-        // ES工具路径浏览按钮
-        const browseEsExePathBtn = document.getElementById('browseEsExePath');
-        if (browseEsExePathBtn) {
-            browseEsExePathBtn.addEventListener('click', function() {
-                // 创建隐藏的文件输入元素
-                const input = document.createElement('input');
-                input.type = 'file';
-                input.accept = '.exe';
-                input.style.display = 'none';
-                
-                input.addEventListener('change', function(e) {
-                    const file = e.target.files[0];
-                    if (file) {
-                        const esExePathInput = document.getElementById('esExePath');
-                        if (esExePathInput) {
-                            // 在浏览器环境中，file.path不可用，使用file.name
-                            // 用户可能需要手动调整路径为服务器端的完整路径
-                            const fileName = file.name;
-                            // 如果当前路径存在，尝试保持目录部分，只替换文件名
-                            const currentPath = esExePathInput.value;
-                            if (currentPath && currentPath.includes('\\')) {
-                                const dirPath = currentPath.substring(0, currentPath.lastIndexOf('\\') + 1);
-                                esExePathInput.value = dirPath + fileName;
-                            } else {
-                                // 如果没有当前路径，使用默认路径
-                                esExePathInput.value = `E:\\app\\TAF\\ITDT\\ES\\${fileName}`;
-                            }
-                            // 提示用户可能需要手动调整路径
-                            if (!file.path) {
-                                console.log('提示：请确认文件路径是否正确，必要时请手动编辑为服务器端的完整路径');
-                            }
-                        }
-                    }
-                    // 清理临时元素
-                    document.body.removeChild(input);
-                });
-                
-                // 添加到DOM并触发点击
-                document.body.appendChild(input);
-                input.click();
-            });
-        }
-        
-        // Redis配置文件浏览按钮
-        const browseRedisConfigBtn = document.getElementById('browseRedisConfigBtn');
-        if (browseRedisConfigBtn) {
-            browseRedisConfigBtn.addEventListener('click', function() {
-                // 创建隐藏的文件输入元素
-                const input = document.createElement('input');
-                input.type = 'file';
-                input.accept = '.conf';
-                input.style.display = 'none';
-                
-                input.addEventListener('change', function(e) {
-                    const file = e.target.files[0];
-                    if (file) {
-                        const redisConfigFilePathInput = document.getElementById('redisConfigFilePath');
-                        if (redisConfigFilePathInput) {
-                            // 在浏览器环境中，file.path不可用，使用file.name
-                            // 用户可能需要手动调整路径为服务器端的完整路径
-                            const fileName = file.name;
-                            // 如果当前路径存在，尝试保持目录部分，只替换文件名
-                            const currentPath = redisConfigFilePathInput.value;
-                            if (currentPath && currentPath.includes('\\')) {
-                                const dirPath = currentPath.substring(0, currentPath.lastIndexOf('\\') + 1);
-                                redisConfigFilePathInput.value = dirPath + fileName;
-                            } else if (currentPath && currentPath.includes('/')) {
-                                const dirPath = currentPath.substring(0, currentPath.lastIndexOf('/') + 1);
-                                redisConfigFilePathInput.value = dirPath + fileName;
-                            } else {
-                                // 如果没有当前路径，使用默认路径
-                                redisConfigFilePathInput.value = fileName;
-                            }
-                            // 提示用户可能需要手动调整路径
-                            if (!file.path) {
-                                console.log('提示：请确认文件路径是否正确，必要时请手动编辑为服务器端的完整路径');
-                            }
-                        }
-                    }
-                    // 清理临时元素
-                    document.body.removeChild(input);
-                });
-                
-                // 添加到DOM并触发点击
-                document.body.appendChild(input);
-                input.click();
-            });
-        }
-
-        // Redis配置文件自动检测按钮
-        const detectRedisConfigBtn = document.getElementById('detectRedisConfigBtn');
-        if (detectRedisConfigBtn) {
-            detectRedisConfigBtn.addEventListener('click', async function() {
-                const btn = this;
-                const originalHtml = btn.innerHTML;
-                btn.disabled = true;
-                btn.innerHTML = '<i class="bi bi-arrow-clockwise spinner me-1"></i>检测中...';
-                
-                try {
-                    const response = await fetch('/api/system/database/redis/config-file');
-                    const result = await response.json();
-                    
-                    if (result.success && result.config_file_path) {
-                        const redisConfigFilePathInput = document.getElementById('redisConfigFilePath');
-                        if (redisConfigFilePathInput) {
-                            redisConfigFilePathInput.value = result.config_file_path;
-                            alert('✅ Redis配置文件路径已自动检测: ' + result.config_file_path);
-                        }
-                    } else {
-                        alert('⚠️ ' + (result.message || '未找到Redis配置文件，请手动指定路径'));
-                    }
-                } catch (error) {
-                    alert('❌ 自动检测失败：' + error.message);
-                } finally {
-                    btn.disabled = false;
-                    btn.innerHTML = originalHtml;
-                }
-            });
-        }
-
         // 测试数据库连接
         const testDbConnectionBtn = document.getElementById('testDbConnectionBtn');
         if (testDbConnectionBtn) {
@@ -258,19 +65,14 @@ function getDatabaseConfig() {
         pool_size: parseInt(document.getElementById('poolSize').value),
         max_overflow: parseInt(document.getElementById('maxOverflow').value)
     };
-    
-    if (dbType === 'sqlite') {
-        // 内存数据库（本地SQLite）只需要路径
-        config.db_path = document.getElementById('dbPath').value;
-    } else {
-        // 仅支持 openGauss（服务器数据库）
-        config.db_host = document.getElementById('dbHost').value;
-        config.db_port = parseInt(document.getElementById('dbPort').value);
-        config.db_user = document.getElementById('dbUser').value;
-        config.db_password = document.getElementById('dbPassword').value;
-        config.db_database = document.getElementById('dbDatabase').value;
-    }
-    
+
+    // openGauss 服务器数据库
+    config.db_host = document.getElementById('dbHost').value;
+    config.db_port = parseInt(document.getElementById('dbPort').value);
+    config.db_user = document.getElementById('dbUser').value;
+    config.db_password = document.getElementById('dbPassword').value;
+    config.db_database = document.getElementById('dbDatabase').value;
+
     return config;
 }
 
@@ -281,24 +83,16 @@ async function saveDatabaseConfigSection() {
         return true;
     }
     const config = getDatabaseConfig();
-    
+
     // 验证必填字段 - 如果配置不完整，跳过保存（允许用户只保存其他配置）
-    if (config.db_type === 'sqlite') {
-        if (!config.db_path || config.db_path.trim() === '') {
-            // SQLite 路径为空，跳过保存数据库配置（不抛出错误）
-            console.log('SQLite数据库路径为空，跳过保存数据库配置');
-            return true;
-        }
-    } else {
-        // openGauss：需要完整的主机/端口/用户名/密码/数据库名
-        if (!config.db_host || config.db_host.trim() === '' ||
-            !config.db_port ||
-            !config.db_user || config.db_user.trim() === '' ||
-            !config.db_password || config.db_password.trim() === '' ||
-            !config.db_database || config.db_database.trim() === '') {
-            console.log('openGauss 数据库配置不完整，跳过保存数据库配置');
-            return true;
-        }
+    // openGauss：需要完整的主机/端口/用户名/密码/数据库名
+    if (!config.db_host || config.db_host.trim() === '' ||
+        !config.db_port ||
+        !config.db_user || config.db_user.trim() === '' ||
+        !config.db_password || config.db_password.trim() === '' ||
+        !config.db_database || config.db_database.trim() === '') {
+        console.log('openGauss 数据库配置不完整，跳过保存数据库配置');
+        return true;
     }
     
     const response = await fetch('/api/system/database/config', {
@@ -319,77 +113,28 @@ async function loadDatabaseConfig() {
     try {
         const response = await fetch('/api/system/database/config');
         const config = await response.json();
-        
+
         if (config) {
-            document.getElementById('dbType').value = config.db_type || 'sqlite';
+            document.getElementById('dbType').value = config.db_type || 'opengauss';
 
-            if (config.db_type === 'sqlite') {
-                // 如果配置中有路径，使用配置的路径；否则使用默认路径
-                const defaultPath = 'data\\backup_system.db';
-                document.getElementById('dbPath').value = config.db_path || defaultPath;
-                document.getElementById('sqliteConfig').style.display = 'block';
-                document.getElementById('serverDbConfig').style.display = 'none';
+            // openGauss 配置
+            if (config.db_host) document.getElementById('dbHost').value = config.db_host;
+            if (config.db_port) document.getElementById('dbPort').value = config.db_port;
+            if (config.db_user) document.getElementById('dbUser').value = config.db_user;
+            if (config.db_password !== undefined) document.getElementById('dbPassword').value = config.db_password;
+            if (config.db_database) document.getElementById('dbDatabase').value = config.db_database;
 
-                // 加载 SQLite 配置（从环境配置中加载）
-                loadSQLiteConfig();
-            } else {
-                // openGauss 配置
-                if (config.db_host) document.getElementById('dbHost').value = config.db_host;
-                if (config.db_port) document.getElementById('dbPort').value = config.db_port;
-                if (config.db_user) document.getElementById('dbUser').value = config.db_user;
-                if (config.db_password !== undefined) document.getElementById('dbPassword').value = config.db_password;
-                if (config.db_database) document.getElementById('dbDatabase').value = config.db_database;
-                document.getElementById('sqliteConfig').style.display = 'none';
-                document.getElementById('serverDbConfig').style.display = 'block';
-            }
-            
             if (config.pool_size) document.getElementById('poolSize').value = config.pool_size;
             if (config.max_overflow) document.getElementById('maxOverflow').value = config.max_overflow;
-            
+
             document.getElementById('currentPoolSize').textContent = config.pool_size || '10';
             document.getElementById('currentMaxOverflow').textContent = config.max_overflow || '20';
         }
-        
+
         // 加载数据库状态
         loadDatabaseStatus();
     } catch (error) {
         console.error('加载数据库配置失败:', error);
-    }
-}
-
-// 加载 SQLite 配置
-async function loadSQLiteConfig() {
-    try {
-        const response = await fetch('/api/system/env-config');
-        const result = await response.json();
-        
-        if (result.success && result.config) {
-            const config = result.config;
-            
-            // SQLite 配置
-            if (config.sqlite_cache_size) {
-                const sqliteCacheSizeInput = document.getElementById('sqliteCacheSize');
-                if (sqliteCacheSizeInput) sqliteCacheSizeInput.value = config.sqlite_cache_size;
-            }
-            if (config.sqlite_page_size) {
-                const sqlitePageSizeSelect = document.getElementById('sqlitePageSize');
-                if (sqlitePageSizeSelect) sqlitePageSizeSelect.value = config.sqlite_page_size;
-            }
-            if (config.sqlite_timeout) {
-                const sqliteTimeoutInput = document.getElementById('sqliteTimeout');
-                if (sqliteTimeoutInput) sqliteTimeoutInput.value = config.sqlite_timeout;
-            }
-            if (config.sqlite_journal_mode) {
-                const sqliteJournalModeSelect = document.getElementById('sqliteJournalMode');
-                if (sqliteJournalModeSelect) sqliteJournalModeSelect.value = config.sqlite_journal_mode;
-            }
-            if (config.sqlite_synchronous) {
-                const sqliteSynchronousSelect = document.getElementById('sqliteSynchronous');
-                if (sqliteSynchronousSelect) sqliteSynchronousSelect.value = config.sqlite_synchronous;
-            }
-        }
-    } catch (error) {
-        console.error('加载 SQLite 配置失败:', error);
     }
 }
 
@@ -818,24 +563,20 @@ async function loadAllSystemConfig() {
                 if (enableCorsCheckbox) enableCorsCheckbox.checked = config.enable_cors;
             }
             
-            // ITDT工具配置
-            if (config.itdt_path) {
-                const itdtPathInput = document.getElementById('itdtPath');
-                if (itdtPathInput) itdtPathInput.value = config.itdt_path;
-            }
+            // 磁带设备配置
             if (config.itdt_device_path) {
                 const itdtDevicePathInput = document.getElementById('itdtDevicePath');
                 if (itdtDevicePathInput) itdtDevicePathInput.value = config.itdt_device_path;
             }
-            
+
             // LTFS工具配置
             if (config.ltfs_tools_dir) {
                 const ltfsToolsDirInput = document.getElementById('ltfsToolsDir');
                 if (ltfsToolsDirInput) ltfsToolsDirInput.value = config.ltfs_tools_dir;
             }
-            if (config.tape_drive_letter) {
-                const tapeDriveLetterInput = document.getElementById('tapeDriveLetter');
-                if (tapeDriveLetterInput) tapeDriveLetterInput.value = config.tape_drive_letter;
+            if (config.ltfs_device_path) {
+                const ltfsDevicePathInput = document.getElementById('ltfsDevicePath');
+                if (ltfsDevicePathInput) ltfsDevicePathInput.value = config.ltfs_device_path;
             }
             
             // 备份策略配置
@@ -869,39 +610,13 @@ async function loadAllSystemConfig() {
                 const scanWaitTimeoutInput = document.getElementById('scanWaitTimeout');
                 if (scanWaitTimeoutInput) scanWaitTimeoutInput.value = config.scan_wait_timeout;
             }
-            if (config.scan_method) {
-                const scanMethodInput = document.getElementById('scanMethod');
-                if (scanMethodInput) {
-                    scanMethodInput.value = config.scan_method;
-                    // 触发change事件以显示/隐藏ES路径输入框
-                    scanMethodInput.dispatchEvent(new Event('change'));
-                }
-            }
-            if (config.es_exe_path) {
-                const esExePathInput = document.getElementById('esExePath');
-                if (esExePathInput) esExePathInput.value = config.es_exe_path;
-            }
-            if (config.use_scan_multithread !== undefined) {
-                const useScanMultithreadInput = document.getElementById('useScanMultithread');
-                if (useScanMultithreadInput) {
-                    useScanMultithreadInput.checked = config.use_scan_multithread;
-                    // 触发change事件以显示/隐藏线程数输入
-                    useScanMultithreadInput.dispatchEvent(new Event('change'));
-                }
-            }
-            if (config.scan_threads) {
-                const scanThreadsInput = document.getElementById('scanThreads');
-                if (scanThreadsInput) scanThreadsInput.value = config.scan_threads;
+            if (config.scan_memory_only !== undefined) {
+                const scanMemoryOnlyInput = document.getElementById('scanMemoryOnly');
+                if (scanMemoryOnlyInput) scanMemoryOnlyInput.checked = config.scan_memory_only;
             }
             if (config.use_checkpoint !== undefined) {
                 const useCheckpointInput = document.getElementById('useCheckpoint');
                 if (useCheckpointInput) useCheckpointInput.checked = config.use_checkpoint;
-            }
-            if (config.enable_background_copy_update !== undefined) {
-                const enableBackgroundCopyUpdateInput = document.getElementById('enableBackgroundCopyUpdate');
-                if (enableBackgroundCopyUpdateInput) {
-                    enableBackgroundCopyUpdateInput.checked = config.enable_background_copy_update;
-                }
             }
             if (config.compression_parallel_batches) {
                 const compressionParallelBatchesInput = document.getElementById('compressionParallelBatches');
@@ -912,58 +627,7 @@ async function loadAllSystemConfig() {
                 if (compressionBatchesReductionInput) compressionBatchesReductionInput.value = config.compression_batches_reduction;
             }
 
-            // 内存数据库配置
-            if (config.use_memory_db !== undefined) {
-                const useMemoryDbCheckbox = document.getElementById('useMemoryDb');
-                if (useMemoryDbCheckbox) {
-                    useMemoryDbCheckbox.checked = config.use_memory_db;
-                    // 触发change事件以显示/隐藏配置项
-                    useMemoryDbCheckbox.dispatchEvent(new Event('change'));
-                }
-            }
-            if (config.memory_db_max_files) {
-                const memoryDbMaxFilesInput = document.getElementById('memoryDbMaxFiles');
-                if (memoryDbMaxFilesInput) memoryDbMaxFilesInput.value = config.memory_db_max_files;
-            }
-            if (config.memory_db_sync_batch_size) {
-                const memoryDbSyncBatchSizeInput = document.getElementById('memoryDbSyncBatchSize');
-                if (memoryDbSyncBatchSizeInput) memoryDbSyncBatchSizeInput.value = config.memory_db_sync_batch_size;
-            }
-            if (config.memory_db_sync_interval) {
-                const memoryDbSyncIntervalInput = document.getElementById('memoryDbSyncInterval');
-                if (memoryDbSyncIntervalInput) memoryDbSyncIntervalInput.value = config.memory_db_sync_interval;
-            }
-            if (config.memory_db_checkpoint_interval) {
-                const memoryDbCheckpointIntervalInput = document.getElementById('memoryDbCheckpointInterval');
-                if (memoryDbCheckpointIntervalInput) memoryDbCheckpointIntervalInput.value = config.memory_db_checkpoint_interval;
-            }
-            if (config.memory_db_checkpoint_retention_hours) {
-                const memoryDbCheckpointRetentionHoursInput = document.getElementById('memoryDbCheckpointRetentionHours');
-                if (memoryDbCheckpointRetentionHoursInput) memoryDbCheckpointRetentionHoursInput.value = config.memory_db_checkpoint_retention_hours;
-            }
-            
-            // SQLite 配置
-            if (config.sqlite_cache_size) {
-                const sqliteCacheSizeInput = document.getElementById('sqliteCacheSize');
-                if (sqliteCacheSizeInput) sqliteCacheSizeInput.value = config.sqlite_cache_size;
-            }
-            if (config.sqlite_page_size) {
-                const sqlitePageSizeSelect = document.getElementById('sqlitePageSize');
-                if (sqlitePageSizeSelect) sqlitePageSizeSelect.value = config.sqlite_page_size;
-            }
-            if (config.sqlite_timeout) {
-                const sqliteTimeoutInput = document.getElementById('sqliteTimeout');
-                if (sqliteTimeoutInput) sqliteTimeoutInput.value = config.sqlite_timeout;
-            }
-            if (config.sqlite_journal_mode) {
-                const sqliteJournalModeSelect = document.getElementById('sqliteJournalMode');
-                if (sqliteJournalModeSelect) sqliteJournalModeSelect.value = config.sqlite_journal_mode;
-            }
-            if (config.sqlite_synchronous) {
-                const sqliteSynchronousSelect = document.getElementById('sqliteSynchronous');
-                if (sqliteSynchronousSelect) sqliteSynchronousSelect.value = config.sqlite_synchronous;
-            }
-            
+
             console.log('系统配置加载完成');
         }
     } catch (error) {
@@ -985,12 +649,11 @@ async function saveEnvConfigSection() {
             enable_cors: document.getElementById('enableCors')?.checked || null,
             
             // ITDT工具配置
-            itdt_path: document.getElementById('itdtPath')?.value || null,
             itdt_device_path: document.getElementById('itdtDevicePath')?.value || null,
             
             // LTFS工具配置
             ltfs_tools_dir: document.getElementById('ltfsToolsDir')?.value || null,
-            tape_drive_letter: document.getElementById('tapeDriveLetter')?.value || null,
+            ltfs_device_path: document.getElementById('ltfsDevicePath')?.value || null,
             
             // 备份策略配置
             default_retention_months: parseInt(document.getElementById('defaultRetentionMonths')?.value) || null,
@@ -1021,23 +684,12 @@ async function saveEnvConfigSection() {
                 const parsed = parseInt(value);
                 return isNaN(parsed) ? null : parsed;
             })(),
-            scan_method: document.getElementById('scanMethod')?.value || null,
-            es_exe_path: document.getElementById('esExePath')?.value || null,
-            use_scan_multithread: document.getElementById('useScanMultithread')?.checked ?? null,
-            scan_threads: (() => {
-                const input = document.getElementById('scanThreads');
-                if (!input) return null;
-                const value = input.value;
-                if (value === '' || value === null || value === undefined) return null;
-                const parsed = parseInt(value);
-                return isNaN(parsed) ? null : parsed;
-            })(),
-            use_checkpoint: document.getElementById('useCheckpoint')?.checked || null,
-            enable_background_copy_update: (() => {
-                const checkbox = document.getElementById('enableBackgroundCopyUpdate');
+            scan_memory_only: (() => {
+                const checkbox = document.getElementById('scanMemoryOnly');
                 if (!checkbox) return undefined;
                 return checkbox.checked === true;
             })(),
+            use_checkpoint: document.getElementById('useCheckpoint')?.checked || null,
             compression_parallel_batches: (() => {
                 const input = document.getElementById('compressionParallelBatches');
                 if (!input) return null;
@@ -1055,26 +707,6 @@ async function saveEnvConfigSection() {
                 return isNaN(parsed) ? null : parsed;
             })(),
 
-            // 内存数据库配置
-            use_memory_db: (() => {
-                const checkbox = document.getElementById('useMemoryDb');
-                if (!checkbox) return undefined;
-                // 明确返回布尔值，确保 false 也能被发送
-                return checkbox.checked === true;
-            })(),
-            memory_db_max_files: parseInt(document.getElementById('memoryDbMaxFiles')?.value) || null,
-            memory_db_sync_batch_size: parseInt(document.getElementById('memoryDbSyncBatchSize')?.value) || null,
-            memory_db_sync_interval: parseInt(document.getElementById('memoryDbSyncInterval')?.value) || null,
-            memory_db_checkpoint_interval: parseInt(document.getElementById('memoryDbCheckpointInterval')?.value) || null,
-            memory_db_checkpoint_retention_hours: parseInt(document.getElementById('memoryDbCheckpointRetentionHours')?.value) || null,
-            
-            // SQLite 配置
-            sqlite_cache_size: parseInt(document.getElementById('sqliteCacheSize')?.value) || null,
-            sqlite_page_size: parseInt(document.getElementById('sqlitePageSize')?.value) || null,
-            sqlite_timeout: parseFloat(document.getElementById('sqliteTimeout')?.value) || null,
-            sqlite_journal_mode: document.getElementById('sqliteJournalMode')?.value || null,
-            sqlite_synchronous: document.getElementById('sqliteSynchronous')?.value || null,
-            
             log_level: document.getElementById('logLevel')?.value || null,
 
             // 磁带自动格式化配置

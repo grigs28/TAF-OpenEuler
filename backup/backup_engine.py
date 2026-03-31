@@ -337,13 +337,15 @@ class BackupEngine:
             logger.info("[3] 格式化检查")
             need_format = not (label != "Unknown" and is_ltfs and is_empty)
 
-            # 检查自动格式化开关
-            if need_format and not self.settings.ENABLE_TAPE_FORMAT_BEFORE_FULL:
-                logger.warning("⚠️ 需要格式化，但自动格式化已关闭（ENABLE_TAPE_FORMAT_BEFORE_FULL=False）")
-                error_msg = "磁带需要格式化，但自动格式化功能已关闭，请手动格式化后重试"
-                logger.error(f"✗ {error_msg}")
-                await self._send_tape_error_notification(error_msg)
-                return False
+            # LTFS磁带有数据时：根据自动格式化开关决定是续写还是格式化
+            # ENABLE_TAPE_FORMAT_BEFORE_FULL=False → 续写（不格式化）
+            # ENABLE_TAPE_FORMAT_BEFORE_FULL=True  → 格式化（覆盖旧数据）
+            if need_format and is_ltfs and not is_empty:
+                if not self.settings.ENABLE_TAPE_FORMAT_BEFORE_FULL:
+                    logger.info("✓ LTFS磁带有数据，自动格式化已关闭，将续写数据")
+                    need_format = False
+                else:
+                    logger.warning("⚠️ LTFS磁带有数据，自动格式化已开启，将格式化覆盖旧数据")
 
             if need_format:
                 if label == "Unknown":
@@ -1196,34 +1198,8 @@ class BackupEngine:
             if not backup_set:
                 backup_set = await self.backup_db.create_backup_set(backup_task, tape_obj)
 
-            # 4. 挂载 LTFS 磁带（在扫描文件之前）
-            logger.info("========== 挂载 LTFS 磁带 ==========")
-            try:
-                from backup.tape_mounter import TapeMounter
-                mounter = TapeMounter()
-                await mounter.initialize(
-                    tape_manager=self.tape_manager,
-                    dingtalk_notifier=self.dingtalk_notifier
-                )
-
-                # 挂载磁带（包含格式化逻辑）
-                mount_success, mount_msg = await mounter.mount_and_format_tape(backup_task)
-
-                # 只检查挂载是否成功，不成功则停止任务
-                if not mount_success:
-                    error_msg = f"LTFS 磁带挂载失败: {mount_msg}"
-                    logger.error(error_msg)
-                    # 已在 mount_and_format_tape 中发送钉钉通知
-                    raise RuntimeError(error_msg)
-
-                logger.info(f"✅ LTFS 磁带挂载成功: {mount_msg}")
-            except RuntimeError as mount_error:
-                # RuntimeError 由挂载失败抛出，直接向上传播
-                raise
-            except Exception as mount_error:
-                error_msg = f"LTFS 磁带挂载异常: {str(mount_error)}"
-                logger.error(error_msg, exc_info=True)
-                raise RuntimeError(error_msg)
+            # 4. 挂载已在 execute_backup_task() 中完成，跳过重复挂载
+            logger.info("========== 跳过挂载（已在磁带检查阶段完成）==========")
 
             # 5. 流式处理：扫描和压缩循环执行
             # 初始化内存文件存储（提前声明，避免作用域问题）

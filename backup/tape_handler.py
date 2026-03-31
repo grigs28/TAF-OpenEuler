@@ -19,6 +19,7 @@ import logging
 import shutil
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -196,78 +197,7 @@ class TapeHandler:
 
         if is_ltfs:
             logger.info("[LTFS] ✅ 格式化并重新挂载成功")
-
-            # 格式化成功后，使用 psycopg 同步连接注册磁带到数据库（与添加磁带相同的方式）
-            try:
-                from utils.db_connection_helper import get_psycopg_connection_from_url, set_autocommit
-                from config.settings import get_settings as _get_settings
-
-                _settings = _get_settings()
-                _db_url = _settings.DATABASE_URL
-                _conn, _is_psycopg3 = get_psycopg_connection_from_url(_db_url, prefer_psycopg3=True)
-                try:
-                    set_autocommit(_conn, _is_psycopg3, autocommit=True)
-                    with _conn.cursor() as cur:
-                        cur.execute("SELECT 1 FROM tape_cartridges WHERE tape_id = %s", (volume_name,))
-                        _tape_exists = cur.fetchone() is not None
-
-                        if not _tape_exists:
-                            logger.info(f"[LTFS] 数据库中不存在磁带 {volume_name}，开始录入...")
-                            now = datetime.now()
-                            _expiry_month = now.month + 6
-                            _expiry_year = now.year
-                            while _expiry_month > 12:
-                                _expiry_year += 1
-                                _expiry_month -= 12
-                            _expiry_date = datetime(_expiry_year, _expiry_month, 1)
-
-                            cur.execute(
-                                """
-                                INSERT INTO tape_cartridges
-                                (tape_id, label, status, media_type, generation, serial_number, location,
-                                 capacity_bytes, used_bytes, retention_months, notes, manufactured_date, expiry_date, auto_erase, health_score)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                                """,
-                                (
-                                    volume_name,
-                                    volume_name,
-                                    'available',
-                                    'LTO',
-                                    9,
-                                    serial or "",
-                                    '',
-                                    18 * 1024 ** 4,
-                                    0,
-                                    6,
-                                    '备份任务格式化后自动注册',
-                                    now,
-                                    _expiry_date,
-                                    True,
-                                    100
-                                )
-                            )
-                            logger.info(f"[LTFS] ✅ 磁带已注册到数据库: {volume_name}")
-                        else:
-                            logger.info(f"[LTFS] 数据库中已存在磁带 {volume_name}，跳过录入")
-
-                    # 更新 tape_manager 缓存
-                    if self.tape_manager:
-                        from tape.tape_cartridge import TapeCartridge, TapeStatus
-                        new_tape = TapeCartridge(
-                            tape_id=volume_name,
-                            label=volume_name,
-                            status=TapeStatus.AVAILABLE,
-                            generation=9,
-                            serial_number=serial or "",
-                            capacity_bytes=18 * 1024**4,
-                            manufactured_date=datetime.now()
-                        )
-                        self.tape_manager.tape_cartridges[volume_name] = new_tape
-                        self.tape_manager.current_tape = new_tape
-                finally:
-                    _conn.close()
-            except Exception as e:
-                logger.warning(f"[LTFS] 数据库注册异常: {e}")
+            # 注：数据库注册已在 execute_backup_task() 格式化成功后完成，此处不再重复注册
 
             return True, "格式化并重新挂载成功"
 
@@ -612,34 +542,19 @@ class TapeHandler:
             is_ltfs, msg = await self.check_ltfs_format()
 
         if is_ltfs:
-            # LTFS 格式，检查是否有内容
+            # LTFS 格式，直接使用（空盘或续写由 backup_engine 决定）
             is_empty, file_count = await self.is_tape_empty()
             if is_empty:
-                # 空磁带，直接使用
                 logger.info("[LTFS] 磁带为空，可以使用")
-
-                # 注：数据库注册已在 execute_backup_task() 格式化成功后完成，此处不再重复注册
-
-                return True, msg
             else:
-                # 有内容，格式化并重新挂载（使用辅助方法）
-                logger.info(f"[LTFS] 磁带有 {file_count} 个文件，需要格式化")
-                success, result_msg = await self._format_and_remount(existing_label=existing_label)
-                if not success:
-                    error_msg = f"格式化并重新挂载失败: {result_msg}"
-                    await _send_failure_notification(error_msg)
-                    return False, error_msg
-                return True, result_msg
+                logger.info(f"[LTFS] 磁带有 {file_count} 个文件，将续写数据")
+            return True, msg
 
-        # 3. 不是 LTFS 格式，格式化并重新挂载
-        logger.info("[LTFS] 磁带不是 LTFS 格式，开始格式化...")
-        success, result_msg = await self._format_and_remount(existing_label=existing_label)
-        if not success:
-            error_msg = f"格式化并重新挂载失败: {result_msg}"
-            await _send_failure_notification(error_msg)
-            return False, error_msg
-
-        return True, result_msg
+        # 非 LTFS 格式，返回失败（格式化由 backup_engine 负责）
+        error_msg = f"磁带不是 LTFS 格式，请先格式化"
+        logger.warning(f"[LTFS] {error_msg}")
+        await _send_failure_notification(error_msg)
+        return False, error_msg
 
     async def unmount_ltfs(self) -> bool:
         """卸载 LTFS"""

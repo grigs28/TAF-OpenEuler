@@ -4,164 +4,83 @@
         <div class="col-md-6">
             <div class="setting-card service-card mb-3">
                 <div class="card-body">
-                    <h6 class="card-title">保留策略</h6>
+                    <h6 class="card-title">压缩设置</h6>
                     <div class="mb-3">
-                        <label class="form-label">默认保留月数</label>
-                        <input type="number" class="form-control" id="defaultRetentionMonths" value="6" min="1" max="36">
-                        <small class="text-muted">磁带数据保留时间（月）</small>
+                        <label class="form-label">最大文件大小 (GB)</label>
+                        <input type="number" class="form-control" id="maxFileSizeGB" value="3" min="1" step="0.1">
                     </div>
-                    <div class="form-check form-switch">
-                        <input class="form-check-input" type="checkbox" id="autoEraseExpired">
-                        <label class="form-check-label" for="autoEraseExpired">自动擦除过期磁带</label>
+                    <div class="mb-3">
+                        <label class="form-label">后台扫描进度更新间隔（文件数）</label>
+                        <input type="number" class="form-control" id="scanUpdateInterval" value="500" min="1" step="1">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">后台扫描进度统计间隔（秒）</label>
+                        <input type="number" class="form-control" id="scanLogIntervalSeconds" value="60" min="1" step="1">
+                    </div>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" id="scanMemoryOnly">
+                        <label class="form-check-label" for="scanMemoryOnly">纯内存扫描模式</label>
+                        <small class="text-muted d-block">启用后扫描器仅写入内存，减少扫描阶段数据库I/O，崩溃时无孤儿记录</small>
+                    </div>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" id="useCheckpoint">
+                        <label class="form-check-label" for="useCheckpoint">启用检查点文件</label>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">压缩临时目录</label>
+                        <input type="text" class="form-control" id="backupCompressDir" value="temp/compress">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">压缩并行批次数量</label>
+                        <input type="number" class="form-control" id="compressionParallelBatches" value="3" min="1" step="1">
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">扫描时减少批次数</label>
+                        <input type="number" class="form-control" id="compressionBatchesReduction" value="1" min="0" step="1">
                     </div>
                 </div>
             </div>
         </div>
         <div class="col-md-6">
+
             <div class="setting-card service-card mb-3">
                 <div class="card-body">
-                    <h6 class="card-title">压缩设置</h6>
+                    <h6 class="card-title">
+                        <i class="bi bi-hdd me-2"></i>磁带与设备配置
+                    </h6>
                     <div class="mb-3">
-                        <label class="form-label">最大文件大小 (GB)</label>
-                        <input type="number" class="form-control" id="maxFileSizeGB" value="3" min="1" step="0.1">
-                        <small class="text-muted">单个压缩包的最大大小（GB），系统会自动按此大小从数据库检索并分组未压缩文件</small>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">后台扫描进度更新间隔（文件数）</label>
-                        <input type="number" class="form-control" id="scanUpdateInterval" value="500" min="1" step="1">
-                        <small class="text-muted">后台扫描每处理多少个文件就更新一次数据库中的总文件数和总字节数</small>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">后台扫描进度统计间隔（秒）</label>
-                        <input type="number" class="form-control" id="scanLogIntervalSeconds" value="60" min="1" step="1">
-                        <small class="text-muted">控制"后台扫描任务：已扫描 N 个文件..."这类日志和速度统计的输出时间间隔</small>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">扫描方法</label>
-                        <select class="form-select" id="scanMethod">
-                            <option value="default">默认扫描（os.scandir）</option>
-                            <option value="es">Everything搜索工具（ES）</option>
-                        </select>
-                        <small class="text-muted">选择后台扫描任务使用的扫描方法。ES方法需要Everything搜索工具支持</small>
-                    </div>
-                    <div class="mb-3" id="scanMultithreadGroup">
-                        <div class="form-check form-switch mb-2">
-                            <input class="form-check-input" type="checkbox" id="useScanMultithread">
-                            <label class="form-check-label" for="useScanMultithread">启用多线程扫描</label>
-                            <small class="text-muted d-block">启用后使用并发目录扫描（ConcurrentDirScanner），不启用则使用顺序扫描（SequentialDirScanner，基于os.scandir优化版）。仅当扫描方法为"默认扫描（os.scandir）"时有效</small>
-                        </div>
-                        <div class="mb-2" id="scanThreadsGroup" style="display: none;">
-                            <label class="form-label">目录扫描并发线程数</label>
-                            <input type="number" class="form-control" id="scanThreads" value="4" min="1" max="16" step="1">
-                            <small class="text-muted">目录扫描时使用的并发线程数（1-16）。默认4线程，建议值：本地磁盘4-8线程，网络路径8-16线程。线程数过多可能导致内存占用增加</small>
-                        </div>
-                    </div>
-                    <div class="mb-3" id="esExePathGroup" style="display: none;">
-                        <label class="form-label">ES工具路径</label>
-                        <div class="input-group">
-                            <input type="text" class="form-control" id="esExePath" value="E:\app\TAF\ITDT\ES\es.exe">
-                            <button class="btn btn-outline-secondary" type="button" id="browseEsExePath">
-                                <i class="bi bi-folder"></i> 浏览
-                            </button>
-                        </div>
-                        <small class="text-muted">Everything搜索工具可执行文件路径</small>
+                        <label class="form-label">默认保留月数</label>
+                        <input type="number" class="form-control" id="defaultRetentionMonths" value="6" min="1" max="36">
                     </div>
                     <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" id="useCheckpoint">
-                        <label class="form-check-label" for="useCheckpoint">启用检查点文件</label>
-                        <small class="text-muted d-block">启用后将定期创建检查点文件用于故障恢复，默认不启用</small>
+                        <input class="form-check-input" type="checkbox" id="autoEraseExpired">
+                        <label class="form-check-label" for="autoEraseExpired">自动擦除过期磁带</label>
+                    </div>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" id="enableTapeFormatBeforeFull">
+                        <label class="form-check-label" for="enableTapeFormatBeforeFull">
+                            完整备份前自动格式化磁带
+                        </label>
+                        <small class="text-muted d-block">开启后自动调用 <code>mkltfs</code> 格式化磁带并生成新卷标，关闭后仅校验卷标</small>
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">压缩临时目录</label>
-                        <input type="text" class="form-control" id="backupCompressDir" value="temp/compress">
-                        <small class="text-muted">压缩文件临时目录（先压缩到这里，再移动到磁带机）</small>
-                    </div>
-                    <div class="form-check form-switch">
-                        <input class="form-check-input" type="checkbox" id="enableVerification">
-                        <label class="form-check-label" for="enableVerification">备份验证</label>
-                    </div>
-                    <div class="form-check form-switch mt-3">
-                        <input class="form-check-input" type="checkbox" id="enableBackgroundCopyUpdate">
-                        <label class="form-check-label" for="enableBackgroundCopyUpdate">压缩结果后台更新</label>
-                        <small class="text-muted d-block">
-                            开启后，压缩线程会在后台异步更新 is_copy_success 状态，主流程可立即处理下一批文件；关闭时则同步写库。
-                        </small>
+                        <label class="form-label">磁带设备路径（mt命令）</label>
+                        <input type="text" class="form-control" id="itdtDevicePath"
+                               placeholder="/dev/nst0">
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">压缩并行批次数量</label>
-                        <input type="number" class="form-control" id="compressionParallelBatches" value="3" min="1" step="1">
-                        <small class="text-muted">压缩并行批次数量（默认3），预读取程序队列数为该值+1。例如：设置为3时，队列大小为4（3个正在压缩的+1个待压缩的）</small>
+                        <label class="form-label">LTFS SCSI 设备路径</label>
+                        <input type="text" class="form-control" id="ltfsDevicePath"
+                               placeholder="/dev/sg2">
                     </div>
                     <div class="mb-3">
-                        <label class="form-label">扫描时减少批次数</label>
-                        <input type="number" class="form-control" id="compressionBatchesReduction" value="1" min="0" step="1">
-                        <small class="text-muted">扫描时减少的并行批次数（默认1），0表示不减少。例如：批次数为3，减少1，则扫描时实际批次数为2</small>
+                        <label class="form-label">LTFS工具目录</label>
+                        <input type="text" class="form-control" id="ltfsToolsDir"
+                               placeholder="/usr/local/ltfs">
                     </div>
                 </div>
             </div>
-        </div>
-    </div>
-    <div class="row mt-3">
-        <div class="col-md-12">
-            <div class="setting-card service-card mb-3">
-                <div class="card-body">
-                    <h6 class="card-title">内存数据库配置</h6>
-                    <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" id="useMemoryDb" checked>
-                        <label class="form-check-label" for="useMemoryDb">使用内存数据库</label>
-                        <small class="text-muted d-block">启用后使用内存数据库进行极速写入，然后异步同步到openGauss。禁用后直接写入数据库，按批次顺序写入，不丢弃内容，循环处理</small>
-                    </div>
-                    <div class="row" id="memoryDbConfigGroup">
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">最大文件数</label>
-                                <input type="number" class="form-control" id="memoryDbMaxFiles" value="5000000" min="1000" step="1000">
-                                <small class="text-muted">内存数据库中最大文件数（默认500万），达到此数量后会触发同步</small>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">同步批次大小</label>
-                                <input type="number" class="form-control" id="memoryDbSyncBatchSize" value="3000" min="100" step="100">
-                                <small class="text-muted">每次同步到openGauss的批次大小（默认3000），达到此数量会立即触发同步</small>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">同步间隔（秒）</label>
-                                <input type="number" class="form-control" id="memoryDbSyncInterval" value="30" min="5" step="1">
-                                <small class="text-muted">定期同步的间隔时间（默认30秒），即使未达到批次大小也会定期同步</small>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <div class="mb-3">
-                                <label class="form-label">检查点间隔（秒）</label>
-                                <input type="number" class="form-control" id="memoryDbCheckpointInterval" value="300" min="60" step="60">
-                                <small class="text-muted">创建检查点的间隔时间（默认300秒），需要启用检查点功能</small>
-                            </div>
-                            <div class="mb-3">
-                                <label class="form-label">检查点保留时间（小时）</label>
-                                <input type="number" class="form-control" id="memoryDbCheckpointRetentionHours" value="24" min="1" step="1">
-                                <small class="text-muted">检查点文件的保留时间（默认24小时），超过此时间的检查点会被清理</small>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
+
         </div>
     </div>
 </div>
-
-<script>
-// 控制内存数据库配置项的显示/隐藏
-document.addEventListener('DOMContentLoaded', function() {
-    const useMemoryDbCheckbox = document.getElementById('useMemoryDb');
-    const memoryDbConfigGroup = document.getElementById('memoryDbConfigGroup');
-    
-    if (useMemoryDbCheckbox && memoryDbConfigGroup) {
-        function toggleMemoryDbConfig() {
-            memoryDbConfigGroup.style.display = useMemoryDbCheckbox.checked ? 'flex' : 'none';
-        }
-        
-        useMemoryDbCheckbox.addEventListener('change', toggleMemoryDbConfig);
-        toggleMemoryDbConfig(); // 初始化显示状态
-    }
-});
-</script>
-

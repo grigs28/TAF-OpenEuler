@@ -37,14 +37,14 @@ class SystemConfigRequest(BaseModel):
 
 class TapeConfig(BaseModel):
     """磁带机配置模型"""
-    tape_device_path: str = Field("/dev/nst0", description="磁带设备路径")
-    tape_drive_letter: str = Field("o", description="Windows驱动盘符")
+    tape_device_path: str = Field("/dev/nst0", description="磁带设备路径（如 /dev/nst0）")
+    ltfs_device_path: str = Field("/dev/sg2", description="LTFS SCSI设备路径（如 /dev/sg2）")
     default_block_size: int = Field(262144, description="默认块大小(字节)")
     max_volume_size: int = Field(322122547200, description="最大卷大小(字节)")
     tape_pool_size: int = Field(12, description="磁带池大小")
     tape_check_interval: int = Field(3600, description="状态检查间隔(秒)")
     auto_tape_cleanup: bool = Field(True, description="自动清理过期磁带")
-    # 新增：工具路径配置
+    # 工具路径配置
     itdt_path: Optional[str] = Field(None, description="ITDT可执行文件路径")
     ltfs_tools_dir: Optional[str] = Field(None, description="LTFS工具目录")
     default_device_address: Optional[str] = Field(None, description="默认驱动器地址(SCSI格式)")
