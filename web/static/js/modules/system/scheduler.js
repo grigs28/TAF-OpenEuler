@@ -246,6 +246,11 @@ const SchedulerManager = {
                 this.pathManager.addSourcePath(path);
             } else if (type === 'backup_target') {
                 this.pathManager.addTargetPath(path);
+            } else if (type === 'verify') {
+                if (path && !window._verifySourcePaths.includes(path)) {
+                    window._verifySourcePaths.push(path);
+                    window._renderVerifySourcePaths();
+                }
             }
         });
     },
@@ -285,7 +290,7 @@ const SchedulerManager = {
         window._renderVerifySourcePaths = () => {
             const list = document.getElementById('verifySourcePathsList');
             if (!list) return;
-            list.textContent = '';
+            list.innerHTML = '';
             window._verifySourcePaths.forEach((p, i) => {
                 const div = document.createElement('div');
                 div.className = 'd-flex align-items-center mb-1';
@@ -322,6 +327,13 @@ const SchedulerManager = {
                     }
                 }
             });
+            // 浏览按钮
+            const browseVerifyPathBtn = document.getElementById('browseVerifyPathBtn');
+            if (browseVerifyPathBtn) {
+                browseVerifyPathBtn.addEventListener('click', () => {
+                    this.directoryBrowser.showDirectoryBrowser('verify');
+                });
+            }
         }
         
         // 备份类型顶部选择器同步

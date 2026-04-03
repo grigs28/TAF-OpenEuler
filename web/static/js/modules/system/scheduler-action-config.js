@@ -254,7 +254,7 @@ export class ActionConfigManager {
                     config = {
                         verify_type: val('#verifyType', 'directory'),
                         verify_percent: parseFloat(val('#verifyPercent', '1')) || 1,
-                        source_paths: window.pathManager ? window.pathManager.verifySourcePaths : [],
+                        source_paths: window._verifySourcePaths || [],
                     };
                     const verifyTapeDevice = val('#verifyTapeDevice', '');
                     if (verifyTapeDevice) {
