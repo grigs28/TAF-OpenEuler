@@ -66,6 +66,7 @@
                                 <option value="cleanup">清理任务</option>
                                 <option value="health_check">健康检查</option>
                                 <option value="retention_check">保留期检查</option>
+                                <option value="verify">验证任务</option>
                                 <option value="custom">自定义任务</option>
                             </select>
                         </div>
@@ -312,6 +313,59 @@
                                 <textarea class="form-control font-monospace bg-dark text-light" id="customActionConfigJson" rows="5" placeholder='{"command": "...", "args": [...]}'></textarea>
                             </div>
                         </div>
+
+                        <!-- 验证任务配置 -->
+                        <div id="verifyActionConfig" class="action-config-panel" style="display: none;">
+                            <div class="row">
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label">验证类型</label>
+                                    <select class="form-select bg-dark text-light" id="verifyType">
+                                        <option value="directory">目录验证</option>
+                                        <option value="tape">磁带验证</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-4 mb-3">
+                                    <label class="form-label">抽样百分比 (%)</label>
+                                    <input type="number" class="form-control bg-dark text-light" id="verifyPercent" value="1" min="0.01" max="100" step="0.01">
+                                    <small class="text-muted">默认1%，按归档文件抽样</small>
+                                </div>
+                                <div class="col-md-4 mb-3">
+                                    <div class="form-check mt-md-4 pt-md-2">
+                                        <input class="form-check-input" type="checkbox" id="verifyEnabled">
+                                        <label class="form-check-label" for="verifyEnabled">解压验证归档</label>
+                                        <small class="text-muted d-block">勾选后对目录中的归档文件解压验证（磁带验证始终解压）</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-md-6 mb-3">
+                                    <label class="form-label">验证源路径</label>
+                                    <div class="input-group mb-2">
+                                        <input type="text" class="form-control bg-dark text-light" id="verifySourcePath" placeholder="输入目录路径，回车添加">
+                                        <button class="btn btn-outline-secondary" type="button" id="browseVerifyPathBtn">
+                                            <i class="bi bi-folder-open me-1"></i>浏览
+                                        </button>
+                                    </div>
+                                    <div id="verifySourcePathsList" class="mb-2" style="max-height: 120px; overflow-y: auto;"></div>
+                                </div>
+                                <div class="col-md-6 mb-3" id="verifyTapeDeviceContainer" style="display: none;">
+                                    <label class="form-label">磁带设备</label>
+                                    <select class="form-select bg-dark text-light" id="verifyTapeDevice">
+                                        <option value="">默认设备</option>
+                                    </select>
+                                    <small class="text-muted">选择磁带验证时使用的设备</small>
+                                </div>
+                            </div>
+                            <div class="row">
+                                <div class="col-12">
+                                    <div class="alert alert-info small mb-0" style="background: rgba(13, 202, 240, 0.1); border-color: rgba(13, 202, 240, 0.3); color: #adb5bd;">
+                                        <i class="bi bi-info-circle me-1"></i>
+                                        <strong>磁带验证</strong>：按百分比抽样磁带上的归档文件，解压验证完整性。执行前会检查是否有正在运行的备份任务。
+                                        <br><strong>目录验证</strong>：扫描指定目录中的文件，按百分比抽样验证可读性。
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                     
                     <!-- 底部：任务描述和排除模式并排显示 -->
@@ -338,8 +392,8 @@ pagefile.sys</textarea>
                 </form>
             </div>
             <div class="modal-footer" style="background: rgba(13, 22, 38, 0.95); border-top: 1px solid rgba(255, 255, 255, 0.1);">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="SchedulerManager.saveTask()">
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="SchedulerManager.saveTask()">
                     <i class="bi bi-check-circle me-1"></i>保存
                 </button>
             </div>

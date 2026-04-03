@@ -41,6 +41,7 @@ class TaskActionType(enum.Enum):
     CLEANUP = "cleanup"              # 清理任务
     HEALTH_CHECK = "health_check"    # 健康检查
     RETENTION_CHECK = "retention_check"  # 保留期检查
+    VERIFY = "verify"                    # 验证任务
     CUSTOM = "custom"                # 自定义任务
 
 

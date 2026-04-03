@@ -55,7 +55,7 @@
         <h5 class="mb-0">
             <i class="bi bi-clock-history me-2"></i>计划任务管理
         </h5>
-        <button class="btn btn-primary" id="addScheduledTaskBtn">
+        <button class="btn btn-outline-secondary btn-sm" id="addScheduledTaskBtn">
             <i class="bi bi-plus-circle me-1"></i>添加任务
         </button>
     </div>
@@ -84,6 +84,60 @@
                         </tr>
                     </tbody>
                 </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 计划任务操作历史 -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="service-card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">
+                        <i class="bi bi-clock-history me-2"></i>
+                        计划任务操作历史
+                    </h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive" style="height: 500px; overflow-y: auto; background: rgba(20, 30, 48, 0.6); padding: 10px; border-radius: 4px;">
+                        <table class="table table-sm table-hover mb-0">
+                            <thead style="position: sticky; top: 0; z-index: 1;">
+                                <tr>
+                                    <th>时间</th>
+                                    <th>模块</th>
+                                    <th>函数</th>
+                                    <th>级别</th>
+                                    <th>消息</th>
+                                </tr>
+                            </thead>
+                            <tbody id="schedulerHistoryTableBody">
+                                <tr><td colspan="5" class="text-center text-muted">加载中...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <!-- 分页 -->
+                    <div class="d-flex justify-content-between align-items-center mt-3">
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="text-muted small">每页</span>
+                            <select class="form-select form-select-sm" id="schPageSize" style="width: auto; min-width: 80px;">
+                                <option value="20" selected>20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                                <option value="200">200</option>
+                            </select>
+                            <span class="text-muted small">条</span>
+                            <span class="text-muted small ms-2" id="schPageInfo">显示 0-0 条，共 0 条</span>
+                        </div>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-secondary" id="schPrevBtn" disabled>
+                                <i class="bi bi-chevron-left"></i>上一页
+                            </button>
+                            <button class="btn btn-outline-secondary" id="schNextBtn" disabled>
+                                下一页<i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
@@ -144,5 +198,113 @@ if (typeof window.axios === 'undefined') {
         }
     }
 })();
+
+// ===== 计划任务操作历史 =====
+let schPage = 0;
+let schPageSizeVal = 20;
+let schTotal = 0;
+
+async function loadSchedulerHistory() {
+    const tbody = document.getElementById('schedulerHistoryTableBody');
+    if (!tbody) return;
+
+    const loadingRow = document.createElement('tr');
+    const loadingTd = document.createElement('td');
+    loadingTd.colSpan = 5;
+    loadingTd.className = 'text-center text-muted';
+    loadingTd.textContent = '加载中...';
+    loadingRow.appendChild(loadingTd);
+    tbody.innerHTML = '';
+    tbody.appendChild(loadingRow);
+
+    const offset = schPage * schPageSizeVal;
+    try {
+        const response = await fetch('/api/system/logs?limit=' + schPageSizeVal + '&offset=' + offset + '&category=scheduler');
+        const result = await response.json();
+
+        const logs = result.logs || [];
+        schTotal = result.total || 0;
+
+        if (logs.length > 0) {
+            tbody.innerHTML = '';
+
+            logs.forEach(log => {
+                const isSuccess = log.success;
+                const barColor = isSuccess ? '#17a2b8' : '#dc3545';
+
+                const row = document.createElement('tr');
+                row.style.borderLeft = '4px solid ' + barColor;
+
+                const ts = log.timestamp;
+                const time = ts ? new Date(ts).toLocaleString('zh-CN', {
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                }) : 'N/A';
+                row.appendChild(Object.assign(document.createElement('td'), {textContent: time}));
+
+                // 操作类型 - 映射为中文
+                const opTypeMap = {
+                    'scheduler_create': '创建任务', 'scheduler_update': '更新任务',
+                    'scheduler_delete': '删除任务', 'scheduler_enable': '启用任务',
+                    'scheduler_disable': '禁用任务', 'scheduler_run': '手动运行',
+                    'scheduler_stop': '停止任务'
+                };
+                const opType = opTypeMap[log.operation_type] || log.operation_type || '-';
+                row.appendChild(Object.assign(document.createElement('td'), {textContent: opType}));
+
+                row.appendChild(Object.assign(document.createElement('td'), {textContent: log.operation_name || log.resource_name || '-'}));
+
+                const levelTd = document.createElement('td');
+                const badge = document.createElement('span');
+                badge.className = 'badge ' + (isSuccess ? 'bg-success' : 'bg-danger');
+                badge.textContent = isSuccess ? '成功' : '失败';
+                levelTd.appendChild(badge);
+                row.appendChild(levelTd);
+
+                const msg = log.operation_description || log.result_message || log.error_message || '';
+                row.appendChild(Object.assign(document.createElement('td'), {textContent: msg}));
+                tbody.appendChild(row);
+            });
+        } else {
+            const emptyRow = document.createElement('tr');
+            const emptyTd = document.createElement('td');
+            emptyTd.colSpan = 5;
+            emptyTd.className = 'text-center text-muted';
+            emptyTd.textContent = '暂无操作历史';
+            emptyRow.appendChild(emptyTd);
+            tbody.innerHTML = '';
+            tbody.appendChild(emptyRow);
+            schTotal = 0;
+        }
+
+        // 更新分页
+        const start = schTotal > 0 ? offset + 1 : 0;
+        const end = Math.min(offset + schPageSizeVal, schTotal);
+        const pageInfo = document.getElementById('schPageInfo');
+        if (pageInfo) pageInfo.textContent = '显示 ' + start + '-' + end + ' 条，共 ' + schTotal + ' 条';
+        const prevBtn = document.getElementById('schPrevBtn');
+        const nextBtn = document.getElementById('schNextBtn');
+        if (prevBtn) prevBtn.disabled = schPage <= 0;
+        if (nextBtn) nextBtn.disabled = end >= schTotal;
+
+    } catch (error) {
+        console.error('加载计划任务历史失败:', error);
+        const errRow = document.createElement('tr');
+        const errTd = document.createElement('td');
+        errTd.colSpan = 5;
+        errTd.className = 'text-center text-danger';
+        errTd.textContent = '加载失败: ' + error.message;
+        errRow.appendChild(errTd);
+        tbody.innerHTML = '';
+        tbody.appendChild(errRow);
+    }
+}
+
+document.getElementById('schPrevBtn')?.addEventListener('click', function() { if (schPage > 0) { schPage--; loadSchedulerHistory(); } });
+document.getElementById('schNextBtn')?.addEventListener('click', function() { schPage++; loadSchedulerHistory(); });
+document.getElementById('schPageSize')?.addEventListener('change', function() { schPageSizeVal = parseInt(this.value); schPage = 0; loadSchedulerHistory(); });
+
+// 页面加载时获取历史
+loadSchedulerHistory();
 </script>
 {% endblock %}

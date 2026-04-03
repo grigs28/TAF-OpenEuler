@@ -539,7 +539,7 @@ class SimpleScanner:
                                                     current_time - last_progress_time >= progress_interval):
                                                 elapsed = current_time - start_time
                                                 fps = thread_stats['total_scanned'] / elapsed if elapsed > 0 else 0
-                                                logger.info(
+                                                logger.debug(
                                                     f"[简洁扫描-线程] 进度: 已扫描 {thread_stats['total_scanned']:,} 个文件, "
                                                     f"总容量: {format_bytes(thread_stats['total_scanned_bytes'])}, "
                                                     f"速度: {fps:.0f} 文件/秒, "

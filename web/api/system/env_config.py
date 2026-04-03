@@ -22,12 +22,9 @@ class SystemEnvConfig(BaseModel):
     # 应用配置
     app_name: Optional[str] = Field(None, description="应用名称")
     debug: Optional[bool] = Field(None, description="调试模式")
-    environment: Optional[str] = Field(None, description="运行环境")
-    
+
     # Web服务配置
-    web_host: Optional[str] = Field(None, description="监听地址")
     web_port: Optional[int] = Field(None, description="监听端口")
-    enable_cors: Optional[bool] = Field(None, description="启用CORS")
     
     # 数据库配置
     db_host: Optional[str] = Field(None, description="数据库主机")
@@ -41,7 +38,6 @@ class SystemEnvConfig(BaseModel):
     
     # ITDT工具配置
     itdt_path: Optional[str] = Field(None, description="ITDT可执行文件路径")
-    itdt_device_path: Optional[str] = Field(None, description="磁带设备路径")
     
     # LTFS工具配置
     ltfs_tools_dir: Optional[str] = Field(None, description="LTFS工具目录")
@@ -58,10 +54,8 @@ class SystemEnvConfig(BaseModel):
     max_file_size: Optional[int] = Field(None, description="最大文件大小（字节）")
     backup_compress_dir: Optional[str] = Field(None, description="压缩文件临时目录")
     scan_update_interval: Optional[int] = Field(None, description="后台扫描进度更新间隔（文件数）")
-    scan_log_interval_seconds: Optional[int] = Field(None, description="后台扫描进度日志时间间隔（秒）")
     scan_wait_timeout: Optional[int] = Field(None, description="等待后台扫描写入文件记录的超时时间（秒），默认300秒（5分钟）")
     scan_memory_only: Optional[bool] = Field(None, description="纯内存扫描模式，扫描阶段跳过数据库写入")
-    use_checkpoint: Optional[bool] = Field(None, description="是否启用检查点文件，默认不启用")
     compression_parallel_batches: Optional[int] = Field(None, description="压缩并行批次数量（默认2），预读取程序队列数为该值+1")
     compression_batches_reduction: Optional[int] = Field(None, description="扫描时减少的并行批次数（默认1），0表示不减少")
 
@@ -107,14 +101,10 @@ async def get_env_config():
             # 应用配置
             "app_name": env_vars.get("APP_NAME", ""),
             "debug": parse_bool(env_vars.get("DEBUG"), False),
-            "environment": env_vars.get("ENVIRONMENT", "production"),
-            
+
             # Web服务配置
-            "web_host": env_vars.get("WEB_HOST", "0.0.0.0"),
             "web_port": parse_int(env_vars.get("WEB_PORT"), 8080),
-            # web_workers已移除，由压缩配置中的compression_command_threads替代
-            "enable_cors": parse_bool(env_vars.get("ENABLE_CORS"), True),
-            
+
             # 数据库配置
             "db_host": env_vars.get("DB_HOST", ""),
             "db_port": parse_int(env_vars.get("DB_PORT"), None) if env_vars.get("DB_PORT") else None,
@@ -127,8 +117,7 @@ async def get_env_config():
             
             # ITDT工具配置
             "itdt_path": env_vars.get("ITDT_PATH", ""),
-            "itdt_device_path": env_vars.get("ITDT_DEVICE_PATH", ""),
-            
+
             # LTFS工具配置
             "ltfs_tools_dir": env_vars.get("LTFS_TOOLS_DIR", ""),
             "ltfs_device_path": env_vars.get("LTFS_DEVICE_PATH", "/dev/sg2"),
@@ -145,10 +134,8 @@ async def get_env_config():
             "max_file_size": parse_int(env_vars.get("MAX_FILE_SIZE"), 12 * 1024 * 1024 * 1024),
             "backup_compress_dir": env_vars.get("BACKUP_COMPRESS_DIR", "temp/compress"),
             "scan_update_interval": parse_int(env_vars.get("SCAN_UPDATE_INTERVAL"), 500),
-            "scan_log_interval_seconds": parse_int(env_vars.get("SCAN_LOG_INTERVAL_SECONDS"), 60),
             "scan_wait_timeout": parse_int(env_vars.get("SCAN_WAIT_TIMEOUT"), 300),
             "scan_memory_only": parse_bool(env_vars.get("SCAN_MEMORY_ONLY"), False),
-            "use_checkpoint": parse_bool(env_vars.get("USE_CHECKPOINT"), False),
             "compression_parallel_batches": parse_int(env_vars.get("COMPRESSION_PARALLEL_BATCHES"), 3),
             "compression_batches_reduction": parse_int(env_vars.get("COMPRESSION_BATCHES_REDUCTION"), 1),
 
@@ -183,17 +170,10 @@ async def update_env_config(config: SystemEnvConfig, request: Request):
             updates["APP_NAME"] = config.app_name
         if config.debug is not None:
             updates["DEBUG"] = str(config.debug).lower()
-        if config.environment is not None:
-            updates["ENVIRONMENT"] = config.environment
-        
+
         # Web服务配置
-        if config.web_host is not None:
-            updates["WEB_HOST"] = config.web_host
         if config.web_port is not None:
             updates["WEB_PORT"] = str(config.web_port)
-        # web_workers已移除，由压缩配置中的compression_command_threads替代
-        if config.enable_cors is not None:
-            updates["ENABLE_CORS"] = str(config.enable_cors).lower()
         
         # 数据库配置
         if config.db_host is not None:
@@ -219,9 +199,7 @@ async def update_env_config(config: SystemEnvConfig, request: Request):
         # ITDT工具配置
         if config.itdt_path is not None:
             updates["ITDT_PATH"] = config.itdt_path
-        if config.itdt_device_path is not None:
-            updates["ITDT_DEVICE_PATH"] = config.itdt_device_path
-        
+
         # LTFS工具配置
         if config.ltfs_tools_dir is not None:
             updates["LTFS_TOOLS_DIR"] = config.ltfs_tools_dir
@@ -246,14 +224,10 @@ async def update_env_config(config: SystemEnvConfig, request: Request):
             updates["MAX_FILE_SIZE"] = str(config.max_file_size)
         if config.scan_update_interval is not None:
             updates["SCAN_UPDATE_INTERVAL"] = str(config.scan_update_interval)
-        if config.scan_log_interval_seconds is not None:
-            updates["SCAN_LOG_INTERVAL_SECONDS"] = str(config.scan_log_interval_seconds)
         if config.scan_wait_timeout is not None:
             updates["SCAN_WAIT_TIMEOUT"] = str(config.scan_wait_timeout)
         if config.scan_memory_only is not None:
             updates["SCAN_MEMORY_ONLY"] = str(config.scan_memory_only).lower()
-        if config.use_checkpoint is not None:
-            updates["USE_CHECKPOINT"] = str(config.use_checkpoint).lower()
         if config.compression_parallel_batches is not None:
             # 验证并行批次数范围（至少为1）
             if config.compression_parallel_batches < 1:
@@ -313,7 +287,43 @@ async def update_env_config(config: SystemEnvConfig, request: Request):
         from config.settings import reload_settings
         reload_settings()
         logger.info("配置已重新加载，新配置将立即生效")
-        
+
+        # 如果修改了日志级别，立即动态更新 root logger
+        if 'LOG_LEVEL' in updates:
+            try:
+                new_level = getattr(logging, updates['LOG_LEVEL'].upper())
+                root_logger = logging.getLogger()
+                root_logger.setLevel(new_level)
+                for handler in root_logger.handlers:
+                    # 更新所有 handler 的级别（保留 WARNING+ 的专用 handler）
+                    if handler.level not in (logging.WARNING, logging.ERROR, logging.CRITICAL):
+                        handler.setLevel(new_level)
+                logger.info(f"日志级别已动态更新为: {updates['LOG_LEVEL']}")
+            except Exception as level_err:
+                logger.warning(f"动态更新日志级别失败: {level_err}")
+
+        # 记录配置修改到数据库
+        try:
+            from utils.log_utils import log_operation
+            from models.system_log import OperationType
+            # 排除敏感字段
+            safe_updates = {k: v for k, v in updates.items()
+                          if k not in ('DB_PASSWORD', 'DINGTALK_API_KEY', 'SECRET_KEY', 'SMB_PASSWORD')}
+            await log_operation(
+                operation_type=OperationType.CONFIG,
+                resource_type="system",
+                resource_name="env_config",
+                operation_name="修改系统配置",
+                operation_description=f"更新了 {len(updates)} 个配置项",
+                category="system",
+                success=True,
+                new_values=safe_updates,
+                changed_fields=list(updates.keys()),
+                ip_address=request.client.host if request.client else None,
+            )
+        except Exception as log_err:
+            logger.warning(f"记录配置变更日志失败: {log_err}")
+
         return {
             "success": True,
             "message": "环境配置已更新并重新加载，新配置将立即生效",

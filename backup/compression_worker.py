@@ -46,7 +46,7 @@ class CompressionWorker:
 
         # 检查是否使用预取模式（openGauss模式且有预取器）
         self.use_prefetcher = is_opengauss() and file_group_prefetcher is not None
-        logger.info(f"[压缩循环] 初始化: is_opengauss={is_opengauss()}, file_group_prefetcher={file_group_prefetcher is not None}, use_prefetcher={self.use_prefetcher}")
+        logger.debug(f"[压缩循环] 初始化: is_opengauss={is_opengauss()}, file_group_prefetcher={file_group_prefetcher is not None}, use_prefetcher={self.use_prefetcher}")
 
         self.compression_task: Optional[asyncio.Task] = None
         self._running = False
@@ -137,7 +137,7 @@ class CompressionWorker:
 
         # 取消所有正在运行的压缩任务
         if self.running_compression_futures:
-            logger.info(f"取消 {len(self.running_compression_futures)} 个正在运行的压缩任务...")
+            logger.debug(f"取消 {len(self.running_compression_futures)} 个正在运行的压缩任务...")
             for task in self.running_compression_futures:
                 if not task.done():
                     task.cancel()
@@ -170,7 +170,7 @@ class CompressionWorker:
 
         # 停止数据库更新器（处理剩余文件）
         if self.db_updater:
-            logger.info("[压缩循环] 停止数据库更新器，处理剩余文件...")
+            logger.debug("[压缩循环] 停止数据库更新器，处理剩余文件...")
             await self.db_updater.stop()
 
         logger.info("压缩处理任务已停止")
@@ -204,14 +204,21 @@ class CompressionWorker:
                     await self.progress_update_task
                 except asyncio.CancelledError:
                     pass
-                logger.info("压缩进度更新任务已停止")
+                logger.debug("压缩进度更新任务已停止")
     
     async def _adjust_parallel_batches(self):
         """根据扫描状态调整并行批次数量
-        
+
         策略：扫描阶段减少同时运行的压缩任务数量，扫描结束后恢复正常
+        每次调用时重新读取 settings，以支持运行时动态修改配置
         """
         try:
+            # 重新读取 settings，支持运行时动态修改（立即生效）
+            if self.use_prefetcher:
+                fresh_settings = get_settings()
+                self.base_parallel_batches = getattr(fresh_settings, 'COMPRESSION_PARALLEL_BATCHES', 3)
+                self.batches_reduction = getattr(fresh_settings, 'COMPRESSION_BATCHES_REDUCTION', 1)
+
             # 优先从内存对象获取，如果没有则从数据库查询
             scan_status = getattr(self.backup_task, "scan_status", None)
             if not scan_status and self.backup_task.id:
@@ -288,7 +295,7 @@ class CompressionWorker:
                     # 关键修复：先检查队列是否还有文件组，如果有则继续处理
                     queue_size = self.file_group_prefetcher.file_group_queue.qsize() if self.file_group_prefetcher else 0
                     if queue_size > 0:
-                        logger.info(
+                        logger.debug(
                             f"队列中还有 {queue_size} 个文件组未处理，继续处理..."
                         )
                         # 继续循环，处理队列中的文件组
@@ -297,7 +304,7 @@ class CompressionWorker:
                     # 检查预取器是否还在运行（如果还在运行，即使 get_file_group 返回 None，也应该继续等待）
                     prefetch_running = getattr(self.file_group_prefetcher, '_running', False) if self.file_group_prefetcher else False
                     if prefetch_running:
-                        logger.info(
+                        logger.debug(
                             f"预取器仍在运行，继续等待文件组...（当前运行中的任务数: {len(self.running_compression_futures)}/{self.parallel_batches}）"
                         )
                         await asyncio.sleep(2)
@@ -317,14 +324,14 @@ class CompressionWorker:
                     
                     # 如果预取器正在重新检索遗漏文件，继续等待
                     if is_rescanning:
-                        logger.info(
+                        logger.debug(
                             f"预取器正在重新检索遗漏文件，继续等待...（当前运行中的任务数: {len(self.running_compression_futures)}/{self.parallel_batches}）"
                         )
                         await asyncio.sleep(2)
                         continue
                     
                     if not scan_completed:
-                        logger.info(
+                        logger.debug(
                             f"无更多文件组，但扫描未完成（状态={scan_status}），"
                             f"继续等待...（当前运行中的任务数: {len(self.running_compression_futures)}/{self.parallel_batches}，"
                             f"预取器执行次数: {prefetch_loop_count}）"
@@ -334,7 +341,7 @@ class CompressionWorker:
                         await asyncio.sleep(2)
                         continue
                     elif not prefetch_executed:
-                        logger.info(
+                        logger.debug(
                             f"扫描已完成，但预取器执行次数为 {prefetch_loop_count}（需要 > 0），"
                             f"继续等待...（当前运行中的任务数: {len(self.running_compression_futures)}/{self.parallel_batches}）"
                         )
@@ -342,7 +349,7 @@ class CompressionWorker:
                         continue
                     elif not all_compression_done:
                         # 扫描已完成，预取器已执行，但还有正在运行的压缩任务，等待它们完成
-                        logger.info(
+                        logger.debug(
                             f"扫描已完成，预取器执行次数: {prefetch_loop_count}，"
                             f"等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成..."
                         )
@@ -358,7 +365,7 @@ class CompressionWorker:
                         continue
                     elif not queue_empty:
                         # 队列不为空，继续处理
-                        logger.info(
+                        logger.debug(
                             f"队列中还有 {queue_size} 个文件组未处理，继续处理..."
                         )
                         continue
@@ -369,8 +376,8 @@ class CompressionWorker:
                             f"预取器执行次数={prefetch_loop_count}，队列为空={queue_empty}，预取器已停止={not prefetch_running}，所有压缩任务完成={all_compression_done}"
                         )
                         # 在内存中设置压缩完成状态
-                        if hasattr(self.backup_task, 'compression_completed'):
-                            self.backup_task.compression_completed = True
+                        # 设置压缩完成标志（动态属性，无需 hasattr 检查）
+                        self.backup_task.compression_completed = True
                         logger.info("所有文件组处理完成，退出压缩循环")
                         break
 
@@ -383,7 +390,7 @@ class CompressionWorker:
                         # 检查预取器执行次数
                         prefetch_loop_count = getattr(self.file_group_prefetcher, 'prefetch_loop_count', 0) if self.file_group_prefetcher else 0
                         if prefetch_loop_count <= 0:
-                            logger.info(
+                            logger.debug(
                                 f"收到结束信号，但预取器执行次数为 {prefetch_loop_count}（需要 > 0），"
                                 f"继续等待..."
                             )
@@ -392,7 +399,7 @@ class CompressionWorker:
                         
                         # 等待所有正在运行的任务完成
                         if self.running_compression_futures:
-                            logger.info(f"收到结束信号，等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成...")
+                            logger.debug(f"收到结束信号，等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成...")
                             done, _ = await asyncio.wait(self.running_compression_futures)
                             # 处理所有已完成的任务（包括异常）
                             for task in done:
@@ -403,15 +410,15 @@ class CompressionWorker:
                             self.running_compression_futures.clear()
                         
                         # 在内存中设置压缩完成状态
-                        if hasattr(self.backup_task, 'compression_completed'):
-                            self.backup_task.compression_completed = True
+                        # 设置压缩完成标志（动态属性，无需 hasattr 检查）
+                        self.backup_task.compression_completed = True
                         logger.info("收到预取器结束信号，退出压缩循环")
                         break
                     
                     # 取第一个文件组（通常只有一个文件组）
                     if file_groups and len(file_groups) > 0:
                         file_group = file_groups[0]
-                        logger.info(f"[压缩循环] 从预取器获取文件组：{len(file_groups)} 个文件组，第一个文件组包含 {len(file_group)} 个文件")
+                        logger.debug(f"[压缩循环] 从预取器获取文件组：{len(file_groups)} 个文件组，第一个文件组包含 {len(file_group)} 个文件")
                     else:
                         logger.warning("预取器返回的文件组列表为空，跳过")
                         continue
@@ -445,7 +452,7 @@ class CompressionWorker:
                 
                 # 检查是否应该停止（在启动新任务前）
                 if not self._running:
-                    logger.info("收到停止信号，不再启动新的压缩任务")
+                    logger.debug("收到停止信号，不再启动新的压缩任务")
                     break
                 
                 # 启动压缩任务（并发执行，但每个任务内部顺序执行：压缩 → 标注 → 移动）
@@ -453,7 +460,7 @@ class CompressionWorker:
                     self._compress_file_group(file_group, current_group_idx, compress_progress)
                 )
                 self.running_compression_futures.append(compression_task)
-                logger.info(
+                logger.debug(
                     f"[压缩循环] ✅ 启动压缩任务 #{current_group_idx + 1}，"
                     f"当前运行中的任务数: {len(self.running_compression_futures)}/{self.parallel_batches}, "
                     f"队列大小: {self.file_group_prefetcher.file_group_queue.qsize()}/{self.file_group_prefetcher.queue_maxsize}"
@@ -483,10 +490,10 @@ class CompressionWorker:
                     await self._adjust_parallel_batches()
                 scan_status = await self._get_scan_status()
                 if scan_status != 'completed':
-                    logger.info(f"获取文件组超时，但扫描未完成（状态={scan_status}），继续等待...")
+                    logger.debug(f"获取文件组超时，但扫描未完成（状态={scan_status}），继续等待...")
                     # 如果有正在运行的任务，等待它们完成
                     if self.running_compression_futures:
-                        logger.info(f"等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成...")
+                        logger.debug(f"等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成...")
                         await asyncio.wait(self.running_compression_futures)
                         self.running_compression_futures.clear()
                     await asyncio.sleep(2)
@@ -494,20 +501,20 @@ class CompressionWorker:
                 else:
                     # 扫描已完成，等待所有正在运行的任务完成
                     if self.running_compression_futures:
-                        logger.info(f"扫描已完成，等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成...")
+                        logger.debug(f"扫描已完成，等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成...")
                         await asyncio.wait(self.running_compression_futures)
                         self.running_compression_futures.clear()
-                    logger.info("获取文件组超时，扫描已完成，退出压缩循环")
+                    logger.debug("获取文件组超时，扫描已完成，退出压缩循环")
                     break
             except Exception as e:
                 logger.error(f"处理文件组失败: {str(e)}", exc_info=True)
                 # 发生异常时也检查扫描状态
                 scan_status = await self._get_scan_status()
                 if scan_status != 'completed':
-                    logger.info(f"处理文件组异常，但扫描未完成（状态={scan_status}），继续等待...")
+                    logger.debug(f"处理文件组异常，但扫描未完成（状态={scan_status}），继续等待...")
                     # 如果有正在运行的任务，等待它们完成
                     if self.running_compression_futures:
-                        logger.info(f"等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成...")
+                        logger.debug(f"等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成...")
                         await asyncio.wait(self.running_compression_futures)
                         self.running_compression_futures.clear()
                     await asyncio.sleep(2)
@@ -515,7 +522,7 @@ class CompressionWorker:
                 else:
                     # 扫描已完成，等待所有正在运行的任务完成
                     if self.running_compression_futures:
-                        logger.info(f"扫描已完成，等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成...")
+                        logger.debug(f"扫描已完成，等待 {len(self.running_compression_futures)} 个正在运行的压缩任务完成...")
                         await asyncio.wait(self.running_compression_futures)
                         self.running_compression_futures.clear()
                     logger.error("处理文件组异常，扫描已完成，退出压缩循环")
@@ -523,7 +530,7 @@ class CompressionWorker:
         
         # 确保所有任务都已完成
         if self.running_compression_futures:
-            logger.info(f"等待剩余的 {len(self.running_compression_futures)} 个压缩任务完成...")
+            logger.debug(f"等待剩余的 {len(self.running_compression_futures)} 个压缩任务完成...")
             done, _ = await asyncio.wait(self.running_compression_futures)
             # 处理所有已完成的任务（包括异常）
             for task in done:
@@ -534,8 +541,7 @@ class CompressionWorker:
             self.running_compression_futures.clear()
         
         # 在内存中设置压缩完成状态
-        if hasattr(self.backup_task, 'compression_completed'):
-            self.backup_task.compression_completed = True
+        self.backup_task.compression_completed = True
         
         # 压缩完成日志：换行输出，与其他日志有明显差异
         logger.info("=" * 80)
@@ -794,7 +800,7 @@ class CompressionWorker:
                             
                             # 只在进度变化超过1%时记录日志，减少日志输出
                             if not hasattr(self, '_last_logged_progress') or abs(progress_percent - self._last_logged_progress) >= 1.0:
-                                logger.info(
+                                logger.debug(
                                     f"[压缩进度更新] 已处理: {compressed_count}/{total_files_to_process} 个文件 "
                                     f"({progress_percent:.1f}%) "
                                     f"[compressed_count={compressed_count}, total_files_to_process={total_files_to_process}]"
@@ -823,7 +829,7 @@ class CompressionWorker:
                     await asyncio.sleep(1.0)
                     
                 except asyncio.CancelledError:
-                    logger.info("[压缩进度更新] 收到取消信号，停止进度更新")
+                    logger.debug("[压缩进度更新] 收到取消信号，停止进度更新")
                     break
                 except Exception as e:
                     logger.warning(f"[压缩进度更新] 更新进度失败: {str(e)}", exc_info=True)
@@ -831,7 +837,7 @@ class CompressionWorker:
                     await asyncio.sleep(5.0)
                     
         except asyncio.CancelledError:
-            logger.info("[压缩进度更新] 进度更新任务被取消")
+            logger.debug("[压缩进度更新] 进度更新任务被取消")
         except Exception as e:
             logger.error(f"[压缩进度更新] 进度更新任务异常: {str(e)}", exc_info=True)
 
@@ -890,7 +896,7 @@ class CompressionWorker:
                 # 发生异常时检查扫描状态，如果扫描未完成，继续等待
                 scan_status = await self._get_scan_status()
                 if scan_status != 'completed':
-                    logger.info(f"处理文件组异常，但扫描未完成（状态={scan_status}），继续等待...")
+                    logger.debug(f"处理文件组异常，但扫描未完成（状态={scan_status}），继续等待...")
                     await asyncio.sleep(2)
                     continue
                 else:
@@ -903,7 +909,7 @@ class CompressionWorker:
         """压缩单个文件组（内部顺序执行：压缩完成 → 标注完成 → 移动到final → 返回，队列已消费）"""
         # 检查是否应该停止
         if not self._running:
-            logger.info(f"[#{group_idx + 1}] 收到停止信号，跳过压缩")
+            logger.debug(f"[#{group_idx + 1}] 收到停止信号，跳过压缩")
             return
         
         if not file_group:
@@ -993,7 +999,7 @@ class CompressionWorker:
 
             # 再次检查是否应该停止（在开始压缩前）
             if not self._running:
-                logger.info(f"[#{group_idx + 1}] 收到停止信号，取消压缩")
+                logger.debug(f"[#{group_idx + 1}] 收到停止信号，取消压缩")
                 return
             
             # 准备压缩目录
@@ -1011,7 +1017,7 @@ class CompressionWorker:
                 
                 # 压缩完成后检查是否应该停止
                 if not self._running:
-                    logger.info(f"[#{group_idx + 1}] 压缩完成，但收到停止信号，跳过后续处理")
+                    logger.debug(f"[#{group_idx + 1}] 压缩完成，但收到停止信号，跳过后续处理")
                     return
                 
                 # 压缩完成后，标记进度字典为完成状态
@@ -1081,7 +1087,7 @@ class CompressionWorker:
                                         tape_file_path=archive_path,
                                         chunk_number=chunk_number
                                     )
-                                    logger.info(f"[#{group_idx + 1}] ✅ 已更新 chunk_number={chunk_number}，文件数={len(processed_file_group)}")
+                                    logger.debug(f"[#{group_idx + 1}] ✅ 已更新 chunk_number={chunk_number}，文件数={len(processed_file_group)}")
                         except Exception as update_error:
                             logger.error(f"[#{group_idx + 1}] ⚠️ 提交压缩文件信息失败: {str(update_error)}", exc_info=True)
 

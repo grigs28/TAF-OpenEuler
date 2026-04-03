@@ -34,8 +34,8 @@ async def get_system_statistics(request: Request):
         # 4. 最近备份活动
         recent_backups = await _get_recent_backups(limit=5)
         
-        # 5. 存储使用趋势（最近30天）
-        storage_trend = await _get_storage_trend(days=30)
+        # 5. 存储使用趋势（最近12个月按月统计）
+        storage_trend = await _get_storage_trend(days=365)
         
         # 6. 成功率统计
         success_rate_stats = await _get_success_rate_statistics()
@@ -131,20 +131,6 @@ async def _get_storage_statistics() -> Dict[str, Any]:
     """获取存储统计"""
     try:
         async with get_opengauss_connection() as conn:
-            # 从备份集统计存储使用情况
-            result = await conn.fetchrow(
-                """
-                SELECT
-                    COALESCE(SUM(total_bytes), 0) as total_bytes,
-                    COALESCE(SUM(compressed_bytes), 0) as compressed_bytes
-                FROM backup_sets
-                WHERE LOWER(status::text) = LOWER('ACTIVE')
-                """
-            )
-
-            total_bytes = result['total_bytes'] or 0
-            compressed_bytes = result['compressed_bytes'] or 0
-
             # 从磁带统计总容量
             tape_result = await conn.fetchrow(
                 """
@@ -158,10 +144,35 @@ async def _get_storage_statistics() -> Dict[str, Any]:
             total_capacity = tape_result['total_capacity'] or 0
             used_capacity = tape_result['used_capacity'] or 0
 
-            # 如果没有磁带数据，使用备份集数据
+            # 如果磁带used_bytes为0，从备份任务和备份集综合计算已用存储
+            if used_capacity == 0:
+                # 优先从备份集统计（不限status）
+                set_result = await conn.fetchrow(
+                    """
+                    SELECT COALESCE(SUM(compressed_bytes), 0) as total_compressed
+                    FROM backup_sets
+                    """
+                )
+                compressed_from_sets = set_result['total_compressed'] or 0
+
+                if compressed_from_sets > 0:
+                    used_capacity = compressed_from_sets
+                else:
+                    # 从已执行过的备份任务统计（排除模板和未开始的任务）
+                    task_result = await conn.fetchrow(
+                        """
+                        SELECT COALESCE(SUM(total_bytes), 0) as total_bytes
+                        FROM backup_tasks
+                        WHERE is_template = FALSE
+                          AND started_at IS NOT NULL
+                          AND total_bytes > 0
+                        """
+                    )
+                    used_capacity = task_result['total_bytes'] or 0
+
+            # 如果没有磁带容量数据，使用已用存储估算
             if total_capacity == 0:
-                total_capacity = total_bytes * 2  # 估算总容量
-                used_capacity = compressed_bytes if compressed_bytes > 0 else total_bytes
+                total_capacity = used_capacity * 2 if used_capacity > 0 else 0
 
             usage_percent = (used_capacity / total_capacity * 100) if total_capacity > 0 else 0
 
@@ -212,31 +223,48 @@ async def _get_recent_backups(limit: int = 5) -> List[Dict[str, Any]]:
         return []
 
 
-async def _get_storage_trend(days: int = 30) -> List[Dict[str, Any]]:
-    """获取存储使用趋势"""
+async def _get_storage_trend(days: int = 365) -> List[Dict[str, Any]]:
+    """获取存储使用趋势（按月统计备份量）"""
     try:
         async with get_opengauss_connection() as conn:
-            # 按日期分组统计每天的存储使用量
             start_date = datetime.now() - timedelta(days=days)
+
+            # 优先从 backup_sets 统计（不限status，按月汇总压缩后大小）
             rows = await conn.fetch(
                 """
                 SELECT
-                    backup_time::date as backup_date,
-                    SUM(compressed_bytes) as daily_bytes
+                    DATE_TRUNC('month', backup_time)::date as backup_month,
+                    SUM(compressed_bytes) as monthly_bytes
                 FROM backup_sets
                 WHERE backup_time >= $1
-                  AND LOWER(status::text) = LOWER('ACTIVE')
-                GROUP BY backup_time::date
-                ORDER BY backup_date ASC
+                GROUP BY DATE_TRUNC('month', backup_time)
+                ORDER BY backup_month ASC
                 """,
                 start_date
             )
 
+            # 如果 backup_sets 没有数据，从 backup_tasks 统计
+            if not rows or all((r['monthly_bytes'] or 0) == 0 for r in rows):
+                rows = await conn.fetch(
+                    """
+                    SELECT
+                        DATE_TRUNC('month', started_at)::date as backup_month,
+                        SUM(total_bytes) as monthly_bytes
+                    FROM backup_tasks
+                    WHERE is_template = FALSE
+                      AND started_at >= $1
+                      AND total_bytes > 0
+                    GROUP BY DATE_TRUNC('month', started_at)
+                    ORDER BY backup_month ASC
+                    """,
+                    start_date
+                )
+
             trend = []
             for row in rows:
                 trend.append({
-                    "date": row['backup_date'].isoformat() if isinstance(row['backup_date'], datetime) else str(row['backup_date']),
-                    "bytes": row['daily_bytes'] or 0
+                    "date": row['backup_month'].isoformat() if isinstance(row['backup_month'], datetime) else str(row['backup_month']),
+                    "bytes": row['monthly_bytes'] or 0
                 })
 
             return trend
@@ -246,24 +274,27 @@ async def _get_storage_trend(days: int = 30) -> List[Dict[str, Any]]:
 
 
 async def _get_success_rate_statistics() -> Dict[str, Any]:
-    """获取成功率统计"""
+    """获取成功率统计（已完成的任务：completed=成功, failed/cancelled=未成功）"""
     try:
         async with get_opengauss_connection() as conn:
+            # 已结束的任务状态（排除 running/pending 等进行中状态）
+            finished_statuses = "('completed', 'failed', 'cancelled')"
+
             total = await conn.fetchval(
-                "SELECT COUNT(*) FROM backup_tasks WHERE is_template = FALSE AND status::text IN ('completed', 'failed')"
+                f"SELECT COUNT(*) FROM backup_tasks WHERE is_template = FALSE AND LOWER(status::text) IN {finished_statuses}"
             ) or 0
 
             success = await conn.fetchval(
-                "SELECT COUNT(*) FROM backup_tasks WHERE is_template = FALSE AND status::text = 'completed'"
+                "SELECT COUNT(*) FROM backup_tasks WHERE is_template = FALSE AND LOWER(status::text) = 'completed'"
             ) or 0
 
             # 本月统计
             this_month_start = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
             this_month_total = await conn.fetchval(
-                """
+                f"""
                 SELECT COUNT(*) FROM backup_tasks
                 WHERE is_template = FALSE
-                  AND status::text IN ('completed', 'failed')
+                  AND LOWER(status::text) IN {finished_statuses}
                   AND started_at >= $1
                 """,
                 this_month_start
@@ -273,7 +304,7 @@ async def _get_success_rate_statistics() -> Dict[str, Any]:
                 """
                 SELECT COUNT(*) FROM backup_tasks
                 WHERE is_template = FALSE
-                  AND status::text = 'completed'
+                  AND LOWER(status::text) = 'completed'
                   AND started_at >= $1
                 """,
                 this_month_start
@@ -282,10 +313,10 @@ async def _get_success_rate_statistics() -> Dict[str, Any]:
             # 上月统计
             last_month_start = (this_month_start - timedelta(days=1)).replace(day=1)
             last_month_total = await conn.fetchval(
-                """
+                f"""
                 SELECT COUNT(*) FROM backup_tasks
                 WHERE is_template = FALSE
-                  AND status::text IN ('completed', 'failed')
+                  AND LOWER(status::text) IN {finished_statuses}
                   AND started_at >= $1 AND started_at < $2
                 """,
                 last_month_start, this_month_start
@@ -295,7 +326,7 @@ async def _get_success_rate_statistics() -> Dict[str, Any]:
                 """
                 SELECT COUNT(*) FROM backup_tasks
                 WHERE is_template = FALSE
-                  AND status::text = 'completed'
+                  AND LOWER(status::text) = 'completed'
                   AND started_at >= $1 AND started_at < $2
                 """,
                 last_month_start, this_month_start
@@ -323,9 +354,9 @@ async def _get_success_rate_statistics() -> Dict[str, Any]:
 async def _get_system_uptime() -> int:
     """获取系统运行时间（秒）"""
     try:
-        # 这里可以从系统启动时间计算，暂时返回固定值
-        # 实际应该从系统启动时间或数据库记录中获取
-        return 86400  # 默认1天
+        from web.api.system.info import _SYSTEM_START_TIME
+        delta = datetime.now() - _SYSTEM_START_TIME
+        return int(delta.total_seconds())
     except Exception as e:
         logger.error(f"获取系统运行时间失败: {str(e)}")
         return 0

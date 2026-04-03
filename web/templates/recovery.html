@@ -1,1364 +1,1287 @@
 {% extends "base.html" %}
 
-{% block title %}{{ app_name }} - 数据恢复{% endblock %}
+{% block title %}{{ app_name }} - 磁带恢复{% endblock %}
 
 {% block extra_css %}
 <style>
-:root { --recoveryPaneHeight: 1200px; }
-.backup-set-card {
-    transition: all 0.3s ease;
-    border-left: 4px solid transparent;
-}
-.backup-set-card:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-}
-.backup-set-full { border-left-color: #28a745; }
-.backup-set-incremental { border-left-color: #007bff; }
-.backup-set-differential { border-left-color: #ffc107; }
+:root { --recoveryPaneHeight: 700px; }
 
-.file-tree {
-    min-height: 600px;
+/* 步骤指示器 */
+.step-indicator {
+    display: flex;
+    justify-content: center;
+    gap: 0;
+    margin-bottom: 1rem;
+}
+.step-tab {
+    padding: 8px 24px;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid rgba(0, 170, 255, 0.15);
+    cursor: default;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+}
+.step-tab:first-child { border-radius: 6px 0 0 6px; }
+.step-tab:last-child { border-radius: 0 6px 6px 0; }
+.step-tab + .step-tab { border-left: none; }
+.step-tab.active {
+    color: #fff;
+    background: rgba(0, 170, 255, 0.25);
+    border-color: var(--primary);
+}
+.step-tab.done {
+    color: var(--primary);
+    border-color: rgba(0, 170, 255, 0.4);
+}
+
+/* 步骤面板 */
+.step-panel { display: none; }
+.step-panel.visible { display: block; }
+
+/* 状态点 */
+.status-dot {
+    display: inline-block;
+    width: 10px; height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+}
+.status-dot.green { background: #00cc88; box-shadow: 0 0 6px rgba(0,204,136,0.5); }
+.status-dot.red { background: #ff4081; }
+.status-dot.gray { background: #555; }
+.status-dot.yellow { background: #ffaa00; animation: blink 1s infinite; }
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+/* 归档树 */
+.archive-tree {
+    min-height: 400px;
     max-height: var(--recoveryPaneHeight);
-    height: 600px;
     overflow-y: auto;
     border: 1px solid rgba(0, 170, 255, 0.2);
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 8px;
     background: rgba(13, 22, 38, 0.7);
-    color: var(--text-primary);
 }
-
-/* 文件树滚动条样式 */
-.file-tree::-webkit-scrollbar {
-    width: 8px;
-}
-.file-tree::-webkit-scrollbar-track {
-    background: rgba(13, 22, 38, 0.5);
-    border-radius: 4px;
-}
-.file-tree::-webkit-scrollbar-thumb {
-    background: rgba(0, 170, 255, 0.3);
-    border-radius: 4px;
-}
-.file-tree::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 170, 255, 0.5);
-}
-
-/* 文件树内的提示文本样式 */
-.file-tree .text-center.text-muted {
-    color: var(--text-secondary) !important;
-}
-
-.file-tree .alert {
-    background: rgba(13, 22, 38, 0.8);
-    border-color: rgba(0, 170, 255, 0.3);
-    color: var(--text-primary);
-}
-
-.file-tree .alert-danger {
-    background: rgba(255, 85, 119, 0.2);
-    border-color: var(--danger);
-    color: var(--danger);
-}
-
-/* 确保恢复页面有足够的高度 */
-.console-panel {
-    min-height: calc(100vh - 200px);
-}
-
-/* 文件浏览器区域 */
-.service-card .card-body {
-    min-height: 600px;
-}
+.archive-tree::-webkit-scrollbar { width: 6px; }
+.archive-tree::-webkit-scrollbar-track { background: transparent; }
+.archive-tree::-webkit-scrollbar-thumb { background: rgba(0,170,255,0.3); border-radius: 3px; }
 
 .tree-node {
-    padding: 4px 8px;
+    padding: 5px 10px;
     cursor: pointer;
-    transition: background-color 0.2s;
-    color: var(--text-primary);
+    transition: background 0.2s;
     border-radius: 4px;
-    margin: 2px 0;
-}
-.tree-node:hover {
-    background-color: rgba(0, 170, 255, 0.15);
-    color: var(--primary-light);
-}
-.tree-node.selected {
-    background-color: rgba(0, 170, 255, 0.25);
-    color: var(--primary-light);
-}
-
-/* 树节点文本颜色 */
-.tree-node span {
+    margin: 1px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
     color: var(--text-primary);
 }
-.tree-node:hover span {
-    color: var(--primary-light);
+.tree-node:hover { background: rgba(0, 170, 255, 0.12); }
+.tree-node .tree-children { padding-left: 24px; }
+
+/* 进度条 */
+.recovery-progress {
+    height: 20px;
+    background: rgba(0,0,0,0.3);
+    border-radius: 10px;
+    overflow: hidden;
 }
-.tree-node.selected span {
-    color: var(--primary-light);
+.recovery-progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #00aaff, #00cc88);
+    border-radius: 10px;
+    transition: width 0.3s;
 }
 
-/* 树节点小文本（文件大小） */
-.tree-node small {
-    color: var(--text-secondary);
+/* 恢复模式卡片 */
+.card-recovery-mode {
+    cursor: pointer;
+    transition: all 0.2s;
+    border-color: rgba(255,255,255,0.1);
 }
-.tree-node:hover small {
-    color: var(--text-secondary);
-}
-
-/* 树节点图标颜色 */
-.tree-node i {
-    color: var(--text-secondary);
-}
-.tree-node:hover i {
-    color: var(--primary-light);
-}
-.tree-node.selected i {
-    color: var(--primary-light);
+.card-recovery-mode:hover {
+    border-color: rgba(0, 170, 255, 0.5);
+    background: rgba(0, 170, 255, 0.05);
 }
 
-/* 复选框样式 */
-.tree-node input[type="checkbox"] {
-    accent-color: var(--primary);
+/* 模态遮罩 */
+.modal-overlay {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    display: flex; align-items: center; justify-content: center;
+    z-index: 1050;
+}
+.modal-overlay.hidden { display: none; }
+.progress-modal {
+    background: var(--card-bg, #1a1f2e);
+    border: 1px solid rgba(0,170,255,0.3);
+    border-radius: 8px;
+    padding: 1.5rem;
+    min-width: 400px;
+    max-width: 600px;
 }
 
-/* 展开/折叠按钮颜色 */
-.tree-toggle {
-    color: var(--text-secondary);
+/* 备份集卡片 */
+.backup-set-card {
+    padding: 12px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid rgba(0,170,255,0.15);
+    transition: all 0.2s;
+    margin-bottom: 8px;
 }
-.tree-toggle:hover {
-    color: var(--primary-light);
+.backup-set-card:hover {
+    border-color: var(--primary);
+    background: rgba(0,170,255,0.08);
+}
+.backup-set-card.selected {
+    border-color: var(--primary);
+    background: rgba(0,170,255,0.15);
 }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="console-panel">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h5 class="mb-0">
-            <i class="bi bi-cloud-download me-2"></i>数据恢复
-        </h5>
-        <button class="btn btn-success" id="startRecoveryBtn" disabled>
-            <i class="bi bi-play-circle me-2"></i>开始恢复
-        </button>
+    <h5 class="mb-3"><i class="bi bi-arrow-counterclockwise me-2"></i>磁带数据恢复</h5>
+
+    <!-- 步骤指示器 -->
+    <div class="step-indicator">
+        <div class="step-tab active" id="stepTab1">1. 检测磁带</div>
+        <div class="step-tab" id="stepTab2">2. 扫描内容</div>
+        <div class="step-tab" id="stepTab3">3. 选择文件</div>
+        <div class="step-tab" id="stepTab4">4. 执行恢复</div>
     </div>
 
-    <div class="row">
-        <!-- 备份集时间轴 -->
-        <div class="col-lg-4">
-            <div class="service-card">
-                <div class="card-body">
-                    <h6 class="mb-2">
-                        <i class="bi bi-calendar-event me-2"></i>
-                        备份集时间轴
-                    </h6>
-                    <!-- 当前备份集信息（移动到时间轴区域） -->
-                    <div class="alert alert-info py-2 mb-3">
-                        <strong>当前备份集:</strong>
-                        <span id="currentBackupName">完整备份 (2025-10-01 02:00)</span>
-                        <button class="btn btn-sm btn-outline-secondary float-end" id="changeBackupBtn">
-                            <i class="bi bi-arrow-left-right me-1"></i>切换
+    <!-- 磁带状态栏（始终可见） -->
+    <div class="service-card mb-3" style="padding: 0.8rem 1.2rem;">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <div class="d-flex align-items-center gap-3 flex-wrap" style="font-size: 0.85rem;">
+                <span>
+                    <span class="status-dot gray" id="tapeDot"></span>
+                    <strong>磁带:</strong> <span id="tapeStatusText">检测中...</span>
+                </span>
+                <span class="text-muted">|</span>
+                <span>
+                    <span class="status-dot gray" id="ltfsDot"></span>
+                    <strong>LTFS:</strong> <span id="ltfsStatusText">检测中...</span>
+                </span>
+                <span class="text-muted">|</span>
+                <span><strong>设备:</strong> <span id="tapeDevice">-</span></span>
+                <span class="text-muted">|</span>
+                <span><strong>卷标:</strong> <span id="tapeLabel">-</span></span>
+                <span class="text-muted">|</span>
+                <span><strong>挂载点:</strong> <span id="ltfsMountPoint">-</span></span>
+            </div>
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-secondary btn-sm" id="refreshBtn">
+                    <i class="bi bi-arrow-clockwise me-1"></i>刷新
+                </button>
+                <button class="btn btn-outline-secondary btn-sm" id="mountBtn" disabled>
+                    <i class="bi bi-link-45deg me-1"></i>挂载
+                </button>
+                <button class="btn btn-outline-secondary btn-sm" id="remountBtn" disabled>
+                    <i class="bi bi-arrow-repeat me-1"></i>重新挂载
+                </button>
+                <button class="btn btn-outline-secondary btn-sm" id="ejectBtn" disabled>
+                    <i class="bi bi-eject me-1"></i>弹出
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====== 步骤1: 磁带检测 ====== -->
+    <div class="step-panel visible" id="step1">
+        <div class="service-card" style="padding: 1.2rem;">
+            <div class="text-center text-muted py-4">
+                <i class="bi bi-hdd me-2" style="font-size: 1.5rem;"></i>
+                <p class="mb-0">请先挂载磁带以继续操作</p>
+                <small>点击上方"挂载"按钮开始</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====== 步骤2: 扫描磁带 ====== -->
+    <div class="step-panel" id="step2">
+        <div class="service-card" style="padding: 1.2rem;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h6 class="mb-0"><i class="bi bi-search me-2"></i>扫描磁带内容</h6>
+                <button class="btn btn-outline-secondary btn-sm" id="scanBtn">
+                    <i class="bi bi-search me-1"></i>扫描磁带
+                </button>
+            </div>
+            <div id="scanResult">
+                <div class="text-center text-muted py-3">点击"扫描磁带"发现备份集</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ====== 步骤3: 选择文件 ====== -->
+    <div class="step-panel" id="step3">
+        <div class="row">
+            <div class="col-lg-8">
+                <div class="service-card" style="padding: 1rem;">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="mb-0">
+                            <i class="bi bi-folder2-open me-2"></i>归档内容
+                            <small class="text-muted ms-2" id="contentInfo"></small>
+                        </h6>
+                        <div class="d-flex gap-2" id="selectionBtns" style="display: none;">
+                            <button class="btn btn-outline-secondary btn-sm" id="selectAllBtn" title="全选">
+                                <i class="bi bi-check-all me-1"></i>全选
+                            </button>
+                            <button class="btn btn-outline-secondary btn-sm" id="deselectAllBtn" title="取消全选">
+                                <i class="bi bi-x-lg me-1"></i>取消
+                            </button>
+                        </div>
+                    </div>
+                    <!-- 选中摘要 -->
+                    <div class="alert alert-info py-1 px-2 mb-2" id="selectionSummary" style="display: none; font-size: 0.8rem;">
+                        <i class="bi bi-check2-square me-1"></i>
+                        <span id="selectionText">未选择文件</span>
+                        <span class="ms-3"><span id="statArchives">0</span> 个归档</span>
+                        <span class="ms-2"><span id="statFiles">0</span> 个文件</span>
+                        <span class="ms-2"><span id="statSize">0 B</span></span>
+                    </div>
+                    <!-- 搜索框 -->
+                    <div class="input-group input-group-sm mb-2">
+                        <input type="text" class="form-control" placeholder="搜索文件名..." id="fileSearchInput">
+                        <button class="btn btn-outline-secondary" type="button" id="fileSearchClearBtn" title="清除" style="display: none;">
+                            <i class="bi bi-x"></i>
                         </button>
                     </div>
-                    <!-- 月份选择 -->
-                    <div class="mb-3">
-                        <select class="form-select" id="monthSelect">
-                            <option value="">加载中...</option>
-                        </select>
-                    </div>
-
-                    <!-- 备份集列表 -->
-                    <div class="backup-timeline">
+                    <div class="archive-tree" id="fileTree">
                         <div class="text-center text-muted py-5">
-                            <i class="bi bi-hourglass-split me-2"></i>正在加载备份集...
+                            <i class="bi bi-info-circle me-2"></i>选择备份集后显示归档内容
                         </div>
+                    </div>
+                    <div class="mt-3 text-end">
+                        <button class="btn btn-outline-secondary btn-sm" id="goToRestoreBtn" disabled>
+                            <i class="bi bi-arrow-right me-1"></i>下一步：恢复配置
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <!-- 备份集列表 -->
+            <div class="col-lg-4">
+                <div class="service-card" style="padding: 1rem;">
+                    <h6 class="mb-2"><i class="bi bi-collection me-2"></i>备份集</h6>
+                    <div id="backupSetList">
+                        <div class="text-center text-muted py-3">扫描后显示备份集</div>
+                    </div>
+                    <!-- 扫描日志 -->
+                    <div id="scanLogSection" style="display: none;">
+                        <h6 class="mb-2 mt-3"><i class="bi bi-terminal me-2"></i>扫描日志</h6>
+                        <div id="scanLog" style="max-height: 300px; overflow-y: auto; font-size: 0.78rem; font-family: monospace; background: rgba(0,0,0,0.4); border: 1px solid rgba(0,170,255,0.15); border-radius: 4px; padding: 8px;"></div>
                     </div>
                 </div>
             </div>
         </div>
+    </div>
 
-        <!-- 文件浏览器 -->
-        <div class="col-lg-8">
-            <div class="service-card">
-                <div class="card-body">
-                    <h6 class="mb-3">
-                        <i class="bi bi-folder-open me-2"></i>
-                        文件浏览器
-                    </h6>
-                    <!-- 当前备份集信息已移动到左侧时间轴区域 -->
+    <!-- ====== 步骤4: 恢复执行 ====== -->
+    <div class="step-panel" id="step4">
+        <div class="service-card" style="padding: 1.2rem;">
+            <h6 class="mb-3"><i class="bi bi-gear me-2"></i>恢复配置</h6>
 
-                    <!-- 搜索和筛选 -->
-                    <div class="row mb-3">
-                        <div class="col-md-8">
-                            <div class="input-group">
-                                <input type="text" class="form-control" placeholder="搜索文件或文件夹..." id="fileSearch">
-                                <button class="btn btn-outline-secondary" type="button">
-                                    <i class="bi bi-search"></i>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <select class="form-select" id="fileTypeFilter">
-                                <option>所有文件</option>
-                                <option>仅显示文件</option>
-                                <option>仅显示文件夹</option>
-                            </select>
+            <!-- 恢复模式选择 -->
+            <div class="mb-3">
+                <label class="form-label" style="font-size: 0.85rem;"><strong>恢复方式</strong></label>
+                <div class="row g-2">
+                    <div class="col-md-4">
+                        <div class="form-check card-recovery-mode p-2 rounded border">
+                            <input class="form-check-input" type="radio" name="recoveryMode" id="modeServer" value="server" checked>
+                            <label class="form-check-label w-100" for="modeServer" style="font-size: 0.85rem; cursor: pointer;">
+                                <i class="bi bi-hdd me-1 text-info"></i>
+                                <strong>解压到服务器</strong>
+                                <br><small class="text-muted">解压到服务器指定目录</small>
+                            </label>
                         </div>
                     </div>
-
-                    <!-- 文件树 -->
-                    <div class="file-tree" id="fileTree">
-                        <div class="text-center text-muted py-5">
-                            <i class="bi bi-info-circle me-2"></i>请先选择备份集
+                    <div class="col-md-4">
+                        <div class="form-check card-recovery-mode p-2 rounded border">
+                            <input class="form-check-input" type="radio" name="recoveryMode" id="modeZip" value="zip">
+                            <label class="form-check-label w-100" for="modeZip" style="font-size: 0.85rem; cursor: pointer;">
+                                <i class="bi bi-file-earmark-zip me-1 text-success"></i>
+                                <strong>打包ZIP下载</strong>
+                                <br><small class="text-muted">打包成ZIP下载到本机</small>
+                            </label>
                         </div>
                     </div>
-
-                    <!-- 选中文件统计 -->
-                    <div class="mt-3 p-3 service-card rounded">
-                        <div class="row">
-                            <div class="col-md-3">
-                                <strong>选中文件:</strong>
-                                <span class="text-primary" id="selectedCount">0</span>
-                            </div>
-                            <div class="col-md-3">
-                                <strong>总大小:</strong>
-                                <span id="selectedSize">0 KB</span>
-                            </div>
-                            <div class="col-md-3">
-                                <strong>包含文件夹:</strong>
-                                <span id="folderCount">0</span>
-                            </div>
-                            <div class="col-md-3">
-                                <button class="btn btn-sm btn-outline-primary" id="selectAllBtn">
-                                    <i class="bi bi-check-square me-1"></i>全选
-                                </button>
-                                <button class="btn btn-sm btn-outline-secondary" id="clearSelectionBtn">
-                                    <i class="bi bi-x-circle me-1"></i>清除
-                                </button>
-                            </div>
-                        </div>
-                        <!-- 选中文件列表 -->
-                        <div class="mt-3">
-                            <div class="list-group" id="selectedFilesList" style="max-height: var(--recoveryPaneHeight); overflow-y: auto;"></div>
-                        </div>
-                    </div>
-
-                    <!-- 恢复选项 -->
-                    <hr class="my-4">
-                    <h6 class="mb-3">
-                        <i class="bi bi-gear me-2"></i>
-                        恢复选项
-                    </h6>
-                    <div class="row">
-                        <div class="col-md-6">
-                            <label class="form-label">恢复目标路径 <small class="text-muted ms-2">文件将恢复到此目录</small></label>
-                            <div class="input-group">
-                                <input type="text" class="form-control" value="/tmp/recovery" id="recoveryPath">
-                                <button class="btn btn-outline-secondary" type="button" id="browseRecoveryPathBtn">
-                                    <i class="bi bi-folder2-open me-1"></i>浏览
-                                </button>
-                            </div>
-                        </div>
-                        <div class="col-md-6">
-                            <label class="form-label">覆盖选项</label>
-                            <select class="form-select" id="overwriteOption">
-                                <option value="ask">询问是否覆盖</option>
-                                <option value="skip">跳过已存在的文件</option>
-                                <option value="overwrite">覆盖所有文件</option>
-                            </select>
-                        </div>
-                    </div>
-                    <div class="row mt-3">
-                        <div class="col-md-4">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="preservePerms" checked>
-                                <label class="form-check-label" for="preservePerms">保留文件权限</label>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="verifyIntegrity" checked>
-                                <label class="form-check-label" for="verifyIntegrity">验证文件完整性</label>
-                            </div>
-                        </div>
-                        <div class="col-md-4">
-                            <div class="form-check">
-                                <input class="form-check-input" type="checkbox" id="sendNotification" checked>
-                                <label class="form-check-label" for="sendNotification">发送完成通知</label>
-                            </div>
+                    <div class="col-md-4">
+                        <div class="form-check card-recovery-mode p-2 rounded border">
+                            <input class="form-check-input" type="radio" name="recoveryMode" id="modeRaw" value="raw">
+                            <label class="form-check-label w-100" for="modeRaw" style="font-size: 0.85rem; cursor: pointer;">
+                                <i class="bi bi-box-arrow-down me-1 text-warning"></i>
+                                <strong>下载原始归档</strong>
+                                <br><small class="text-muted">直接下载zstd归档文件</small>
+                            </label>
                         </div>
                     </div>
                 </div>
             </div>
+
+            <!-- 模式1: 服务器解压选项 -->
+            <div id="serverModeOptions">
+                <div class="row mb-3">
+                    <div class="col-md-8">
+                        <label class="form-label" style="font-size: 0.85rem;">目标路径</label>
+                        <div class="input-group input-group-sm">
+                            <input type="text" class="form-control" id="targetPath" value="/tmp/recovery">
+                            <button class="btn btn-outline-secondary" type="button" id="browseTargetBtn" title="浏览目录">
+                                <i class="bi bi-folder2-open me-1"></i>浏览
+                            </button>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" style="font-size: 0.85rem;">覆盖选项</label>
+                        <select class="form-select form-select-sm" id="overwriteOption">
+                            <option value="skip">跳过已存在文件</option>
+                            <option value="overwrite">覆盖所有文件</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="mb-3">
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="preservePerms" checked>
+                        <label class="form-check-label" for="preservePerms" style="font-size: 0.85rem;">保留权限</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="checkbox" id="verifyIntegrity" checked>
+                        <label class="form-check-label" for="verifyIntegrity" style="font-size: 0.85rem;">验证完整性</label>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 模式2/3: 下载提示 -->
+            <div id="downloadModeOptions" style="display: none;">
+                <div class="alert alert-info py-2 mb-3" style="font-size: 0.85rem;">
+                    <i class="bi bi-info-circle me-1"></i>
+                    <span id="downloadModeHint">选中的文件将打包为 ZIP 下载到本机</span>
+                </div>
+            </div>
+
+            <div class="alert alert-secondary py-2 mb-3" style="font-size: 0.85rem;">
+                <strong>将恢复:</strong> <span id="restoreSummary">未选择备份集</span>
+            </div>
+
+            <button class="btn btn-outline-secondary w-100 mb-3" id="startRestoreBtn" disabled>
+                <i class="bi bi-play-circle me-2"></i>开始恢复
+            </button>
+
+            <!-- 进度条 -->
+            <div id="progressSection" style="display: none;">
+                <div class="d-flex justify-content-between mb-1" style="font-size: 0.85rem;">
+                    <span id="progressLabel">恢复进度</span>
+                    <span id="progressPercent">0%</span>
+                </div>
+                <div class="recovery-progress">
+                    <div class="recovery-progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+                <div class="text-muted mt-1" style="font-size: 0.8rem;" id="progressDetail">等待开始...</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 操作进度模态框（挂载/弹出） -->
+    <div class="modal-overlay hidden" id="opsModal">
+        <div class="progress-modal" style="min-width: 550px; max-width: 650px;">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h6 class="mb-0" id="opsModalTitle">操作中...</h6>
+                <button class="btn btn-outline-secondary btn-sm" id="opsModalClose" style="display: none;">
+                    <i class="bi bi-x-lg"></i>
+                </button>
+            </div>
+            <div id="opsModalSteps" style="font-size: 0.85rem;"></div>
+            <div id="opsModalOutput" class="mt-2" style="max-height: 350px; overflow-y: auto; font-size: 0.8rem; color: #aaa; background: rgba(0,0,0,0.4); padding: 10px; border-radius: 6px; font-family: monospace;"></div>
         </div>
     </div>
 </div>
 
-<style>
-.backup-timeline {
-    flex: 1;
-    overflow-y: auto;
-    max-height: var(--recoveryPaneHeight);
-    margin-left: -25px;
-    margin-right: -25px;
-    padding-left: 25px;
-    padding-right: 25px;
-}
-
-.backup-set-card {
-    cursor: pointer;
-    background: var(--card-bg);
-    color: var(--text-primary);
-}
-.backup-set-card.selected {
-    background-color: rgba(0, 170, 255, 0.2) !important;
-    border-color: var(--primary) !important;
-    border-width: 2px !important;
-    color: var(--text-primary) !important;
-}
-.backup-set-card.selected h6,
-.backup-set-card.selected small,
-.backup-set-card.selected span,
-.backup-set-card.selected .badge {
-    color: var(--text-primary) !important;
-}
-
-/* 目录树竖向展示样式 */
-.tree-node {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 2px 0;
-    margin: 0;
-    color: var(--text-primary);
-    width: 100%;
-    box-sizing: border-box;
-}
-
-/* 节点内容行（横向） */
-.tree-node > div:first-child {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    padding: 4px 8px;
-    border-radius: 4px;
-    transition: background-color 0.2s;
-}
-
-.tree-node:hover > div:first-child {
-    background-color: rgba(0, 170, 255, 0.15);
-    color: var(--primary-light);
-}
-
-.tree-node.selected > div:first-child {
-    background-color: rgba(0, 170, 255, 0.25);
-    color: var(--primary-light);
-}
-
-.tree-node.expanded > .tree-toggle {
-    transform: rotate(90deg);
-}
-
-.tree-toggle {
-    width: 16px;
-    height: 16px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    margin-right: 4px;
-    cursor: pointer;
-    transition: transform 0.2s, color 0.2s;
-    color: var(--text-secondary);
-    flex-shrink: 0;
-}
-
-.tree-toggle:hover {
-    color: var(--primary-light);
-}
-
-/* 子节点容器 - 竖向排列，通过左侧缩进显示层级 */
-.tree-children {
-    display: none;
-    width: 100%;
-    padding-left: 20px;
-    margin-left: 0;
-    box-sizing: border-box;
-    position: relative;
-}
-
-/* 子节点左侧连接线 */
-.tree-children::before {
-    content: '';
-    position: absolute;
-    left: 8px;
-    top: 0;
-    bottom: 0;
-    width: 1px;
-    background: rgba(0, 170, 255, 0.2);
-}
-
-.tree-node.expanded > .tree-children {
-    display: block;
-}
-
-/* 确保所有层级的节点都是竖向排列 */
-.tree-children .tree-node {
-    width: 100%;
-    margin: 0;
-    padding: 0;
-}
-
-.tree-node.leaf > .tree-toggle {
-    visibility: hidden;
-    width: 16px;
-}
-
-/* 节点内容区域 */
-.tree-node-content {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    flex: 1;
-    min-width: 0;
-}
-
-/* 文件名和大小 */
-.tree-node-content > span:not(.tree-toggle):not(small) {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.tree-node-content > small {
-    flex-shrink: 0;
-    margin-left: auto;
-}
-</style>
 <script>
-// 恢复页文件树与选中列表联动
 (function() {
-    const treeRoot = document.getElementById('fileTree');
-    if (!treeRoot) return;
+    // ============ 状态 ============
+    var selectedSetId = null;
+    var allArchiveData = {};   // { archiveName: [entries] }
+    var selectedFilesMap = {}; // { archiveName: null|[file1,file2] }  null=全部
+    var currentRecoveryId = null;
+    var statusPollTimer = null;
 
-    const selectedCountEl = document.getElementById('selectedCount');
-    const selectedSizeEl = document.getElementById('selectedSize');
-    const folderCountEl = document.getElementById('folderCount');
-    const listEl = document.getElementById('selectedFilesList');
-    const selectAllBtn = document.getElementById('selectAllBtn');
-    const clearSelectionBtn = document.getElementById('clearSelectionBtn');
-    const monthSelect = document.getElementById('monthSelect');
-    const changeBackupBtn = document.getElementById('changeBackupBtn');
-    const timeline = document.querySelector('.backup-timeline');
-    const currentBackupNameEl = document.getElementById('currentBackupName');
-    const startRecoveryBtn = document.getElementById('startRecoveryBtn');
-    const fileSearch = document.getElementById('fileSearch');
-    const fileTypeFilter = document.getElementById('fileTypeFilter');
-
-    let autoId = 1;
-    const fileIndex = new Map(); // id -> {el,type,sizeBytes,children:[],name}
-    const selectedFiles = new Set(); // only files
-    const selectedFolders = new Set();
-    let currentBackupSetId = null;
-    // 注意：已改为按需加载，不再存储所有文件数据
-
-    // 格式化字节大小
-    function formatBytes(b){
-        const units = ['B','KB','MB','GB','TB'];
-        let i=0; let v=b;
-        while (v>=1024 && i<units.length-1){ v/=1024; i++; }
-        return (i===0? v : v.toFixed(1)) + ' ' + units[i];
-    }
-
-    function bytesFromText(txt){
-        if (!txt) return 0;
-        const m = String(txt).trim().match(/([0-9]+(?:\.[0-9]+)?)\s*(KB|MB|GB|TB|B)/i);
-        if (!m) return 0;
-        const n = parseFloat(m[1]);
-        const unit = m[2].toUpperCase();
-        const mul = {B:1, KB:1024, MB:1024**2, GB:1024**3, TB:1024**4}[unit]||1;
-        return Math.round(n*mul);
-    }
-
-    // 从API加载备份组列表
-    async function loadBackupGroups() {
-        try {
-            const response = await fetch('/api/recovery/backup-groups');
-            const data = await response.json();
-            const groups = data.backup_groups || [];
-            
-            // 更新月份选择下拉框
-            monthSelect.innerHTML = '';
-            groups.forEach(group => {
-                const option = document.createElement('option');
-                const [year, month] = group.split('-');
-                option.value = group;
-                option.textContent = `${year}年${parseInt(month)}月`;
-                monthSelect.appendChild(option);
-            });
-            
-            // 默认选择第一个月份
-            if (groups.length > 0) {
-                monthSelect.value = groups[0];
-                await loadBackupSets(groups[0]);
-            }
-        } catch (error) {
-            console.error('加载备份组失败:', error);
-        }
-    }
-
-    // 从API加载备份集列表
-    async function loadBackupSets(backupGroup) {
-        try {
-            const response = await fetch(`/api/recovery/backup-sets?backup_group=${encodeURIComponent(backupGroup)}`);
-            const data = await response.json();
-            const backupSets = data.backup_sets || [];
-            
-            // 清空时间轴
-            timeline.innerHTML = '';
-            
-            if (backupSets.length === 0) {
-                timeline.innerHTML = '<div class="alert alert-info">该月份暂无备份集</div>';
-                return;
-            }
-            
-            // 渲染备份集卡片
-            backupSets.forEach(backupSet => {
-                const card = document.createElement('div');
-                card.className = `backup-set-card backup-set-${getBackupTypeClass(backupSet.backup_type)} mb-3 p-3`;
-                card.dataset.backupId = backupSet.set_id;
-                
-                const backupTime = new Date(backupSet.backup_time);
-                const timeStr = backupTime.toLocaleString('zh-CN', { 
-                    year: 'numeric', month: '2-digit', day: '2-digit', 
-                    hour: '2-digit', minute: '2-digit' 
-                });
-                
-                card.innerHTML = `
-                    <div class="d-flex justify-content-between align-items-start">
-                        <div class="flex-grow-1" style="cursor: pointer;">
-                            <h6 class="mb-1">${getBackupTypeName(backupSet.backup_type)}</h6>
-                            <small class="text-muted">${timeStr}</small>
-                            <div class="mt-2">
-                                <small class="text-muted">磁带: </small>
-                                <span class="badge bg-secondary">${backupSet.tape_id || 'N/A'}</span>
-                            </div>
-                            <div class="mt-1">
-                                <small class="text-muted">大小: </small>
-                                <span>${formatBytes(backupSet.total_bytes || 0)}</span>
-                            </div>
-                        </div>
-                        <div class="text-end">
-                            <span class="badge ${getBackupTypeBadge(backupSet.backup_type)}">${getBackupTypeShortName(backupSet.backup_type)}</span>
-                            <button class="btn btn-sm btn-outline-danger mt-2" onclick="event.stopPropagation(); deleteBackupSet('${backupSet.set_id}')" title="删除备份集">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                        </div>
-                    </div>
-                `;
-                
-                // 点击选择备份集
-                card.addEventListener('click', function(e) {
-                    // 如果点击的是删除按钮，不触发选择
-                    if (e.target.closest('button')) {
-                        return;
-                    }
-                    timeline.querySelectorAll('.backup-set-card.selected').forEach(c=>c.classList.remove('selected'));
-                    this.classList.add('selected');
-                    currentBackupSetId = backupSet.set_id;
-                    const title = this.querySelector('h6')?.textContent?.trim() || '';
-                    const time = this.querySelector('small.text-muted')?.textContent?.trim() || '';
-                    if (currentBackupNameEl){ 
-                        currentBackupNameEl.textContent = title + (time? ' ('+time+')':''); 
-                    }
-                    loadBackupSetFiles(backupSet.set_id);
-                });
-                
-                timeline.appendChild(card);
-            });
-            
-            // 默认选择第一个备份集
-            if (backupSets.length > 0) {
-                const firstCard = timeline.querySelector('.backup-set-card');
-                if (firstCard) {
-                    firstCard.click();
-                }
-            }
-        } catch (error) {
-            console.error('加载备份集失败:', error);
-            timeline.innerHTML = '<div class="alert alert-danger">加载备份集失败: ' + error.message + '</div>';
-        }
-    }
-
-    // 删除备份集
-    async function deleteBackupSet(setId) {
-        if (!confirm(`确定要删除备份集 ${setId} 吗？\n\n此操作将删除备份集及其所有文件记录，且不可恢复！`)) {
-            return;
-        }
-        
-        try {
-            const response = await fetch(`/api/backup/backup-sets/${encodeURIComponent(setId)}`, {
-                method: 'DELETE'
-            });
-            
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({ detail: response.statusText }));
-                throw new Error(errorData.detail || `HTTP错误: ${response.status}`);
-            }
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                alert(`备份集 ${setId} 删除成功`);
-                // 重新加载备份集列表
-                const monthSelect = document.getElementById('monthSelect');
-                if (monthSelect && monthSelect.value) {
-                    loadBackupSets(monthSelect.value);
-                }
-                // 清空文件树
-                if (typeof treeRoot !== 'undefined') {
-                    treeRoot.innerHTML = '<div class="text-center text-muted py-3">请选择一个备份集</div>';
-                }
-                // 重置当前备份集
-                currentBackupSetId = null;
-                if (currentBackupNameEl) {
-                    currentBackupNameEl.textContent = '未选择';
-                }
+    // ============ 步骤导航 ============
+    function goToStep(n) {
+        for (var i = 1; i <= 4; i++) {
+            var panel = document.getElementById('step' + i);
+            var tab = document.getElementById('stepTab' + i);
+            if (i === n) {
+                panel.classList.add('visible');
+                tab.classList.add('active');
             } else {
-                alert(`删除失败: ${result.message || '未知错误'}`);
-            }
-        } catch (error) {
-            console.error('删除备份集失败:', error);
-            alert('删除备份集失败: ' + error.message);
-        }
-    }
-
-    // 从API加载备份集顶层目录（优化性能，按需加载）
-    async function loadBackupSetFiles(backupSetId) {
-        try {
-            console.log('开始加载顶层目录，备份集ID:', backupSetId);
-            treeRoot.innerHTML = '<div class="text-center text-muted py-3"><i class="bi bi-hourglass-split me-2"></i>正在加载目录结构...</div>';
-            
-            const url = `/api/recovery/backup-sets/${encodeURIComponent(backupSetId)}/top-level`;
-            console.log('请求URL:', url);
-            const response = await fetch(url);
-            
-            if (!response.ok) {
-                throw new Error(`HTTP错误: ${response.status} ${response.statusText}`);
-            }
-            
-            const data = await response.json();
-            console.log('API返回数据:', data);
-            const items = data.items || [];
-            console.log('顶层目录项数量:', items.length);
-            
-            // 清空文件树和索引
-            treeRoot.innerHTML = '';
-            fileIndex.clear();
-            autoId = 1;
-            selectedFiles.clear();
-            selectedFolders.clear();
-            refreshStatsAndList();
-            
-            // 渲染顶层目录
-            if (items.length === 0) {
-                treeRoot.innerHTML = '<div class="text-center text-muted py-3">该备份集没有文件</div>';
-                return;
-            }
-            
-            console.log('开始渲染顶层节点，数量:', items.length);
-            items.forEach(item => {
-                renderTopLevelNode(item, backupSetId);
-            });
-            console.log('顶层节点渲染完成');
-            
-            // 自动展开 D: 目录并显示下一级
-            setTimeout(() => {
-                const dDriveNode = Array.from(treeRoot.querySelectorAll('.tree-node')).find(node => {
-                    const nameSpan = node.querySelector('span:not(.tree-toggle):not(small)');
-                    return nameSpan && nameSpan.textContent.trim() === 'D:';
-                });
-                if (dDriveNode) {
-                    console.log('找到 D: 目录，自动展开');
-                    toggleNode(dDriveNode);
-                }
-            }, 100);
-        } catch (error) {
-            console.error('加载目录结构失败:', error);
-            treeRoot.innerHTML = '<div class="alert alert-danger">加载目录结构失败: ' + error.message + '</div>';
-        }
-    }
-    
-    // 渲染顶层节点
-    function renderTopLevelNode(item, backupSetId) {
-        const isDir = item.type === 'directory';
-        const hasChildren = item.has_children !== false;
-        
-        const nodeEl = document.createElement('div');
-        nodeEl.className = 'tree-node' + (hasChildren ? '' : ' leaf');
-        nodeEl.dataset.id = 'n' + (autoId++);
-        nodeEl.dataset.path = item.path;
-        nodeEl.dataset.level = '0';
-        nodeEl.dataset.backupSetId = backupSetId;
-        
-        const id = nodeEl.dataset.id;
-        const sizeBytes = item.file ? (item.file.file_size || 0) : 0;
-        
-        // 创建节点内容容器
-        const nodeContent = document.createElement('div');
-        nodeContent.className = 'tree-node-content';
-        nodeContent.style.display = 'flex';
-        nodeContent.style.alignItems = 'center';
-        nodeContent.style.flex = '1';
-        nodeContent.style.minWidth = '0';
-        
-        // 展开/折叠按钮（仅目录且有子节点时显示）
-        const toggleBtn = document.createElement('span');
-        toggleBtn.className = 'tree-toggle';
-        if (hasChildren) {
-            toggleBtn.innerHTML = '<i class="bi bi-chevron-right"></i>';
-            toggleBtn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                toggleNode(nodeEl);
-            });
-        } else {
-            toggleBtn.innerHTML = '<span style="width:16px;"></span>';
-        }
-        
-        // 复选框
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'form-check-input me-2';
-        
-        // 图标
-        const icon = document.createElement('i');
-        icon.className = `bi ${isDir ? 'bi-folder' : getFileIcon(item.file?.file_name || item.name)} me-2`;
-        
-        // 名称
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = item.name;
-        
-        // 大小（仅文件）
-        const sizeSpan = document.createElement('small');
-        sizeSpan.className = 'text-muted ms-2';
-        if (!isDir && sizeBytes > 0) {
-            sizeSpan.textContent = formatBytes(sizeBytes);
-        }
-        
-        // 组装节点内容
-        nodeContent.appendChild(toggleBtn);
-        nodeContent.appendChild(checkbox);
-        nodeContent.appendChild(icon);
-        nodeContent.appendChild(nameSpan);
-        if (!isDir && sizeBytes > 0) {
-            nodeContent.appendChild(sizeSpan);
-        }
-        
-        // 子节点容器（懒加载）
-        const childrenContainer = document.createElement('div');
-        childrenContainer.className = 'tree-children';
-        
-        // 组装节点
-        nodeEl.appendChild(nodeContent);
-        nodeEl.appendChild(childrenContainer);
-        
-        // 点击节点名称区域展开/折叠（仅目录）
-        if (hasChildren) {
-            nameSpan.style.cursor = 'pointer';
-            nameSpan.addEventListener('click', function(e) {
-                e.stopPropagation();
-                toggleNode(nodeEl);
-            });
-        }
-        
-        fileIndex.set(id, {
-            el: nodeEl,
-            type: isDir ? 'dir' : 'file',
-            sizeBytes: sizeBytes,
-            children: [],
-            childrenData: null, // 懒加载，初始为null
-            name: item.name,
-            file: item.file,
-            path: item.path,
-            expanded: false,
-            rendered: true,
-            backupSetId: backupSetId,
-            loading: false // 是否正在加载
-        });
-        
-        treeRoot.appendChild(nodeEl);
-    }
-
-    // 展开/折叠节点（按需加载）
-    async function toggleNode(nodeEl) {
-        const id = nodeEl.dataset.id;
-        const meta = fileIndex.get(id);
-        if (!meta || meta.type !== 'dir') return;
-        
-        if (meta.expanded) {
-            // 折叠：隐藏子节点
-            nodeEl.classList.remove('expanded');
-            meta.expanded = false;
-            const childrenContainer = nodeEl.querySelector('.tree-children');
-            if (childrenContainer) {
-                childrenContainer.innerHTML = '';
-            }
-        } else {
-            // 展开：加载并渲染子节点
-            nodeEl.classList.add('expanded');
-            meta.expanded = true;
-            const childrenContainer = nodeEl.querySelector('.tree-children');
-            
-            if (!childrenContainer) return;
-            
-            // 如果已经加载过，直接渲染
-            if (meta.childrenData && meta.childrenData.length > 0) {
-                const startId = autoId;
-                renderChildren(childrenContainer, meta.childrenData, parseInt(nodeEl.dataset.level) + 1, meta.backupSetId);
-                // 等待DOM更新完成后再设置children数组
-                await new Promise(resolve => setTimeout(resolve, 50));
-                // 从DOM中获取实际渲染的子节点ID
-                const renderedNodes = Array.from(childrenContainer.querySelectorAll('.tree-node'));
-                meta.children = renderedNodes.map(node => node.dataset.id);
-                console.log(`节点 ${meta.name} 已渲染的子节点，children数组:`, meta.children);
-                return;
-            }
-            
-            // 如果正在加载，不重复加载
-            if (meta.loading) return;
-            
-            // 从API加载子目录内容
-            meta.loading = true;
-            childrenContainer.innerHTML = '<div class="text-center text-muted py-2"><i class="bi bi-hourglass-split me-2"></i>加载中...</div>';
-            
-            try {
-                const path = meta.path || '';
-                const backupSetId = meta.backupSetId || currentBackupSetId;
-                const response = await fetch(
-                    `/api/recovery/backup-sets/${encodeURIComponent(backupSetId)}/directory?path=${encodeURIComponent(path)}`
-                );
-                const data = await response.json();
-                const items = data.items || [];
-                
-                // 保存子节点数据
-                meta.childrenData = items;
-                
-                // 渲染子节点
-                const startId = autoId;
-                renderChildren(childrenContainer, items, parseInt(nodeEl.dataset.level) + 1, backupSetId);
-                
-                // 等待DOM更新完成后再设置children数组
-                await new Promise(resolve => setTimeout(resolve, 100));
-                // 从DOM中获取实际渲染的子节点ID
-                const renderedNodes = Array.from(childrenContainer.querySelectorAll('.tree-node'));
-                meta.children = renderedNodes.map(node => node.dataset.id);
-                console.log(`节点 ${meta.name} 加载并渲染了 ${items.length} 个子节点，children数组:`, meta.children);
-            } catch (error) {
-                console.error('加载子目录失败:', error);
-                childrenContainer.innerHTML = '<div class="alert alert-danger py-2">加载失败: ' + error.message + '</div>';
-            } finally {
-                meta.loading = false;
+                panel.classList.remove('visible');
+                tab.classList.remove('active');
+                if (i < n) tab.classList.add('done');
+                else tab.classList.remove('done');
             }
         }
     }
-    
-    // 渲染子节点
-    function renderChildren(container, items, level, backupSetId) {
-        container.innerHTML = '';
-        items.forEach(item => {
-            const childEl = renderChildNode(item, container, level, backupSetId);
-        });
-    }
-    
-    // 渲染子节点
-    function renderChildNode(item, parentEl, level, backupSetId) {
-        const isDir = item.type === 'directory';
-        const hasChildren = item.has_children !== false;
-        
-        const nodeEl = document.createElement('div');
-        nodeEl.className = 'tree-node' + (hasChildren ? '' : ' leaf');
-        nodeEl.dataset.id = 'n' + (autoId++);
-        nodeEl.dataset.path = item.path;
-        nodeEl.dataset.level = level;
-        nodeEl.dataset.backupSetId = backupSetId;
-        
-        const id = nodeEl.dataset.id;
-        const sizeBytes = item.file ? (item.file.file_size || 0) : 0;
-        
-        // 创建节点内容容器
-        const nodeContent = document.createElement('div');
-        nodeContent.className = 'tree-node-content';
-        nodeContent.style.display = 'flex';
-        nodeContent.style.alignItems = 'center';
-        nodeContent.style.flex = '1';
-        nodeContent.style.minWidth = '0';
-        
-        // 展开/折叠按钮
-        const toggleBtn = document.createElement('span');
-        toggleBtn.className = 'tree-toggle';
-        if (hasChildren) {
-            toggleBtn.innerHTML = '<i class="bi bi-chevron-right"></i>';
-            toggleBtn.addEventListener('click', function(e) {
-                e.stopPropagation();
-                toggleNode(nodeEl);
-            });
-        } else {
-            toggleBtn.innerHTML = '<span style="width:16px;"></span>';
-        }
-        
-        // 复选框
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'form-check-input me-2';
-        
-        // 图标
-        const icon = document.createElement('i');
-        icon.className = `bi ${isDir ? 'bi-folder' : getFileIcon(item.file?.file_name || item.name)} me-2`;
-        
-        // 名称
-        const nameSpan = document.createElement('span');
-        nameSpan.textContent = item.name;
-        
-        // 大小（仅文件）
-        const sizeSpan = document.createElement('small');
-        sizeSpan.className = 'text-muted ms-2';
-        if (!isDir && sizeBytes > 0) {
-            sizeSpan.textContent = formatBytes(sizeBytes);
-        }
-        
-        // 组装节点内容
-        nodeContent.appendChild(toggleBtn);
-        nodeContent.appendChild(checkbox);
-        nodeContent.appendChild(icon);
-        nodeContent.appendChild(nameSpan);
-        if (!isDir && sizeBytes > 0) {
-            nodeContent.appendChild(sizeSpan);
-        }
-        
-        // 子节点容器
-        const childrenContainer = document.createElement('div');
-        childrenContainer.className = 'tree-children';
-        
-        // 组装节点
-        nodeEl.appendChild(nodeContent);
-        nodeEl.appendChild(childrenContainer);
-        
-        // 点击节点名称区域展开/折叠（仅目录）
-        if (hasChildren) {
-            nameSpan.style.cursor = 'pointer';
-            nameSpan.addEventListener('click', function(e) {
-                e.stopPropagation();
-                toggleNode(nodeEl);
-            });
-        }
-        
-        fileIndex.set(id, {
-            el: nodeEl,
-            type: isDir ? 'dir' : 'file',
-            sizeBytes: sizeBytes,
-            children: [],
-            childrenData: null,
-            name: item.name,
-            file: item.file,
-            path: item.path,
-            expanded: false,
-            rendered: true,
-            backupSetId: backupSetId,
-            loading: false
-        });
-        
-        if (parentEl) {
-            parentEl.appendChild(nodeEl);
-        }
-        
-        return nodeEl;
-    }
 
-    // 获取文件图标
-    function getFileIcon(fileName) {
-        const ext = fileName.split('.').pop()?.toLowerCase() || '';
-        const iconMap = {
-            'pdf': 'bi-file-pdf',
-            'doc': 'bi-file-word', 'docx': 'bi-file-word',
-            'xls': 'bi-file-earmark-spreadsheet', 'xlsx': 'bi-file-earmark-spreadsheet',
-            'jpg': 'bi-file-image', 'jpeg': 'bi-file-image', 'png': 'bi-file-image', 'gif': 'bi-file-image',
-            'txt': 'bi-file-text',
-            'zip': 'bi-file-zip', '7z': 'bi-file-zip', 'rar': 'bi-file-zip'
-        };
-        return iconMap[ext] || 'bi-file-earmark-text';
-    }
+    // ============ 磁带状态 ============
+    function checkTapeStatus() {
+        fetch('/api/recovery/tape-status')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var dot = document.getElementById('tapeDot');
+            var text = document.getElementById('tapeStatusText');
+            document.getElementById('tapeDevice').textContent = data.device || '-';
+            document.getElementById('tapeLabel').textContent = data.tape_label || '-';
 
-    // 获取备份类型样式类
-    function getBackupTypeClass(type) {
-        const typeMap = {
-            'full': 'full',
-            'monthly_full': 'full',
-            'incremental': 'incremental',
-            'differential': 'differential'
-        };
-        return typeMap[type] || 'full';
-    }
-
-    // 获取备份类型名称
-    function getBackupTypeName(type) {
-        const typeMap = {
-            'full': '完整备份',
-            'monthly_full': '完整备份',
-            'incremental': '增量备份',
-            'differential': '差异备份'
-        };
-        return typeMap[type] || '备份';
-    }
-
-    // 获取备份类型短名称
-    function getBackupTypeShortName(type) {
-        const typeMap = {
-            'full': '完整',
-            'monthly_full': '完整',
-            'incremental': '增量',
-            'differential': '差异'
-        };
-        return typeMap[type] || '备份';
-    }
-
-    // 获取备份类型徽章样式
-    function getBackupTypeBadge(type) {
-        const typeMap = {
-            'full': 'bg-success',
-            'monthly_full': 'bg-success',
-            'incremental': 'bg-primary',
-            'differential': 'bg-warning'
-        };
-        return typeMap[type] || 'bg-secondary';
-    }
-
-    function assignIdsAndBuildIndex(container){
-        // 已由 buildFileTree 处理，此函数保留用于兼容
-    }
-
-    // 备份集选择联动
-    function bindTimelineSelection(){
-        // 已在 loadBackupSets 中处理
-    }
-
-    // 切换按钮
-    if (changeBackupBtn && timeline){
-        changeBackupBtn.addEventListener('click', function(){
-            timeline.scrollIntoView({behavior:'smooth', block:'start'});
-            const sel = timeline.querySelector('.backup-set-card.selected') || timeline.querySelector('.backup-set-card');
-            if (sel){ sel.classList.add('selected'); sel.style.outline='2px solid #2196f3'; setTimeout(()=> sel.style.outline='', 1200); }
-        });
-    }
-
-    // 月份下拉：加载对应月份的备份集
-    if (monthSelect){
-        monthSelect.addEventListener('change', async function(){
-            await loadBackupSets(this.value);
-        });
-    }
-
-    // 递归选择所有子节点的辅助函数
-    async function selectAllChildren(parentId, on, maxDepth = 10, currentDepth = 0) {
-        if (currentDepth >= maxDepth) {
-            console.warn('达到最大递归深度，停止选择子节点');
-            return;
-        }
-        
-        const meta = fileIndex.get(parentId);
-        if (!meta || meta.type !== 'dir') return;
-        
-        // 如果子节点未加载，先加载并展开
-        if (meta.has_children !== false && !meta.expanded && !meta.childrenData) {
-            console.log(`展开节点 ${meta.name} 以加载子节点`);
-            await toggleNode(meta.el);
-            // 等待子节点加载完成
-            let retryCount = 0;
-            while (!meta.childrenData && retryCount < 10) {
-                await new Promise(resolve => setTimeout(resolve, 200));
-                retryCount++;
-            }
-        }
-        
-        // 如果子节点数据已加载但未渲染，先渲染
-        if (meta.childrenData && meta.childrenData.length > 0) {
-            const childrenContainer = meta.el.querySelector('.tree-children');
-            if (childrenContainer) {
-                // 检查是否已经渲染了子节点
-                const renderedCount = childrenContainer.querySelectorAll('.tree-node').length;
-                if (renderedCount === 0) {
-                    console.log(`渲染节点 ${meta.name} 的子节点，数量: ${meta.childrenData.length}`);
-                    renderChildren(childrenContainer, meta.childrenData, parseInt(meta.el.dataset.level) + 1, meta.backupSetId);
-                    const startId = autoId;
-                    meta.children = meta.childrenData.map((_, idx) => 'n' + (startId + idx));
-                    autoId += meta.childrenData.length;
-                    // 等待DOM更新
-                    await new Promise(resolve => setTimeout(resolve, 100));
-                } else if (!meta.children || meta.children.length === 0) {
-                    // 如果已渲染但children未设置，从DOM中获取
-                    const childNodes = Array.from(childrenContainer.querySelectorAll('.tree-node'));
-                    meta.children = childNodes.map(node => node.dataset.id);
-                }
-            }
-        }
-        
-        // 递归处理所有子节点
-        if (meta.children && meta.children.length > 0) {
-            console.log(`处理节点 ${meta.name} 的 ${meta.children.length} 个子节点`);
-            for (const chId of meta.children) {
-                if (typeof chId === 'string' && chId.startsWith('n')) {
-                    const childMeta = fileIndex.get(chId);
-                    if (childMeta && childMeta.el) {
-                        // 设置复选框状态 - 直接设置，不触发change事件避免循环
-                        const childCb = childMeta.el.querySelector('input[type="checkbox"]');
-                        if (childCb) {
-                            // 标记正在处理，避免触发change事件
-                            childCb.dataset.processing = 'true';
-                            childCb.checked = !!on;
-                            delete childCb.dataset.processing;
-                        } else {
-                            console.warn(`未找到子节点 ${childMeta.name} 的复选框`);
-                        }
-                        
-                        // 更新选中状态和样式
-                        if (on) {
-                            childMeta.el.classList.add('selected');
-                            if (childMeta.type === 'file') {
-                                selectedFiles.add(chId);
-                            } else {
-                                selectedFolders.add(chId);
-                            }
-                        } else {
-                            childMeta.el.classList.remove('selected');
-                            if (childMeta.type === 'file') {
-                                selectedFiles.delete(chId);
-                            } else {
-                                selectedFolders.delete(chId);
-                            }
-                        }
-                        
-                        // 如果是目录，递归处理其子节点
-                        if (childMeta.type === 'dir') {
-                            await selectAllChildren(chId, on, maxDepth, currentDepth + 1);
-                        }
-                    } else {
-                        console.warn(`未找到子节点ID ${chId} 的元数据`);
-                    }
-                }
-            }
-        } else {
-            console.log(`节点 ${meta.name} 没有子节点或children数组为空`);
-        }
-    }
-
-    async function selectFile(id, on){
-        const meta = fileIndex.get(id); 
-        if (!meta) return;
-        
-        const cb = meta.el.querySelector('input[type="checkbox"]');
-        if (cb) {
-            // 标记正在处理，避免触发change事件导致循环
-            cb.dataset.processing = 'true';
-            cb.checked = !!on;
-            delete cb.dataset.processing;
-        }
-        
-        // 更新选中状态和样式
-        if (on) {
-            meta.el.classList.add('selected');
-        } else {
-            meta.el.classList.remove('selected');
-        }
-        
-        if (meta.type === 'file'){
-            if (on) {
-                selectedFiles.add(id);
+            if (data.tape_loaded) {
+                dot.className = 'status-dot green';
+                text.textContent = '已加载';
             } else {
-                selectedFiles.delete(id);
+                dot.className = 'status-dot red';
+                text.textContent = '未加载';
             }
-        } else {
-            // 目录节点
-            if (on) {
-                selectedFolders.add(id);
+
+            var ltfsDot = document.getElementById('ltfsDot');
+            var ltfsText = document.getElementById('ltfsStatusText');
+            document.getElementById('ltfsMountPoint').textContent = data.mount_point || '-';
+
+            if (data.ltfs_mounted) {
+                ltfsDot.className = 'status-dot green';
+                ltfsText.textContent = '已挂载';
             } else {
-                selectedFolders.delete(id);
+                ltfsDot.className = 'status-dot gray';
+                ltfsText.textContent = '未挂载';
             }
-            
-            // 递归选择/取消选择所有子节点
-            console.log(`${on ? '选择' : '取消选择'}目录 ${meta.name}，开始处理子节点`);
-            await selectAllChildren(id, on);
-        }
-        
-        refreshStatsAndList();
+
+            var mountBtn = document.getElementById('mountBtn');
+            var remountBtn = document.getElementById('remountBtn');
+            var ejectBtn = document.getElementById('ejectBtn');
+
+            mountBtn.disabled = data.ltfs_mounted;
+            remountBtn.style.display = '';
+            remountBtn.disabled = !data.ltfs_mounted;
+            ejectBtn.disabled = !data.tape_loaded;
+
+            if (data.ltfs_mounted) {
+                goToStep(2);
+            } else if (data.tape_loaded) {
+                goToStep(1);
+            } else {
+                goToStep(1);
+            }
+        })
+        .catch(function(e) {
+            document.getElementById('tapeDot').className = 'status-dot red';
+            document.getElementById('tapeStatusText').textContent = '检测失败';
+        });
     }
 
-    function refreshStatsAndList(){
-        let files = Array.from(selectedFiles);
-        let total = 0;
-        files.forEach(id => { const m = fileIndex.get(id); if (m) total += m.sizeBytes; });
-        selectedCountEl.textContent = String(files.length);
-        selectedSizeEl.textContent = formatBytes(total);
-        folderCountEl.textContent = String(selectedFolders.size);
-        
-        // 更新开始恢复按钮状态
-        if (startRecoveryBtn) {
-            startRecoveryBtn.disabled = files.length === 0 || !currentBackupSetId;
-        }
-        
-        // 渲染列表
-        listEl.innerHTML = files.map(id => {
-            const m = fileIndex.get(id); if (!m) return '';
-            return `<div class="list-group-item d-flex justify-content-between align-items-center">
-                        <div class="text-truncate" style="max-width:75%"><i class="bi bi-file-earmark-text me-2"></i>${m.name}</div>
-                        <div class="d-flex align-items-center gap-3">
-                            <span class="text-muted small">${formatBytes(m.sizeBytes)}</span>
-                            <button type="button" class="btn btn-sm btn-outline-danger" data-remove-id="${id}"><i class="bi bi-x"></i></button>
-                        </div>
-                    </div>`;
+    // ============ 磁带操作 ============
+    function _showOpsModal(title, steps) {
+        var modal = document.getElementById('opsModal');
+        document.getElementById('opsModalTitle').textContent = title;
+        var container = document.getElementById('opsModalSteps');
+        container.innerHTML = steps.map(function(s, i) {
+            return '<div id="opsStep' + i + '" class="mb-1"><span class="text-muted">&#9744;</span> ' + s + '</div>';
         }).join('');
+        document.getElementById('opsModalOutput').innerHTML = '';
+        document.getElementById('opsModalClose').style.display = 'none';
+        modal.classList.remove('hidden');
+    }
+    function _hideOpsModal() { document.getElementById('opsModal').classList.add('hidden'); }
+    function _setOpsStepState(idx, state) {
+        var el = document.getElementById('opsStep' + idx);
+        if (!el) return;
+        var icons = { running: '&#9881; <em class="text-primary">(执行中)</em>', done: '&#9745; <span class="text-success">完成</span>', failed: '&#9746; <span class="text-danger">失败</span>' };
+        el.innerHTML = (icons[state] || '') + ' ' + el.textContent.replace(/^[\s\S]*?(?=[^\s])/, '');
+    }
+    function _opsLog(msg) {
+        var output = document.getElementById('opsModalOutput');
+        output.innerHTML += '<div>' + escapeHtml(msg) + '</div>';
+        output.scrollTop = output.scrollHeight;
     }
 
-    // 事件委托：树复选框点击
-    treeRoot.addEventListener('change', function(e){
-        const target = e.target;
-        if (target && target.matches('input[type="checkbox"]')){
-            const node = target.closest('.tree-node');
-            if (!node) return;
-            const nodeId = node.dataset.id;
-            if (!nodeId) return;
-            
-            // 防止递归调用导致的无限循环
-            if (target.dataset.processing) return;
-            target.dataset.processing = 'true';
-            
-            selectFile(nodeId, target.checked).finally(() => {
-                delete target.dataset.processing;
+    // SSE 流式请求辅助函数
+    function _streamFetch(url, opts, onEvent, onDone) {
+        fetch(url, opts).then(function(r) {
+            var reader = r.body.getReader();
+            var decoder = new TextDecoder();
+            var buf = '';
+            function pump() {
+                reader.read().then(function(result) {
+                    if (result.done) { onDone && onDone(); return; }
+                    buf += decoder.decode(result.value, {stream: true});
+                    var lines = buf.split('\n');
+                    buf = lines.pop();
+                    lines.forEach(function(line) {
+                        if (line.startsWith('data: ')) {
+                            try { onEvent(JSON.parse(line.slice(6))); } catch(e) {}
+                        }
+                    });
+                    pump();
+                }).catch(function(e) { onDone && onDone(e); });
+            }
+            pump();
+        }).catch(function(e) { onDone && onDone(e); });
+    }
+
+    function mountTape() {
+        _showOpsModal('挂载 LTFS', ['挂载 LTFS 文件系统']);
+        _setOpsStepState(0, 'running');
+        _streamFetch(
+            '/api/recovery/mount-tape-stream',
+            { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) },
+            function(ev) {
+                if (ev.type === 'log') _opsLog(ev.message);
+                if (ev.type === 'result') {
+                    _setOpsStepState(0, ev.success ? 'done' : 'failed');
+                    if (ev.success) { setTimeout(function() { _hideOpsModal(); checkTapeStatus(); }, 800); }
+                    else { document.getElementById('opsModalClose').style.display = ''; checkTapeStatus(); }
+                }
+            },
+            function(err) {
+                if (err) { _setOpsStepState(0, 'failed'); _opsLog(err.message || '请求失败'); }
+                document.getElementById('opsModalClose').style.display = '';
+            }
+        );
+    }
+
+    function remountTape() {
+        _showOpsModal('重新挂载', ['卸载 LTFS', '重新挂载']);
+        _setOpsStepState(0, 'running');
+        _streamFetch(
+            '/api/recovery/remount-tape-stream',
+            { method: 'POST' },
+            function(ev) {
+                if (ev.type === 'log') _opsLog(ev.message);
+                if (ev.type === 'step_done') {
+                    _setOpsStepState(ev.step, 'done');
+                    _setOpsStepState(ev.step + 1, 'running');
+                }
+                if (ev.type === 'result') {
+                    if (ev.step === 'unmount') {
+                        _setOpsStepState(0, ev.success ? 'done' : 'failed');
+                    } else {
+                        _setOpsStepState(0, 'done');
+                        _setOpsStepState(1, ev.success ? 'done' : 'failed');
+                    }
+                    var allDone = (ev.step !== 'unmount') && ev.success;
+                    if (allDone) { setTimeout(function() { _hideOpsModal(); checkTapeStatus(); }, 800); }
+                    else { document.getElementById('opsModalClose').style.display = ''; checkTapeStatus(); }
+                }
+            },
+            function(err) {
+                if (err) { _setOpsStepState(0, 'failed'); _opsLog(err.message || '请求失败'); }
+                document.getElementById('opsModalClose').style.display = '';
+            }
+        );
+    }
+
+    function ejectTape() {
+        var ejectBtn = document.getElementById('ejectBtn');
+        ejectBtn.disabled = true;
+        _showOpsModal('弹出磁带', ['卸载 LTFS', '弹出磁带']);
+        _setOpsStepState(0, 'running');
+        _streamFetch(
+            '/api/recovery/eject-tape-stream',
+            { method: 'POST' },
+            function(ev) {
+                if (ev.type === 'log') _opsLog(ev.message);
+                if (ev.type === 'step_done') {
+                    _setOpsStepState(ev.step, 'done');
+                    _setOpsStepState(ev.step + 1, 'running');
+                }
+                if (ev.type === 'result') {
+                    _setOpsStepState(0, 'done');
+                    _setOpsStepState(1, ev.success ? 'done' : 'failed');
+                    if (ev.success) { setTimeout(function() { _hideOpsModal(); checkTapeStatus(); }, 800); }
+                    else { document.getElementById('opsModalClose').style.display = ''; checkTapeStatus(); }
+                }
+            },
+            function(err) {
+                if (err) { _setOpsStepState(0, 'failed'); _opsLog(err.message || '请求失败'); }
+                document.getElementById('opsModalClose').style.display = '';
+            }
+        );
+    }
+
+    // ============ 扫描磁带 ============
+    var _scanStreamedSets = {};   // 流式扫描累积: { setId: { archives: [], ... } }
+    var _scanLogCurrentEl = null; // 当前正在扫描的日志行
+
+    function scanTape() {
+        var btn = document.getElementById('scanBtn');
+        var result = document.getElementById('scanResult');
+        var scanLog = document.getElementById('scanLog');
+        btn.disabled = true;
+        btn.textContent = '扫描中...';
+        result.innerHTML = '<div class="text-center text-muted py-3"><i class="bi bi-hourglass me-2"></i>扫描中...</div>';
+
+        // 清空扫描日志和备份集列表
+        scanLog.textContent = '';
+        document.getElementById('scanLogSection').style.display = '';
+        _scanStreamedSets = {};
+        _scanLogCurrentEl = null;
+        document.getElementById('backupSetList').textContent = '';
+        document.getElementById('fileTree').innerHTML = '<div class="text-center text-muted py-3"><i class="bi bi-hourglass me-2"></i>扫描中，归档将逐个显示...</div>';
+
+        _streamFetch(
+            '/api/recovery/scan-tape-stream',
+            { method: 'POST', headers: {'Content-Type': 'application/json'} },
+            function(ev) {
+                if (ev.type === 'start') {
+                    _addScanLog('开始扫描，发现 ' + (ev.total_dirs || 0) + ' 个目录...', 'info');
+                }
+                else if (ev.type === 'set_start') {
+                    _scanLogCurrentEl = _addScanLog('扫描备份集: ' + ev.set_id + ' (' + ev.file_count + ' 个文件)...', 'scanning');
+                    if (!_scanStreamedSets[ev.set_id]) {
+                        _scanStreamedSets[ev.set_id] = { archives: [], archive_count: 0, total_size_bytes: 0 };
+                    }
+                }
+                else if (ev.type === 'archive') {
+                    var a = ev.archive;
+                    var setId = ev.set_id;
+                    // 累积归档
+                    if (!_scanStreamedSets[setId]) _scanStreamedSets[setId] = { archives: [], archive_count: 0, total_size_bytes: 0 };
+                    _scanStreamedSets[setId].archives.push(a);
+                    _scanStreamedSets[setId].archive_count++;
+                    _scanStreamedSets[setId].total_size_bytes += (a.size_bytes || 0);
+                    // 日志
+                    _addScanLog('  ' + a.filename + '  (' + (a.size_display || '?') + ')', 'file');
+                    // 实时添加到树
+                    _addArchiveToTree(setId, a);
+                }
+                else if (ev.type === 'set_done') {
+                    _addScanLog('备份集 ' + ev.set_id + ' 完成: ' + ev.archive_count + ' 个归档, ' + (ev.total_size_display || '?'), 'success');
+                    _scanLogCurrentEl = null;
+                    // 添加备份集卡片
+                    _addBackupSetCard(ev);
+                }
+                else if (ev.type === 'done') {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-search me-1"></i>扫描磁带';
+                    result.innerHTML = '<div class="alert alert-success py-2" style="background: rgba(0,204,136,0.1); border-color: rgba(0,204,136,0.3); color: #adb5bd;">' +
+                        '<i class="bi bi-check-circle me-1"></i>' + escapeHtml(ev.message || '扫描完成') + '</div>';
+                    _addScanLog(ev.message || '扫描完成', 'done');
+                    // 清除树中的加载提示
+                    var placeholder = document.querySelector('#fileTree > .text-center');
+                    if (placeholder) placeholder.remove();
+                }
+                else if (ev.type === 'error') {
+                    btn.disabled = false;
+                    btn.innerHTML = '<i class="bi bi-search me-1"></i>扫描磁带';
+                    result.innerHTML = '<div class="alert alert-danger">' + escapeHtml(ev.message || '扫描失败') + '</div>';
+                    _addScanLog('错误: ' + (ev.message || '扫描失败'), 'error');
+                }
+            },
+            function(err) {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="bi bi-search me-1"></i>扫描磁带';
+                if (err) {
+                    result.innerHTML = '<div class="alert alert-danger">扫描失败: ' + escapeHtml(err.message || '') + '</div>';
+                    _addScanLog('连接中断: ' + (err.message || ''), 'error');
+                }
+            }
+        );
+    }
+
+    function _addScanLog(msg, type) {
+        var scanLog = document.getElementById('scanLog');
+        var div = document.createElement('div');
+        div.style.borderBottom = '1px solid rgba(255,255,255,0.04)';
+        div.style.padding = '3px 0';
+        var color = type === 'success' || type === 'done' ? '#00cc88' :
+                    type === 'error' ? '#ff4081' :
+                    type === 'scanning' ? '#00aaff' :
+                    type === 'file' ? '#888' : '#aaa';
+        var prefix = type === 'success' || type === 'done' ? '&#10003; ' :
+                     type === 'error' ? '&#10007; ' :
+                     type === 'scanning' ? '&#9656; ' : '';
+        div.style.color = color;
+        div.innerHTML = prefix + escapeHtml(msg);
+        // 插入到顶部（正扫描的在上面）
+        if (scanLog.firstChild) {
+            scanLog.insertBefore(div, scanLog.firstChild);
+        } else {
+            scanLog.appendChild(div);
+        }
+        return div;
+    }
+
+    function _addBackupSetCard(setData) {
+        var container = document.getElementById('backupSetList');
+        // 移除空提示
+        var placeholder = container.querySelector('.text-center');
+        if (placeholder) placeholder.remove();
+
+        var card = document.createElement('div');
+        card.className = 'backup-set-card';
+        card.setAttribute('data-set-id', setData.set_id);
+        card.innerHTML = '<div class="d-flex justify-content-between align-items-center">' +
+            '<div><strong>' + escapeHtml(setData.set_id) + '</strong>' +
+            '<br><small class="text-muted">' + setData.archive_count + ' 个归档, ' + (setData.total_size_display || formatBytes(setData.total_size_bytes || 0)) + '</small></div>' +
+            (setData.latest_timestamp ? '<small class="text-muted">' + escapeHtml(setData.latest_timestamp) + '</small>' : '') +
+            '</div>';
+        card.addEventListener('click', function() {
+            container.querySelectorAll('.backup-set-card.selected').forEach(function(c) { c.classList.remove('selected'); });
+            card.classList.add('selected');
+            selectBackupSet(setData.set_id);
+        });
+        container.appendChild(card);
+    }
+
+    function _addArchiveToTree(setId, archiveInfo) {
+        var tree = document.getElementById('fileTree');
+        // 移除占位提示
+        var placeholder = tree.querySelector('.text-center, .text-muted');
+        if (placeholder && placeholder.parentElement === tree) placeholder.remove();
+
+        // 查找或创建备份集分组
+        var groupId = 'treeGroup_' + setId;
+        var group = document.getElementById(groupId);
+        if (!group) {
+            group = document.createElement('div');
+            group.id = groupId;
+            group.setAttribute('data-set-id', setId);
+            // 备份集标题
+            var header = document.createElement('div');
+            header.className = 'tree-node';
+            header.style.fontWeight = '600';
+            header.style.color = '#00aaff';
+            header.innerHTML = '<i class="bi bi-collection me-2"></i>' + escapeHtml(setId);
+            header.addEventListener('click', function() {
+                var children = group.querySelectorAll('.tree-node:not(:first-child)');
+                var collapsed = group.getAttribute('data-collapsed');
+                children.forEach(function(c) { c.style.display = collapsed ? '' : 'none'; });
+                group.setAttribute('data-collapsed', collapsed ? '' : '1');
+            });
+            group.appendChild(header);
+            tree.appendChild(group);
+        }
+
+        // 归档节点
+        var icon = archiveInfo.compression_type === 'zstd' ? 'bi-file-earmark-zip text-warning' :
+                   archiveInfo.compression_type === 'gzip' ? 'bi-file-earmark-zip text-success' :
+                   archiveInfo.compression_type === '7z' ? 'bi-file-earmark-zip text-danger' :
+                   'bi-file-earmark-zip text-info';
+        var node = document.createElement('div');
+        node.className = 'tree-node';
+        node.innerHTML =
+            '<input type="checkbox" data-role="archive" data-archive="' + escapeHtml(setId + '/' + archiveInfo.filename) + '">' +
+            '<i class="bi ' + icon + '"></i>' +
+            '<span>' + escapeHtml(archiveInfo.filename) + '</span>' +
+            '<small class="text-muted ms-auto" style="font-size:0.75rem;">' + (archiveInfo.size_display || formatBytes(archiveInfo.size_bytes || 0)) + '</small>';
+        group.appendChild(node);
+    }
+
+    function renderBackupSets(sets) {
+        var container = document.getElementById('backupSetList');
+        if (!sets.length) { container.innerHTML = '<div class="text-muted">未发现备份集</div>'; return; }
+        container.innerHTML = '';
+        sets.forEach(function(s) {
+            var card = document.createElement('div');
+            card.className = 'backup-set-card';
+            card.innerHTML = '<div class="d-flex justify-content-between align-items-center">' +
+                '<div><strong>' + escapeHtml(s.set_id || s.name || '备份集') + '</strong>' +
+                '<br><small class="text-muted">' + (s.archive_count || '?') + ' 个归档, ' + formatBytes(s.total_bytes || 0) + '</small></div>' +
+                '<i class="bi bi-chevron-right text-muted"></i></div>';
+            card.addEventListener('click', function() {
+                container.querySelectorAll('.backup-set-card.selected').forEach(function(c) { c.classList.remove('selected'); });
+                card.classList.add('selected');
+                selectBackupSet(s.set_id || s.name);
+            });
+            container.appendChild(card);
+        });
+    }
+
+    function selectBackupSet(setId) {
+        selectedSetId = setId;
+        selectedFilesMap = {};
+        allArchiveData = {};
+        var tree = document.getElementById('fileTree');
+        tree.innerHTML = '<div class="text-center text-muted py-3"><i class="bi bi-hourglass me-2"></i>加载中...</div>';
+
+        fetch('/api/recovery/backup-sets/' + encodeURIComponent(setId) + '/contents')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.detail) { tree.innerHTML = '<div class="alert alert-danger">' + data.detail + '</div>'; return; }
+            var entries = data.entries || data.files || [];
+            var archives = data.archives || [];
+            // 按 source_archive 分组
+            var grouped = {};
+            var totalFiles = 0;
+            var totalSize = 0;
+            entries.forEach(function(e) {
+                var arch = e.source_archive || 'unknown';
+                if (!grouped[arch]) grouped[arch] = [];
+                grouped[arch].push(e);
+                if (!e.is_dir) { totalFiles++; totalSize += (e.size || 0); }
+            });
+            allArchiveData = grouped;
+            document.getElementById('statFiles').textContent = totalFiles;
+            document.getElementById('statArchives').textContent = Object.keys(grouped).length;
+            document.getElementById('statSize').textContent = formatBytes(totalSize);
+            document.getElementById('contentInfo').textContent =
+                Object.keys(grouped).length + ' 个归档, ' + totalFiles + ' 个文件';
+            document.getElementById('selectionBtns').style.display = '';
+            document.getElementById('selectionSummary').style.display = '';
+            document.getElementById('goToRestoreBtn').disabled = true;
+            renderArchiveTree(grouped, tree);
+            updateSelectionSummary();
+        })
+        .catch(function(e) {
+            tree.innerHTML = '<div class="alert alert-danger">加载失败: ' + e.message + '</div>';
+        });
+    }
+
+    // ============ 归档树渲染 ============
+    function renderArchiveTree(grouped, container) {
+        container.innerHTML = '';
+        var archiveNames = Object.keys(grouped);
+        archiveNames.forEach(function(archName) {
+            var files = grouped[archName];
+            var fileCount = files.filter(function(e) { return !e.is_dir; }).length;
+            // 归档节点
+            var archiveNode = document.createElement('div');
+            archiveNode.className = 'tree-node';
+            archiveNode.style.fontWeight = '500';
+            archiveNode.innerHTML =
+                '<input type="checkbox" data-role="archive" data-archive="' + escapeHtml(archName) + '">' +
+                '<i class="bi bi-file-earmark-zip text-warning"></i>' +
+                '<span>' + escapeHtml(archName) + '</span>' +
+                '<small class="text-muted ms-auto" style="font-size:0.75rem;">' + fileCount + ' 个文件</small>';
+            // 子文件容器
+            var childContainer = document.createElement('div');
+            childContainer.className = 'tree-children';
+            childContainer.style.display = 'none';
+            renderFileLeaves(files, childContainer, archName);
+            // 点击展开/折叠
+            archiveNode.addEventListener('click', function(e) {
+                if (e.target.tagName === 'INPUT') return;
+                childContainer.style.display = childContainer.style.display === 'none' ? '' : 'none';
+            });
+            container.appendChild(archiveNode);
+            container.appendChild(childContainer);
+        });
+    }
+
+    function renderFileLeaves(files, container, archName) {
+        files.forEach(function(f) {
+            if (f.is_dir) return;
+            var node = document.createElement('div');
+            node.className = 'tree-node';
+            node.style.paddingLeft = '20px';
+            node.innerHTML =
+                '<input type="checkbox" data-role="file" data-archive="' + escapeHtml(archName) + '" data-file="' + escapeHtml(f.name) + '">' +
+                '<i class="bi bi-file-earmark-text text-muted"></i>' +
+                '<span style="font-size:0.85rem;">' + escapeHtml(f.name) + '</span>' +
+                '<small class="text-muted ms-auto" style="font-size:0.7rem;">' + formatBytes(f.size || 0) + '</small>';
+            container.appendChild(node);
+        });
+    }
+
+    // ============ 复选框联动 ============
+    document.getElementById('fileTree').addEventListener('change', function(e) {
+        var cb = e.target;
+        if (!cb || cb.tagName !== 'INPUT') return;
+        if (cb.dataset.role === 'archive') {
+            var archName = cb.dataset.archive;
+            if (cb.checked) {
+                selectedFilesMap[archName] = null;
+            } else {
+                delete selectedFilesMap[archName];
+            }
+            // 同步子文件复选框
+            var siblings = cb.parentElement.nextElementSibling;
+            if (siblings) {
+                siblings.querySelectorAll('input[data-role="file"][data-archive="' + archName + '"]').forEach(function(fc) {
+                    fc.checked = cb.checked;
+                });
+            }
+        } else if (cb.dataset.role === 'file') {
+            var archName2 = cb.dataset.archive;
+            syncArchiveCheckbox(archName2);
+        }
+        updateSelectionSummary();
+    });
+
+    function syncArchiveCheckbox(archName) {
+        var allFiles = allArchiveData[archName] || [];
+        var fileCbs = document.querySelectorAll('input[data-role="file"][data-archive="' + archName + '"]');
+        var checked = 0;
+        fileCbs.forEach(function(fc) { if (fc.checked) checked++; });
+        var archCb = document.querySelector('input[data-role="archive"][data-archive="' + archName + '"]');
+        if (!archCb) return;
+        if (checked === 0) {
+            archCb.checked = false;
+            archCb.indeterminate = false;
+            delete selectedFilesMap[archName];
+        } else if (checked === fileCbs.length) {
+            archCb.checked = true;
+            archCb.indeterminate = false;
+            selectedFilesMap[archName] = null;
+        } else {
+            archCb.checked = false;
+            archCb.indeterminate = true;
+            var selectedList = [];
+            fileCbs.forEach(function(fc) { if (fc.checked) selectedList.push(fc.dataset.file); });
+            selectedFilesMap[archName] = selectedList;
+        }
+    }
+
+    function updateSelectionSummary() {
+        var archiveCount = Object.keys(selectedFilesMap).length;
+        var fileCount = 0;
+        Object.keys(selectedFilesMap).forEach(function(arch) {
+            if (selectedFilesMap[arch] === null) {
+                var files = (allArchiveData[arch] || []).filter(function(e) { return !e.is_dir; });
+                fileCount += files.length;
+            } else {
+                fileCount += selectedFilesMap[arch].length;
+            }
+        });
+        var el = document.getElementById('selectionText');
+        var goBtn = document.getElementById('goToRestoreBtn');
+        if (archiveCount === 0) {
+            el.textContent = '未选择文件（勾选归档或文件以选择）';
+            goBtn.disabled = true;
+        } else {
+            el.textContent = '已选 ' + archiveCount + ' 个归档, ' + fileCount + ' 个文件';
+            goBtn.disabled = false;
+        }
+    }
+
+    function getSelectedFilesForAPI() {
+        var result = {};
+        var hasAny = false;
+        Object.keys(selectedFilesMap).forEach(function(arch) {
+            result[arch] = selectedFilesMap[arch];
+            hasAny = true;
+        });
+        return hasAny ? result : null;
+    }
+
+    // ============ 步骤4: 恢复模式切换 ============
+    function getRecoveryMode() {
+        return document.querySelector('input[name="recoveryMode"]:checked').value;
+    }
+
+    function updateModeUI() {
+        var mode = getRecoveryMode();
+        var serverOpts = document.getElementById('serverModeOptions');
+        var dlOpts = document.getElementById('downloadModeOptions');
+        var hint = document.getElementById('downloadModeHint');
+        var btn = document.getElementById('startRestoreBtn');
+
+        if (mode === 'server') {
+            serverOpts.style.display = '';
+            dlOpts.style.display = 'none';
+            btn.innerHTML = '<i class="bi bi-play-circle me-2"></i>开始恢复';
+        } else if (mode === 'zip') {
+            serverOpts.style.display = 'none';
+            dlOpts.style.display = '';
+            hint.textContent = '选中的文件将打包为 ZIP 下载到本机';
+            btn.innerHTML = '<i class="bi bi-download me-2"></i>下载 ZIP';
+        } else {
+            serverOpts.style.display = 'none';
+            dlOpts.style.display = '';
+            hint.textContent = '选中的归档文件将直接下载到本机（.tar.zst 等原始格式）';
+            btn.innerHTML = '<i class="bi bi-download me-2"></i>下载归档';
+        }
+    }
+
+    document.querySelectorAll('input[name="recoveryMode"]').forEach(function(radio) {
+        radio.addEventListener('change', updateModeUI);
+    });
+    updateModeUI();
+
+    // ============ 恢复执行 ============
+    function _restoreBtn() {
+        var btn = document.getElementById('startRestoreBtn');
+        btn.disabled = false;
+        updateModeUI();
+    }
+
+    function startRecovery() {
+        if (!selectedSetId) { alert('请先选择备份集'); return; }
+        var sel = getSelectedFilesForAPI();
+        if (!sel) { alert('请至少选择一个文件或归档'); return; }
+        var mode = getRecoveryMode();
+        if (mode === 'server') startServerRestore(sel);
+        else if (mode === 'zip') startZipDownload(sel);
+        else startRawDownload(sel);
+    }
+
+    function startServerRestore(sel) {
+        var targetPath = document.getElementById('targetPath').value.trim();
+        if (!targetPath) { alert('请输入目标路径'); return; }
+        var btn = document.getElementById('startRestoreBtn');
+        btn.disabled = true;
+        btn.textContent = '创建任务...';
+
+        fetch('/api/recovery/restore', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                set_id: selectedSetId, target_path: targetPath,
+                overwrite: document.getElementById('overwriteOption').value,
+                preserve_permissions: document.getElementById('preservePerms').checked,
+                verify_integrity: document.getElementById('verifyIntegrity').checked,
+                selected_files: sel,
+            }),
+        })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            if (data.detail) { alert('创建恢复任务失败: ' + data.detail); _restoreBtn(); return; }
+            currentRecoveryId = data.recovery_id;
+            document.getElementById('progressSection').style.display = 'block';
+            btn.innerHTML = '<i class="bi bi-hourglass me-2"></i>恢复进行中...';
+            statusPollTimer = setInterval(pollRecoveryStatus, 2000);
+        })
+        .catch(function(e) { alert('请求失败: ' + e.message); _restoreBtn(); });
+    }
+
+    function pollRecoveryStatus() {
+        if (!currentRecoveryId) return;
+        fetch('/api/recovery/recovery-status/' + currentRecoveryId)
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            var pct = data.progress_percent || 0;
+            document.getElementById('progressFill').style.width = pct + '%';
+            document.getElementById('progressPercent').textContent = pct.toFixed(1) + '%';
+            document.getElementById('progressLabel').textContent = '恢复进度 (' + (data.status || '') + ')';
+            document.getElementById('progressDetail').textContent =
+                (data.current_archive ? '当前: ' + data.current_archive + ' | ' : '') +
+                '归档: ' + (data.processed_archives || 0) + '/' + (data.total_archives || 0) +
+                '  文件: ' + (data.processed_files || 0);
+            if (data.status === 'completed') {
+                clearInterval(statusPollTimer);
+                document.getElementById('progressLabel').textContent = '恢复完成';
+                document.getElementById('progressDetail').textContent = '已恢复 ' + (data.processed_files || 0) + ' 个文件';
+                _restoreBtn();
+            }
+            if (data.status === 'failed' || data.status === 'cancelled') {
+                clearInterval(statusPollTimer);
+                document.getElementById('progressLabel').textContent = data.status === 'failed' ? '恢复失败' : '已取消';
+                document.getElementById('progressDetail').textContent = data.error_message || '';
+                _restoreBtn();
+            }
+        })
+        .catch(function(e) { console.error('轮询恢复状态失败:', e); });
+    }
+
+    function startZipDownload(sel) {
+        var btn = document.getElementById('startRestoreBtn');
+        btn.disabled = true;
+        btn.innerHTML = '<i class="bi bi-hourglass me-2"></i>打包中...';
+        fetch('/api/recovery/download-zip', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ set_id: selectedSetId, selected_files: sel }),
+        })
+        .then(function(r) {
+            if (!r.ok) return r.json().then(function(d) { throw new Error(d.detail || '打包失败'); });
+            return r.blob();
+        })
+        .then(function(blob) {
+            if (blob.size < 100) throw new Error('打包结果为空');
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url; a.download = selectedSetId + '_recovery.zip';
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a); URL.revokeObjectURL(url);
+            _restoreBtn();
+        })
+        .catch(function(e) { alert('下载失败: ' + e.message); _restoreBtn(); });
+    }
+
+    function startRawDownload(sel) {
+        var btn = document.getElementById('startRestoreBtn');
+        var archiveNames = Object.keys(sel);
+        if (!archiveNames.length) { alert('未选择归档'); return; }
+        var downloaded = 0;
+        btn.disabled = true;
+        function downloadNext() {
+            if (downloaded >= archiveNames.length) { _restoreBtn(); return; }
+            var archName = archiveNames[downloaded];
+            btn.innerHTML = '<i class="bi bi-hourglass me-2"></i>下载 ' + (downloaded + 1) + '/' + archiveNames.length + '...';
+            var url = '/api/recovery/download-raw?set_id=' + encodeURIComponent(selectedSetId) + '&archive=' + encodeURIComponent(archName);
+            var a = document.createElement('a');
+            a.href = url; a.download = archName;
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a);
+            downloaded++;
+            setTimeout(downloadNext, 1500);
+        }
+        downloadNext();
+    }
+
+    // ============ 目录浏览器 ============
+    var _dirModal = null;
+    document.getElementById('browseTargetBtn').addEventListener('click', function() {
+        if (!_dirModal) {
+            _dirModal = document.createElement('div');
+            _dirModal.className = 'modal-overlay hidden';
+            _dirModal.innerHTML = '<div class="progress-modal" style="width:500px;">' +
+                '<h6><i class="bi bi-folder2-open me-2"></i>选择目标目录</h6>' +
+                '<div class="input-group input-group-sm mb-2">' +
+                '<input type="text" class="form-control" id="dirModalPath" value="/">' +
+                '<button class="btn btn-outline-secondary btn-sm" type="button" id="dirModalGo"><i class="bi bi-arrow-right"></i></button></div>' +
+                '<div id="dirModalList" style="max-height:300px;overflow-y:auto;border:1px solid rgba(0,170,255,0.15);border-radius:4px;padding:4px;"></div>' +
+                '<div class="mt-2 d-flex justify-content-between">' +
+                '<button class="btn btn-outline-secondary btn-sm" id="dirModalCancel">取消</button>' +
+                '<button class="btn btn-outline-secondary btn-sm" id="dirModalSelect"><i class="bi bi-check me-1"></i>选择此目录</button></div></div>';
+            document.body.appendChild(_dirModal);
+            document.getElementById('dirModalGo').addEventListener('click', function() { loadDirList(document.getElementById('dirModalPath').value.trim()); });
+            document.getElementById('dirModalPath').addEventListener('keydown', function(e) { if (e.key === 'Enter') loadDirList(this.value.trim()); });
+            document.getElementById('dirModalCancel').addEventListener('click', function() { _dirModal.classList.add('hidden'); });
+            document.getElementById('dirModalSelect').addEventListener('click', function() {
+                document.getElementById('targetPath').value = document.getElementById('dirModalPath').value.trim();
+                _dirModal.classList.add('hidden');
             });
         }
+        _dirModal.classList.remove('hidden');
+        document.getElementById('dirModalPath').value = document.getElementById('targetPath').value.trim() || '/';
+        loadDirList(document.getElementById('dirModalPath').value);
     });
 
-    // 事件：选中文件列表移除
-    listEl.addEventListener('click', function(e){
-        const btn = e.target.closest('button[data-remove-id]');
-        if (!btn) return;
-        const id = btn.getAttribute('data-remove-id');
-        selectFile(id, false);
+    function loadDirList(path) {
+        var listEl = document.getElementById('dirModalList');
+        listEl.innerHTML = '<div class="text-center text-muted py-3">加载中...</div>';
+        fetch('/api/system/file-system/list?path=' + encodeURIComponent(path))
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            listEl.innerHTML = '';
+            if (data.error) { listEl.innerHTML = '<div class="text-danger p-2">' + escapeHtml(data.error) + '</div>'; return; }
+            if (data.parent_path) {
+                var up = document.createElement('div');
+                up.className = 'tree-node';
+                up.innerHTML = '<i class="bi bi-arrow-up me-1 text-warning"></i><span>..</span>';
+                up.addEventListener('click', function() {
+                    document.getElementById('dirModalPath').value = data.parent_path;
+                    loadDirList(data.parent_path);
+                });
+                listEl.appendChild(up);
+            }
+            var dirs = (data.directories || []).sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
+            if (!dirs.length) listEl.innerHTML += '<div class="text-muted p-2" style="font-size:0.8rem;">空目录</div>';
+            dirs.forEach(function(d) {
+                var item = document.createElement('div');
+                item.className = 'tree-node';
+                item.innerHTML = '<i class="bi bi-folder me-1 text-warning"></i><span>' + escapeHtml(d.name) + '</span>';
+                item.addEventListener('click', function() {
+                    var newPath = (d.path || (path + '/' + d.name)).replace(/\/+/g, '/');
+                    document.getElementById('dirModalPath').value = newPath;
+                    loadDirList(newPath);
+                });
+                listEl.appendChild(item);
+            });
+        })
+        .catch(function(e) { listEl.innerHTML = '<div class="text-danger p-2">加载失败: ' + escapeHtml(e.message) + '</div>'; });
+    }
+
+    // ============ 文件搜索 ============
+    var searchInput = document.getElementById('fileSearchInput');
+    var searchClearBtn = document.getElementById('fileSearchClearBtn');
+    var _searchTimer = null;
+    searchInput.addEventListener('input', function() {
+        clearTimeout(_searchTimer);
+        var keyword = this.value.trim().toLowerCase();
+        searchClearBtn.style.display = keyword ? 'inline-block' : 'none';
+        _searchTimer = setTimeout(function() { filterFileTree(keyword); }, 300);
+    });
+    searchClearBtn.addEventListener('click', function() {
+        searchInput.value = '';
+        searchClearBtn.style.display = 'none';
+        filterFileTree('');
     });
 
-    // 全选/清除
-    if (selectAllBtn){
-        selectAllBtn.addEventListener('click', function(){
-            fileIndex.forEach((meta, id) => { if (meta.type==='file') selectFile(id, true); });
-        });
-    }
-    if (clearSelectionBtn){
-        clearSelectionBtn.addEventListener('click', function(){
-            Array.from(selectedFiles).forEach(id => selectFile(id, false));
-            Array.from(selectedFolders).forEach(id => selectFile(id, false));
-        });
-    }
-
-    // 文件搜索
-    if (fileSearch) {
-        fileSearch.addEventListener('input', function() {
-            const searchTerm = this.value.toLowerCase().trim();
-            if (!searchTerm) {
-                // 显示所有文件
-                fileIndex.forEach((meta, id) => {
-                    meta.el.style.display = '';
-                });
-                return;
-            }
-            
-            // 过滤文件
-            fileIndex.forEach((meta, id) => {
-                const match = meta.name.toLowerCase().includes(searchTerm) || 
-                             (meta.file && meta.file.file_path && meta.file.file_path.toLowerCase().includes(searchTerm));
-                meta.el.style.display = match ? '' : 'none';
-            });
-        });
-    }
-
-    // 文件类型过滤
-    if (fileTypeFilter) {
-        fileTypeFilter.addEventListener('change', function() {
-            const filterType = this.value;
-            fileIndex.forEach((meta, id) => {
-                if (filterType === '所有文件') {
-                    meta.el.style.display = '';
-                } else if (filterType === '仅显示文件') {
-                    meta.el.style.display = meta.type === 'file' ? '' : 'none';
-                } else if (filterType === '仅显示文件夹') {
-                    meta.el.style.display = meta.type === 'dir' ? '' : 'none';
+    function filterFileTree(keyword) {
+        var container = document.getElementById('fileTree');
+        var nodes = container.querySelectorAll('.tree-node');
+        if (!keyword) {
+            nodes.forEach(function(n) { n.style.display = ''; });
+            return;
+        }
+        nodes.forEach(function(node) {
+            var text = node.textContent.toLowerCase();
+            if (text.indexOf(keyword) >= 0) {
+                node.style.display = '';
+                // 显示父容器
+                var p = node.parentElement;
+                while (p && p !== container) {
+                    if (p.classList.contains('tree-children')) p.style.display = '';
+                    if (p.classList.contains('tree-node')) p.style.display = '';
+                    p = p.parentElement;
                 }
-            });
-        });
-    }
-
-    // 开始恢复按钮
-    if (startRecoveryBtn) {
-        startRecoveryBtn.addEventListener('click', async function() {
-            if (!currentBackupSetId || selectedFiles.size === 0) {
-                alert('请先选择备份集和要恢复的文件');
-                return;
-            }
-
-            const recoveryPath = document.getElementById('recoveryPath')?.value || '/tmp/recovery';
-            const selectedFileList = Array.from(selectedFiles).map(id => {
-                const meta = fileIndex.get(id);
-                if (!meta || !meta.file) return null;
-                return {
-                    id: meta.file.id,
-                    file_path: meta.file.file_path,
-                    file_name: meta.file.file_name,
-                    file_size: meta.file.file_size,
-                    compressed_size: meta.file.compressed_size
-                };
-            }).filter(f => f !== null);
-
-            if (selectedFileList.length === 0) {
-                alert('没有有效的文件可以恢复');
-                return;
-            }
-
-            try {
-                this.disabled = true;
-                this.textContent = '恢复中...';
-
-                const response = await fetch('/api/recovery/tasks', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        backup_set_id: currentBackupSetId,
-                        files: selectedFileList,
-                        target_path: recoveryPath
-                    })
-                });
-
-                const result = await response.json();
-                
-                if (result.success) {
-                    alert('恢复任务已创建，正在后台执行');
-                    // 可以在这里添加任务状态监控
-                } else {
-                    alert('创建恢复任务失败: ' + (result.message || '未知错误'));
-                }
-            } catch (error) {
-                console.error('创建恢复任务失败:', error);
-                alert('创建恢复任务失败: ' + error.message);
-            } finally {
-                this.disabled = false;
-                this.textContent = '<i class="bi bi-play-circle me-2"></i>开始恢复';
+            } else {
+                node.style.display = 'none';
             }
         });
     }
 
-    // 初始化：加载备份组
-    loadBackupGroups();
+    // ============ 工具函数 ============
+    function formatBytes(b) {
+        if (!b || b === 0) return '0 B';
+        var units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        var i = 0, v = b;
+        while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+        return (i === 0 ? v : v.toFixed(1)) + ' ' + units[i];
+    }
+
+    function escapeHtml(text) {
+        var div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
+    // ============ 事件绑定 ============
+    document.getElementById('refreshBtn').addEventListener('click', checkTapeStatus);
+    document.getElementById('mountBtn').addEventListener('click', mountTape);
+    document.getElementById('remountBtn').addEventListener('click', remountTape);
+    document.getElementById('ejectBtn').addEventListener('click', ejectTape);
+    document.getElementById('scanBtn').addEventListener('click', scanTape);
+    document.getElementById('startRestoreBtn').addEventListener('click', startRecovery);
+    document.getElementById('opsModalClose').addEventListener('click', function() { _hideOpsModal(); checkTapeStatus(); });
+
+    document.getElementById('selectAllBtn').addEventListener('click', function() {
+        document.querySelectorAll('input[data-role="archive"]').forEach(function(cb) {
+            cb.checked = true; cb.indeterminate = false;
+            selectedFilesMap[cb.dataset.archive] = null;
+        });
+        document.querySelectorAll('input[data-role="file"]').forEach(function(cb) { cb.checked = true; });
+        updateSelectionSummary();
+    });
+
+    document.getElementById('deselectAllBtn').addEventListener('click', function() {
+        selectedFilesMap = {};
+        document.querySelectorAll('input[data-role="archive"]').forEach(function(cb) { cb.checked = false; cb.indeterminate = false; });
+        document.querySelectorAll('input[data-role="file"]').forEach(function(cb) { cb.checked = false; });
+        updateSelectionSummary();
+    });
+
+    document.getElementById('goToRestoreBtn').addEventListener('click', function() {
+        var sel = getSelectedFilesForAPI();
+        if (!sel) { alert('请至少选择一个文件或归档'); return; }
+        var archiveCount = Object.keys(sel).length;
+        var fileCount = 0;
+        Object.keys(sel).forEach(function(arch) {
+            if (sel[arch] === null) {
+                var files = (allArchiveData[arch] || []).filter(function(e) { return !e.is_dir; });
+                fileCount += files.length;
+            } else { fileCount += sel[arch].length; }
+        });
+        document.getElementById('restoreSummary').textContent = selectedSetId + ' — ' + archiveCount + ' 个归档, ' + fileCount + ' 个文件';
+        document.getElementById('startRestoreBtn').disabled = false;
+        goToStep(4);
+    });
+
+    // 页面加载后自动检测
+    checkTapeStatus();
 })();
 </script>
 {% endblock %}

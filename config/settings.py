@@ -93,19 +93,11 @@ class Settings(BaseSettings):
     # 是否在完整备份前自动格式化磁带
     ENABLE_TAPE_FORMAT_BEFORE_FULL: bool = True
     # ITDT 接口配置
-    TAPE_INTERFACE_TYPE: str = "linux"  # linux 使用 mt 命令
     ITDT_PATH: str = "/usr/local/itdt/itdt"
-    ITDT_LOG_LEVEL: str = "Information"  # Errors|Warnings|Information|Debug
-    ITDT_LOG_PATH: str = "output"
 
     # LTFS 工具目录配置
     LTFS_TOOLS_DIR: str = "/usr/local/ltfs"
     MKLTFS_PATH: str = "/usr/local/bin/mkltfs"  # mkltfs 命令路径
-    LTFS_PATH: str = "/usr/local/bin/ltfs"  # ltfs 挂载命令路径
-    ITDT_RESULT_PATH: str = "output"
-    ITDT_DEVICE_PATH: str | None = None
-    ITDT_FORCE_GENERIC_DD: bool = True  # 允许在无专用驱动时强制使用通用驱动
-    ITDT_SCAN_SHOW_ALL_PATHS: bool = True  # 扫描时显示所有路径
 
     # 压缩配置
     COMPRESSION_LEVEL: int = 9
@@ -131,6 +123,8 @@ class Settings(BaseSettings):
     # 日志配置
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/application.log"
+    LOG_MAX_BYTES: int = 10 * 1024 * 1024  # 日志文件最大大小（默认10MB）
+    LOG_BACKUP_COUNT: int = 30  # 日志文件备份数量
 
     # 钉钉通知配置
     DINGTALK_API_URL: str = "http://localhost:5555"
@@ -152,7 +146,7 @@ class Settings(BaseSettings):
     BACKUP_TEMP_DIR: str = "temp/backup"
     RECOVERY_TEMP_DIR: str = "temp/recovery"
     BACKUP_COMPRESS_DIR: str = "temp/compress"  # 压缩文件临时目录（先压缩到这里，再移动到磁带机）
-    COMPRESS_OUTPUT_DIR: str = "temp/output"  # 压缩输出目录（用于存放最终压缩文件）
+    VERIFY_TEMP_DIR: str = "temp/verify"  # 验证任务临时目录
     COMPRESSION_THREADS: int = 3  # Python压缩线程数（py7zr/PGZip）
     # 压缩方法配置
     COMPRESSION_METHOD: str = "zstd"  # 压缩方法: "pgzip"、"zstd" 或 "tar"
@@ -164,9 +158,6 @@ class Settings(BaseSettings):
 
     # 扫描进度更新配置
     SCAN_UPDATE_INTERVAL: int = 2000  # 后台扫描每处理多少个文件更新一次数据库（total_files/total_bytes）
-    # 优化：从500增加到2000，减少数据库写入频率，提升扫描速度
-    # 如需更快速度，可增加到5000（需要更多内存，但写入速度更快）
-    SCAN_LOG_INTERVAL_SECONDS: int = 60  # 后台扫描进度日志输出的时间间隔（秒）
     SCAN_WAIT_TIMEOUT: int = 300  # 等待后台扫描写入文件记录的超时时间（秒），默认300秒（5分钟）
     # 压缩并行批次配置
     COMPRESSION_PARALLEL_BATCHES: int = 3  # 压缩并行批次数量（默认3），预读取程序队列数为该值+1
@@ -183,42 +174,15 @@ class Settings(BaseSettings):
     # 优点：减少扫描阶段数据库I/O，提升性能；崩溃时无孤儿记录
     # 注意：需要足够内存存放文件记录（100万文件约500MB）
 
-    # 检查点配置
-    USE_CHECKPOINT: bool = False  # 是否启用检查点文件，默认不启用
-
     # 磁带管理配置
     TAPE_POOL_SIZE: int = 12  # 磁带池大小
     TAPE_CHECK_INTERVAL: int = 3600  # 磁带状态检查间隔（秒）
     AUTO_TAPE_CLEANUP: bool = True
 
-    # Web界面配置
-    WEB_STATIC_DIR: str = "web/static"
-    WEB_TEMPLATE_DIR: str = "web/templates"
-    MAX_UPLOAD_SIZE: int = 1073741824  # 1GB
-
-    # 监控配置
-    METRICS_ENABLED: bool = True
-    HEALTH_CHECK_INTERVAL: int = 300  # 5分钟
-
     # 高级配置
-    ENVIRONMENT: str = "production"
-    WEB_HOST: str = "0.0.0.0"
     WEB_WORKERS: int = 4  # Web服务器工作进程数，同时作为7-Zip命令行线程数（-mmt参数）的默认值
-    ENABLE_CORS: bool = True
-    CORS_ORIGINS: str = "*"
-    ENABLE_GZIP: bool = True
     TAPE_DEVICE_PATH: str = "/dev/nst0"  # mt 命令使用的磁带设备
     LTFS_DEVICE_PATH: str = "/dev/sg2"   # LTFS 挂载使用的 SCSI generic 设备
-    LOG_BACKUP_COUNT: int = 30
-    ASYNC_POOL_SIZE: int = 20
-    ASYNC_MAX_OVERFLOW: int = 40
-    ENABLE_QUERY_CACHE: bool = True
-    QUERY_CACHE_TTL: int = 300
-    WEBSOCKET_HEARTBEAT: int = 30
-    SESSION_TIMEOUT: int = 3600
-    
-    # 数据目录配置
-    DATA_DIR: str = "data"
 
     class Config:
         env_file = ".env"

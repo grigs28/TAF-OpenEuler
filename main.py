@@ -15,6 +15,52 @@ import signal
 from pathlib import Path
 from datetime import datetime
 
+
+# 单实例锁文件
+LOCK_FILE = Path(__file__).parent / ".taf.pid"
+
+
+def _is_process_running(pid: int) -> bool:
+    """检查指定PID的进程是否仍在运行"""
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _check_and_create_lock():
+    """检测是否已有实例在运行，若无则创建锁文件。已运行则退出。"""
+    if LOCK_FILE.exists():
+        try:
+            old_pid = int(LOCK_FILE.read_text().strip())
+            if _is_process_running(old_pid):
+                safe_print(f"\n错误: 系统已在运行中 (PID: {old_pid})")
+                safe_print(f"  锁文件: {LOCK_FILE}")
+                safe_print("  如确认无其他实例，请删除锁文件后重试\n")
+                sys.exit(1)
+            else:
+                safe_print(f"发现残留锁文件 (PID: {old_pid} 已不存在)，自动清理")
+                LOCK_FILE.unlink()
+        except (ValueError, OSError):
+            # 文件内容异常，清理掉
+            try:
+                LOCK_FILE.unlink()
+            except OSError:
+                pass
+
+    LOCK_FILE.write_text(str(os.getpid()))
+    safe_print(f"单实例锁已创建: PID={os.getpid()}")
+
+
+def _remove_lock():
+    """移除锁文件"""
+    try:
+        if LOCK_FILE.exists():
+            LOCK_FILE.unlink()
+    except OSError:
+        pass
+
 # 添加项目根目录到Python路径
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
@@ -27,6 +73,7 @@ from utils.scheduler import TaskScheduler
 from tape.tape_manager import TapeManager
 from backup.backup_engine import BackupEngine
 from recovery.recovery_engine import RecoveryEngine
+from recovery.tape_recovery_engine import TapeRecoveryEngine
 from utils.dingtalk_notifier import DingTalkNotifier
 from utils.opengauss.guard import get_opengauss_monitor
 from utils.production_guard import ProductionGuard, install_production_guard
@@ -49,6 +96,7 @@ class TapeBackupSystem:
         self.tape_manager = TapeManager()
         self.backup_engine = BackupEngine()
         self.recovery_engine = RecoveryEngine()
+        self.tape_recovery_engine = TapeRecoveryEngine()
         self.dingtalk_notifier = DingTalkNotifier()
         self.opengauss_monitor = get_opengauss_monitor()
         self.web_app = None
@@ -168,8 +216,22 @@ class TapeBackupSystem:
                 if hasattr(self.backup_engine, "set_dependencies"):
                     self.backup_engine.set_dependencies(self.tape_manager, self.dingtalk_notifier)
                     logger.info("备份引擎依赖已绑定：TapeManager, DingTalkNotifier")
+
+                # 注入钉钉通知器到磁带管理器
+                self.tape_manager.dingtalk_notifier = self.dingtalk_notifier
             except Exception as dep_error:
                 logger.warning(f"绑定备份引擎依赖失败: {str(dep_error)}")
+
+            # 初始化磁带恢复引擎
+            try:
+                await self.tape_recovery_engine.initialize()
+                if hasattr(self.backup_engine, 'tape_handler') and self.backup_engine.tape_handler:
+                    self.tape_recovery_engine.set_dependencies(
+                        self.backup_engine.tape_handler, self.dingtalk_notifier
+                    )
+                    logger.info("磁带恢复引擎依赖已绑定：TapeHandler, DingTalkNotifier")
+            except Exception as tape_recovery_error:
+                logger.warning(f"磁带恢复引擎初始化失败: {str(tape_recovery_error)}")
 
             # 初始化Web应用
             safe_print("[6/7] 初始化Web应用...")
@@ -211,6 +273,20 @@ class TapeBackupSystem:
             safe_print(f"系统初始化完成，总耗时: {total_time:.2f}秒")
             print("=" * 80 + "\n")
             logger.info("系统初始化完成！（部分组件可能未正确初始化，请在Web界面中检查配置）")
+
+            # 记录系统启动到数据库
+            try:
+                from utils.log_utils import log_system
+                from models.system_log import LogLevel, LogCategory
+                await log_system(
+                    level=LogLevel.INFO,
+                    category=LogCategory.SYSTEM,
+                    message=f"系统启动完成 (版本: {self.settings.APP_VERSION}, 耗时: {total_time:.2f}秒)",
+                    module="main",
+                    function="initialize",
+                )
+            except Exception:
+                pass
 
             # 发送启动通知（如果通知系统可用）
             try:
@@ -373,6 +449,23 @@ class TapeBackupSystem:
                     pass
 
             logger.info("系统服务已关闭")
+
+            # 记录系统关闭到数据库
+            try:
+                from utils.log_utils import log_system
+                from models.system_log import LogLevel, LogCategory
+                await log_system(
+                    level=LogLevel.INFO,
+                    category=LogCategory.SYSTEM,
+                    message="系统正常关闭",
+                    module="main",
+                    function="shutdown",
+                )
+            except Exception:
+                pass
+
+            # 清理单实例锁文件
+            _remove_lock()
 
         except Exception as e:
             logger = logging.getLogger(__name__)
@@ -555,6 +648,9 @@ if __name__ == "__main__":
 
     safe_print("\nPython 版本: " + sys.version.split()[0])
     safe_print("工作目录: " + os.getcwd())
+
+    # 检测重复实例
+    _check_and_create_lock()
 
     # 运行主程序（异常处理器在 main() 函数中设置）
     asyncio.run(main())

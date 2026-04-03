@@ -2,33 +2,120 @@
 // System Logs Management
 
 let currentLogPage = 0;
-const logPageSize = 50;
+let logPageSize = 50;
+let totalLogCount = 0;
+
+// 分类和操作类型的中文映射
+const categoryLabels = {
+    'system': '系统', 'backup': '备份', 'recovery': '恢复', 'tape': '磁带',
+    'user': '用户', 'security': '安全', 'scheduler': '计划任务',
+    'api': 'API', 'database': '数据库', 'performance': '性能', 'web': 'Web'
+};
+
+const levelLabels = {
+    'debug': '调试', 'info': '信息', 'warning': '警告',
+    'error': '错误', 'critical': '严重'
+};
+
+const operationLabels = {
+    'create': '创建', 'update': '更新', 'delete': '删除', 'read': '读取',
+    'execute': '执行', 'config': '配置', 'export': '导出', 'import': '导入',
+    'login': '登录', 'logout': '登出',
+    'tape_load': '加载磁带', 'tape_unload': '卸载磁带', 'tape_eject': '弹出磁带',
+    'tape_scan': '扫描磁带', 'tape_read_label': '读取标签', 'tape_write_label': '写入标签',
+    'tape_erase': '擦除磁带', 'tape_format': '格式化磁带', 'tape_mount': '挂载磁带',
+    'tape_unmount': '卸载磁带', 'tape_verify': '验证磁带', 'tape_rewind': '回绕磁带',
+    'tape_position': '定位磁带',
+    'backup_start': '备份开始', 'backup_complete': '备份完成',
+    'backup_failed': '备份失败', 'backup_cancel': '备份取消',
+    'recovery_start': '恢复开始', 'recovery_complete': '恢复完成',
+    'recovery_failed': '恢复失败',
+    'scheduler_create': '创建计划任务', 'scheduler_update': '更新计划任务',
+    'scheduler_delete': '删除计划任务', 'scheduler_execute': '执行计划任务'
+};
 
 // 初始化系统日志
 document.addEventListener('DOMContentLoaded', function() {
-    // 当系统日志标签页激活时加载日志
-    const logsTab = document.getElementById('logs-tab');
+    var logsTab = document.getElementById('logs-tab');
     if (logsTab) {
         logsTab.addEventListener('shown.bs.tab', function() {
+            loadLogFilterOptions();
             loadSystemLogs();
         });
-        
-        // 如果标签页已经激活，立即加载
+
         if (logsTab.classList.contains('active')) {
+            loadLogFilterOptions();
             loadSystemLogs();
         }
     }
-    
+
+    // 筛选器变化自动刷新
+    ['logCategory', 'logLevel', 'logOperationType'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) {
+            el.addEventListener('change', function() {
+                currentLogPage = 0;
+                loadSystemLogs();
+            });
+        }
+    });
+
     // 刷新日志按钮
-    const refreshLogsBtn = document.getElementById('refreshLogsBtn');
+    var refreshLogsBtn = document.getElementById('refreshLogsBtn');
     if (refreshLogsBtn) {
         refreshLogsBtn.addEventListener('click', function() {
+            loadLogFilterOptions();
             loadSystemLogs();
         });
     }
-    
+
+    // 日志级别切换
+    loadCurrentLogLevel();
+    var logLevelToggle = document.getElementById('logLevelToggle');
+    if (logLevelToggle) {
+        logLevelToggle.addEventListener('click', function(e) {
+            var btn = e.target.closest('button[data-level]');
+            if (!btn) return;
+            var level = btn.getAttribute('data-level');
+            if (!level) return;
+            // 保存到后端，成功后再高亮按钮
+            fetch('/api/system/env-config', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({log_level: level})
+            }).then(function(r) { return r.json(); }).then(function(result) {
+                if (result.success) {
+                    logLevelToggle.querySelectorAll('button').forEach(function(b) { b.classList.remove('active'); });
+                    btn.classList.add('active');
+                    console.log('日志级别已切换为: ' + level);
+                } else {
+                    alert('切换失败: ' + (result.detail || '未知错误'));
+                    loadCurrentLogLevel();
+                }
+            }).catch(function(err) {
+                alert('切换失败: ' + err.message);
+                loadCurrentLogLevel();
+            });
+        });
+    }
+
+    // 导出Excel按钮
+    var exportLogsBtn = document.getElementById('exportLogsBtn');
+    if (exportLogsBtn) {
+        exportLogsBtn.addEventListener('click', function() {
+            var params = new URLSearchParams();
+            var category = document.getElementById('logCategory');
+            var level = document.getElementById('logLevel');
+            var opType = document.getElementById('logOperationType');
+            if (category && category.value) params.set('category', category.value);
+            if (level && level.value) params.set('level', level.value);
+            if (opType && opType.value) params.set('operation_type', opType.value);
+            window.open('/api/system/logs/export?' + params.toString(), '_blank');
+        });
+    }
+
     // 清空日志按钮
-    const clearLogsBtn = document.getElementById('clearLogsBtn');
+    var clearLogsBtn = document.getElementById('clearLogsBtn');
     if (clearLogsBtn) {
         clearLogsBtn.addEventListener('click', function() {
             if (confirm('确定要清空系统日志吗？此操作不可恢复！')) {
@@ -36,11 +123,12 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     // 分页按钮
-    const logPrevPage = document.getElementById('logPrevPage');
-    const logNextPage = document.getElementById('logNextPage');
-    
+    var logPrevPage = document.getElementById('logPrevPage');
+    var logNextPage = document.getElementById('logNextPage');
+    var logPageSizeSelect = document.getElementById('logPageSize');
+
     if (logPrevPage) {
         logPrevPage.addEventListener('click', function() {
             if (currentLogPage > 0) {
@@ -49,14 +137,78 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         });
     }
-    
+
     if (logNextPage) {
         logNextPage.addEventListener('click', function() {
             currentLogPage++;
             loadSystemLogs();
         });
     }
+
+    if (logPageSizeSelect) {
+        logPageSizeSelect.addEventListener('change', function() {
+            logPageSize = parseInt(this.value, 10);
+            currentLogPage = 0;
+            loadSystemLogs();
+        });
+    }
 });
+
+// 加载筛选器选项（从数据库实际存在的值）
+async function loadLogFilterOptions() {
+    try {
+        var response = await fetch('/api/system/log-filters');
+        var result = await response.json();
+        if (!result.success) return;
+
+        // 保留当前选中值
+        var catSelect = document.getElementById('logCategory');
+        var lvlSelect = document.getElementById('logLevel');
+        var opSelect = document.getElementById('logOperationType');
+
+        var curCat = catSelect ? catSelect.value : '';
+        var curLvl = lvlSelect ? lvlSelect.value : '';
+        var curOp = opSelect ? opSelect.value : '';
+
+        // 填充分类
+        if (catSelect && result.categories) {
+            catSelect.options.length = 1;
+            result.categories.forEach(function(val) {
+                var opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = categoryLabels[val] || val;
+                catSelect.appendChild(opt);
+            });
+            catSelect.value = curCat;
+        }
+
+        // 填充级别
+        if (lvlSelect && result.levels) {
+            lvlSelect.options.length = 1;
+            result.levels.forEach(function(val) {
+                var opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = levelLabels[val] || val;
+                lvlSelect.appendChild(opt);
+            });
+            lvlSelect.value = curLvl;
+        }
+
+        // 填充操作类型
+        if (opSelect && result.operation_types) {
+            opSelect.options.length = 1;
+            result.operation_types.forEach(function(val) {
+                var opt = document.createElement('option');
+                opt.value = val;
+                opt.textContent = operationLabels[val] || val;
+                opSelect.appendChild(opt);
+            });
+            opSelect.value = curOp;
+        }
+    } catch (err) {
+        console.error('加载日志筛选选项失败:', err);
+    }
+}
 
 // 加载系统日志
 async function loadSystemLogs() {
@@ -92,9 +244,9 @@ async function loadSystemLogs() {
         
         if (result.success) {
             const logs = result.logs || [];
-            const total = result.total !== undefined ? result.total : logs.length;
+            const total = result.total !== undefined ? result.total : 0;
             displaySystemLogs(logs, total);
-            updateLogPagination(total);
+            updateLogPagination(total, logs.length);
         } else {
             logContainer.innerHTML = `<div class="text-center text-danger py-5">
                 <i class="bi bi-exclamation-triangle me-2"></i>加载失败：${result.message || result.detail || '未知错误'}
@@ -209,23 +361,30 @@ function getCategoryBadge(category) {
 }
 
 // 更新日志分页信息
-function updateLogPagination(total) {
+function updateLogPagination(total, returnedCount) {
     const paginationInfo = document.getElementById('logPaginationInfo');
     const logPrevPage = document.getElementById('logPrevPage');
     const logNextPage = document.getElementById('logNextPage');
-    
+
+    totalLogCount = total;
+
     if (paginationInfo) {
-        const start = currentLogPage * logPageSize + 1;
-        const end = Math.min((currentLogPage + 1) * logPageSize, total);
-        paginationInfo.textContent = `显示 ${start}-${end} 条，共 ${total} 条`;
+        if (total === 0) {
+            paginationInfo.textContent = '暂无数据';
+        } else {
+            const start = currentLogPage * logPageSize + 1;
+            const end = currentLogPage * logPageSize + returnedCount;
+            paginationInfo.textContent = `显示 ${start}-${end} 条，共 ${total} 条`;
+        }
     }
-    
+
     if (logPrevPage) {
         logPrevPage.disabled = currentLogPage === 0;
     }
-    
+
     if (logNextPage) {
-        logNextPage.disabled = (currentLogPage + 1) * logPageSize >= total;
+        const hasMore = (currentLogPage + 1) * logPageSize < total;
+        logNextPage.disabled = !hasMore || returnedCount === 0;
     }
 }
 
@@ -238,5 +397,27 @@ async function clearSystemLogs() {
     } catch (error) {
         console.error('清空系统日志失败:', error);
         alert('清空失败：' + error.message);
+    }
+}
+
+// 加载当前日志级别并高亮按钮
+async function loadCurrentLogLevel() {
+    try {
+        var response = await fetch('/api/system/env-config');
+        var result = await response.json();
+        if (result.success && result.config) {
+            var currentLevel = (result.config.log_level || 'INFO').toUpperCase();
+            var toggle = document.getElementById('logLevelToggle');
+            if (toggle) {
+                toggle.querySelectorAll('button').forEach(function(btn) {
+                    btn.classList.remove('active');
+                    if (btn.getAttribute('data-level') === currentLevel) {
+                        btn.classList.add('active');
+                    }
+                });
+            }
+        }
+    } catch (err) {
+        console.error('加载日志级别失败:', err);
     }
 }

@@ -107,15 +107,15 @@
                         <label class="form-check-label" for="autoTapeCleanup">自动清理过期磁带</label>
                     </div>
 
-                    <div class="mb-3">
-                        <button class="btn btn-outline-primary" id="testTapeConnectionBtn">
-                            <i class="bi bi-plug me-2"></i>测试连接
+                    <div class="mb-3 d-flex gap-2">
+                        <button class="btn btn-outline-secondary btn-sm" id="testTapeConnectionBtn">
+                            <i class="bi bi-plug me-1"></i>测试连接
                         </button>
-                        <button class="btn btn-success" id="saveTapeConfigBtn">
-                            <i class="bi bi-save me-2"></i>保存配置
+                        <button class="btn btn-outline-secondary btn-sm" id="saveTapeConfigBtn">
+                            <i class="bi bi-save me-1"></i>保存配置
                         </button>
-                        <button class="btn btn-info" id="scanTapeDevicesBtn">
-                            <i class="bi bi-search me-2"></i>扫描设备
+                        <button class="btn btn-outline-secondary btn-sm" id="scanTapeDevicesBtn">
+                            <i class="bi bi-search me-1"></i>扫描设备
                         </button>
                     </div>
                 </div>
@@ -174,10 +174,10 @@
                             </div>
                             <hr>
                             <div class="d-flex gap-2 justify-content-center">
-                                <button class="btn btn-primary btn-sm" id="loadTapeBtn" style="display: none;">
+                                <button class="btn btn-outline-secondary btn-sm" id="loadTapeBtn" style="display: none;">
                                     <i class="bi bi-upload me-1"></i>加载磁带
                                 </button>
-                                <button class="btn btn-warning btn-sm" id="unloadTapeBtn" style="display: none;">
+                                <button class="btn btn-outline-secondary btn-sm" id="unloadTapeBtn" style="display: none;">
                                     <i class="bi bi-eject me-1"></i>弹出磁带
                                 </button>
                             </div>
@@ -199,24 +199,45 @@
                     </h5>
                 </div>
                 <div class="card-body">
-                    <div class="table-responsive">
-                        <table class="table table-sm">
-                            <thead>
+                    <div class="table-responsive" style="height: 500px; overflow-y: auto; background: rgba(20, 30, 48, 0.6); padding: 10px; border-radius: 4px;">
+                        <table class="table table-sm table-hover mb-0">
+                            <thead style="position: sticky; top: 0; z-index: 1;">
                                 <tr>
                                     <th>时间</th>
-                                    <th>操作</th>
-                                    <th>设备</th>
-                                    <th>用户</th>
-                                    <th>状态</th>
-                                    <th>备注</th>
+                                    <th>模块</th>
+                                    <th>函数</th>
+                                    <th>级别</th>
+                                    <th>消息</th>
                                 </tr>
                             </thead>
                             <tbody id="tapeDriveHistoryTableBody">
                                 <tr>
-                                    <td colspan="6" class="text-center text-muted">加载中...</td>
+                                    <td colspan="5" class="text-center text-muted">加载中...</td>
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                    <!-- 分页 -->
+                    <div class="d-flex justify-content-between align-items-center mt-3">
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="text-muted small">每页</span>
+                            <select class="form-select form-select-sm" id="tdhPageSize" style="width: auto; min-width: 80px;">
+                                <option value="20" selected>20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                                <option value="200">200</option>
+                            </select>
+                            <span class="text-muted small">条</span>
+                            <span class="text-muted small ms-2" id="tdhPageInfo">显示 0-0 条，共 0 条</span>
+                        </div>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-secondary" id="tdhPrevBtn" disabled>
+                                <i class="bi bi-chevron-left"></i>上一页
+                            </button>
+                            <button class="btn btn-outline-secondary" id="tdhNextBtn" disabled>
+                                下一页<i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -473,71 +494,96 @@ function scanDevicesOnLoad() {
         });
 }
 
-// 加载磁带机操作历史
+// 加载磁带机操作历史（支持分页）
+let tdhPage = 0;
+let tdhPageSize = 20;
+let tdhTotal = 0;
+
 async function loadTapeDriveHistory() {
     try {
         const tbody = document.getElementById('tapeDriveHistoryTableBody');
         if (!tbody) return;
-        
-        // 显示加载中
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">加载中...</td></tr>';
-        
-        const response = await fetch('/api/system/tape/history?limit=50&offset=0');
+
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">加载中...</td></tr>';
+
+        const offset = tdhPage * tdhPageSize;
+        const response = await fetch(`/api/system/tape/history?limit=${tdhPageSize}&offset=${offset}`);
         const result = await response.json();
-        
+
         if (result && result.success && result.history && result.history.length > 0) {
+            tdhTotal = result.total || result.count || 0;
             tbody.innerHTML = '';
-            
+
+            // 左侧色条颜色映射
+            const levelColorMap = {
+                'info': '#17a2b8', 'warning': '#ffc107',
+                'error': '#dc3545', 'debug': '#6c757d', 'critical': '#8b0000'
+            };
+
             result.history.forEach(log => {
-                // 格式化时间
                 const time = log.time ? new Date(log.time).toLocaleString('zh-CN', {
-                    year: 'numeric',
-                    month: '2-digit',
-                    day: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit',
-                    second: '2-digit'
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
                 }) : 'N/A';
-                
-                // 操作名称
-                const operation = log.operation || '操作';
-                
-                // 设备名称
-                const deviceName = log.device_name || '-';
-                
-                // 用户名
-                const username = log.username || 'system';
-                
-                // 状态徽章
-                const statusBadge = log.success 
-                    ? '<span class="badge bg-success">成功</span>' 
-                    : '<span class="badge bg-danger">失败</span>';
-                
-                // 备注信息
-                const message = log.message || '';
-                
+
+                const level = log.level || 'info';
+                const barColor = levelColorMap[level] || '#6c757d';
+
+                const levelBadge = {
+                    'info': 'bg-info', 'warning': 'bg-warning text-dark',
+                    'error': 'bg-danger', 'debug': 'bg-secondary', 'critical': 'bg-danger'
+                };
+
                 const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${time}</td>
-                    <td>${operation}</td>
-                    <td>${deviceName}</td>
-                    <td>${username}</td>
-                    <td>${statusBadge}</td>
-                    <td>${message}</td>
-                `;
+                row.style.borderLeft = `4px solid ${barColor}`;
+
+                row.appendChild(Object.assign(document.createElement('td'), {textContent: time}));
+
+                // 模块名简化
+                const modShort = (log.device_name || '').replace('web.api.', '').replace('tape.', '');
+                row.appendChild(Object.assign(document.createElement('td'), {textContent: modShort, style: 'font-size:0.85rem'}));
+
+                row.appendChild(Object.assign(document.createElement('td'), {textContent: log.operation || '-', style: 'font-size:0.85rem'}));
+
+                // 级别徽章
+                const levelTd = document.createElement('td');
+                const lvlBadge = document.createElement('span');
+                lvlBadge.className = `badge ${levelBadge[level] || 'bg-secondary'}`;
+                lvlBadge.textContent = level.toUpperCase();
+                levelTd.appendChild(lvlBadge);
+                row.appendChild(levelTd);
+
+                row.appendChild(Object.assign(document.createElement('td'), {textContent: log.message || ''}));
+
                 tbody.appendChild(row);
             });
         } else {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">暂无操作历史</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">暂无操作历史</td></tr>';
+            tdhTotal = 0;
         }
+
+        // 更新分页信息
+        const start = tdhTotal > 0 ? offset + 1 : 0;
+        const end = Math.min(offset + tdhPageSize, tdhTotal);
+        const pageInfo = document.getElementById('tdhPageInfo');
+        if (pageInfo) pageInfo.textContent = `显示 ${start}-${end} 条，共 ${tdhTotal} 条`;
+
+        document.getElementById('tdhPrevBtn').disabled = tdhPage <= 0;
+        document.getElementById('tdhNextBtn').disabled = end >= tdhTotal;
+
     } catch (error) {
         console.error('加载磁带机操作历史失败:', error);
         const tbody = document.getElementById('tapeDriveHistoryTableBody');
         if (tbody) {
-            tbody.innerHTML = '<tr><td colspan="6" class="text-center text-danger">加载失败: ' + error.message + '</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center text-danger">加载失败: ' + error.message + '</td></tr>';
         }
     }
 }
+
+// 分页事件
+document.getElementById('tdhPrevBtn')?.addEventListener('click', () => { if (tdhPage > 0) { tdhPage--; loadTapeDriveHistory(); } });
+document.getElementById('tdhNextBtn')?.addEventListener('click', () => { tdhPage++; loadTapeDriveHistory(); });
+document.getElementById('tdhPageSize')?.addEventListener('change', function() { tdhPageSize = parseInt(this.value); tdhPage = 0; loadTapeDriveHistory(); });
 
 // 加载当前磁带信息
 async function loadCurrentTape() {

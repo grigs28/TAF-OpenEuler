@@ -230,7 +230,7 @@ class TapeRecoveryEngine:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=120)
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=360)
             if proc.returncode == 0:
                 await self._send_eject_notification(tape_id="unknown", success=True)
                 return {"success": True, "message": "磁带已弹出"}
@@ -329,8 +329,10 @@ class TapeRecoveryEngine:
 
                     await asyncio.sleep(1)
 
-                    # 进程已退出
+                    # 进程已退出，检查是否daemon化挂载成功（returncode==0）
                     if process.returncode is not None:
+                        if process.returncode == 0 and mount_point.is_mount():
+                            mounted = True
                         break
 
                     if mount_point.is_mount():
@@ -486,7 +488,11 @@ class TapeRecoveryEngine:
 
     async def eject_tape_streaming(self) -> AsyncGenerator[Dict, None]:
         """弹出磁带，实时输出命令日志（async generator）"""
-        device = self._get_tape_device_path()
+        # mt eject 需要磁带设备(/dev/nst0)，不是 SCSI generic 设备(/dev/sg2)
+        if self.tape_handler:
+            device = self.tape_handler._get_tape_device()
+        else:
+            device = getattr(self.settings, 'TAPE_DEVICE_PATH', '/dev/nst0')
         yield {"type": "log", "message": f"弹出磁带（设备: {device}）"}
 
         cmd = ['mt', '-f', device, 'eject']
@@ -498,7 +504,7 @@ class TapeRecoveryEngine:
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=120)
+            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
 
             if stdout:
                 for line in stdout.decode('utf-8', errors='replace').splitlines():
@@ -674,6 +680,94 @@ class TapeRecoveryEngine:
                 "total_archives": 0,
                 "message": f"扫描失败: {str(e)}",
             }
+
+    async def scan_tape_contents_streaming(self) -> AsyncGenerator[Dict, None]:
+        """流式扫描 LTFS 挂载点，逐个归档 yield 事件"""
+        mount_point = self._get_mount_point()
+
+        if not mount_point.exists() or not mount_point.is_mount():
+            yield {"type": "error", "message": "LTFS 未挂载，请先挂载磁带"}
+            return
+
+        try:
+            total_archives = 0
+            total_sets = 0
+
+            # 收集目录并排序
+            dirs = sorted(
+                [d for d in mount_point.iterdir()
+                 if d.is_dir() and d.name not in self.SYSTEM_DIRS and not d.name.startswith('.')],
+                key=lambda d: d.name,
+            )
+
+            yield {"type": "start", "total_dirs": len(dirs)}
+
+            for item in dirs:
+                set_id = item.name
+                archives = []
+
+                archive_files = sorted([f for f in item.iterdir() if f.is_file()], key=lambda f: f.name)
+                yield {"type": "set_start", "set_id": set_id, "file_count": len(archive_files)}
+
+                for archive_file in archive_files:
+                    file_size = archive_file.stat().st_size
+                    parsed = self._parse_archive_filename(archive_file.name)
+
+                    archive_info = {
+                        "filename": archive_file.name,
+                        "size_bytes": file_size,
+                        "size_display": self._format_bytes(file_size),
+                    }
+
+                    if parsed:
+                        archive_info.update({
+                            "compression_type": parsed["compression_type"],
+                            "timestamp": parsed["timestamp"],
+                            "timestamp_display": self._format_timestamp(parsed["timestamp"]),
+                            "sequence": parsed["sequence"],
+                        })
+                    else:
+                        archive_info.update({
+                            "compression_type": self._detect_compression_type(archive_file.name),
+                            "timestamp": None,
+                            "timestamp_display": None,
+                            "sequence": None,
+                        })
+
+                    archives.append(archive_info)
+                    total_archives += 1
+
+                    yield {
+                        "type": "archive",
+                        "set_id": set_id,
+                        "archive": archive_info,
+                    }
+
+                if archives:
+                    total_size = sum(a["size_bytes"] for a in archives)
+                    timestamps = [a["timestamp"] for a in archives if a.get("timestamp")]
+                    total_sets += 1
+
+                    yield {
+                        "type": "set_done",
+                        "set_id": set_id,
+                        "archive_count": len(archives),
+                        "total_size_bytes": total_size,
+                        "total_size_display": self._format_bytes(total_size),
+                        "earliest_timestamp": self._format_timestamp(min(timestamps)) if timestamps else None,
+                        "latest_timestamp": self._format_timestamp(max(timestamps)) if timestamps else None,
+                    }
+
+            yield {
+                "type": "done",
+                "total_backup_sets": total_sets,
+                "total_archives": total_archives,
+                "message": f"扫描完成: {total_sets} 个备份集, {total_archives} 个归档",
+            }
+
+        except Exception as e:
+            logger.error(f"[磁带恢复] 流式扫描失败: {e}", exc_info=True)
+            yield {"type": "error", "message": f"扫描失败: {str(e)}"}
 
     def _parse_archive_filename(self, filename: str) -> Optional[Dict]:
         """解析归档文件名，提取元数据"""

@@ -26,6 +26,8 @@ from typing import Optional, Tuple
 from models.backup import BackupSet
 from tape.tape_manager import TapeManager
 from tape.tape_cartridge import TapeCartridge, TapeStatus
+from utils.log_utils import log_operation
+from models.system_log import OperationType
 
 logger = logging.getLogger(__name__)
 
@@ -423,6 +425,22 @@ class TapeHandler:
                     log_msg += f", 容量: {capacity} GB"
                 logger.info(log_msg)
 
+                # 记录格式化操作到数据库
+                try:
+                    from utils.log_utils import log_operation
+                    from models.system_log import OperationType
+                    asyncio.create_task(log_operation(
+                        operation_type=OperationType.TAPE_FORMAT,
+                        resource_type="tape",
+                        resource_name=volume_name or "",
+                        operation_name="磁带格式化",
+                        operation_description=f"磁带格式化成功: 卷名={volume_name}, 序列号={serial}",
+                        category="tape",
+                        success=True,
+                    ))
+                except Exception:
+                    pass
+
                 return True, f"格式化成功: 卷名={volume_name}, 序列号={serial}"
             else:
                 error = stderr_text[:500] if stderr_text else "未知错误"
@@ -570,6 +588,20 @@ class TapeHandler:
             self._ltfs_mounted = False
             self._ltfs_process = None
             logger.info("[LTFS] 已卸载")
+            # 记录卸载到数据库
+            try:
+                from utils.log_utils import log_operation
+                from models.system_log import OperationType
+                asyncio.create_task(log_operation(
+                    operation_type=OperationType.TAPE_UNMOUNT,
+                    resource_type="tape",
+                    operation_name="磁带卸载",
+                    operation_description="LTFS已卸载",
+                    category="tape",
+                    success=True,
+                ))
+            except Exception:
+                pass
             return True
         except Exception as e:
             logger.warning(f"[LTFS] 卸载失败: {e}")
@@ -647,16 +679,70 @@ class TapeHandler:
                         self._ltfs_mount_point = mount_point
                         self._ltfs_process = process
                         logger.info(f"[挂载重试] 第 {attempt} 次挂载成功")
+                        # 记录挂载成功到数据库
+                        try:
+                            from utils.log_utils import log_operation
+                            from models.system_log import OperationType
+                            asyncio.create_task(log_operation(
+                                operation_type=OperationType.TAPE_MOUNT,
+                                resource_type="tape",
+                                operation_name="磁带挂载",
+                                operation_description=f"磁带挂载成功（第{attempt}次尝试）",
+                                category="tape",
+                                success=True,
+                            ))
+                        except Exception:
+                            pass
                         return True, f"挂载成功（第{attempt}次尝试）"
+                    # LTFS进程已退出，检查是否daemon化挂载成功（returncode==0 说明成功)
+                    if process.returncode is not None:
+                        if process.returncode == 0 and mount_point.is_mount():
+                            self._ltfs_mounted = True
+                            self._ltfs_mount_point = mount_point
+                            self._ltfs_process = process
+                            logger.info(f"[挂载重试] 第 {attempt} 次挂载成功（LTFS daemon化退出）")
+                            try:
+                                from utils.log_utils import log_operation
+                                from models.system_log import OperationType
+                                asyncio.create_task(log_operation(
+                                    operation_type=OperationType.TAPE_MOUNT,
+                                    resource_type="tape",
+                                    operation_name="磁带挂载",
+                                    operation_description=f"磁带挂载成功（第{attempt}次尝试，daemon化退出）",
+                                    category="tape",
+                                    success=True,
+                                ))
+                            except Exception:
+                                pass
+                            return True, f"挂载成功（第{attempt}次尝试）"
+                        break
 
-                # 等待30秒后再次检查（LTO磁带可能需要更长时间）
-                await asyncio.sleep(30)
+                # 进程已退出则跳过二次等待，直接读取错误
+                if process.returncode is not None:
+                    pass
+                else:
+                    # 等待30秒后再次检查（LTO磁带可能需要更长时间）
+                    await asyncio.sleep(30)
 
                 if mount_point.is_mount():
                     self._ltfs_mounted = True
                     self._ltfs_mount_point = mount_point
                     self._ltfs_process = process
                     logger.info(f"[挂载重试] 第 {attempt} 次挂载成功（延迟检测）")
+                    # 记录延迟检测挂载成功到数据库
+                    try:
+                        from utils.log_utils import log_operation
+                        from models.system_log import OperationType
+                        asyncio.create_task(log_operation(
+                            operation_type=OperationType.TAPE_MOUNT,
+                            resource_type="tape",
+                            operation_name="磁带挂载",
+                            operation_description=f"磁带挂载成功（第{attempt}次尝试，延迟检测）",
+                            category="tape",
+                            success=True,
+                        ))
+                    except Exception:
+                        pass
                     return True, f"挂载成功（第{attempt}次尝试，延迟检测）"
 
                 # 挂载失败，读取错误信息
@@ -823,12 +909,12 @@ class TapeHandler:
 
             # ===== 步骤1: 检查磁带内容（仅日志）=====
             is_empty, file_count = await self.is_tape_empty()
-            logger.info(f"[LTFS] 磁带状态: {'空' if is_empty else f'已有 {file_count} 个文件'}")
+            logger.debug(f"[LTFS] 磁带状态: {'空' if is_empty else f'已有 {file_count} 个文件'}")
 
             if not is_empty:
                 contents = await self.list_tape_contents()
                 for item in contents[:10]:  # 只显示前10个
-                    logger.info(f"[LTFS]   - {item['name']} ({item['size'] / (1024*1024):.2f} MB)")
+                    logger.debug(f"[LTFS]   - {item['name']} ({item['size'] / (1024*1024):.2f} MB)")
 
             # ===== 步骤3: 复制文件 =====
             target_dir = mount_point / backup_set.set_id
@@ -868,14 +954,14 @@ class TapeHandler:
 
             # ===== 步骤5: 列出磁带内容（写入后）=====
             contents_after = await self.list_tape_contents()
-            logger.info(f"[LTFS] 写入后磁带内容 ({len(contents_after)} 个文件):")
+            logger.debug(f"[LTFS] 写入后磁带内容 ({len(contents_after)} 个文件):")
             for item in contents_after[:5]:
-                logger.info(f"[LTFS]   - {item['name']}")
+                logger.debug(f"[LTFS]   - {item['name']}")
 
             # ===== 步骤6: 删除源文件 =====
             try:
                 await asyncio.to_thread(source_file.unlink)
-                logger.info(f"[LTFS] 源文件已删除: {source_file}")
+                logger.debug(f"[LTFS] 源文件已删除: {source_file}")
             except Exception as e:
                 logger.warning(f"[LTFS] 删除源文件失败: {e}")
 
@@ -918,6 +1004,21 @@ class TapeHandler:
                     if label_info and label_info.get('tape_id'):
                         tape_id = label_info.get('tape_id')
                         logger.info(f"从驱动器扫描到磁带卷标: {tape_id}")
+                        # 记录磁带扫描到数据库
+                        try:
+                            from utils.log_utils import log_operation
+                            from models.system_log import OperationType
+                            asyncio.create_task(log_operation(
+                                operation_type=OperationType.TAPE_SCAN,
+                                resource_type="tape",
+                                resource_name=tape_id,
+                                operation_name="磁带设备扫描",
+                                operation_description=f"从驱动器扫描到磁带卷标: {tape_id}",
+                                category="tape",
+                                success=True,
+                            ))
+                        except Exception:
+                            pass
 
                         # 检查数据库中是否有该磁带
                         from utils.scheduler.db_utils import is_opengauss, get_opengauss_connection

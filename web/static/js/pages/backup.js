@@ -296,57 +296,58 @@
     function getStageBadgeClass(state, stageCode, progressPercent = null, task = null) {
         switch ((state || '').toLowerCase()) {
             case 'done':
-                return 'bg-success';
-            case 'current':
-                // 对于写入磁带阶段，需要特殊处理
+            case 'completed':
                 if (stageCode === 'copy') {
-                    // 检查是否正在向磁带移动
-                    const operationStatus = (task?.operation_status || '').toLowerCase();
-                    const isMoving = operationStatus.includes('写入磁带中') || 
-                                     operationStatus.includes('正在写入') ||
-                                     operationStatus.includes('向磁带移动');
-                    
-                    if (isMoving) {
-                        // 正在移动时闪烁
-                        return 'bg-danger text-white pulse-badge';
-                    } else {
-                        // 移动完成但任务未完成时，不闪烁
-                        return 'bg-danger text-white';
-                    }
+                    return 'bg-success';
                 }
-                
-                // 如果有进度信息，根据进度百分比改变颜色
+                return 'bg-success';
+            case 'failed':
+                return 'bg-danger';
+            case 'current':
+            case 'active':
+                // 各阶段独立颜色脉冲，不显示红色)
+                if (stageCode === 'copy') {
+                    return 'bg-primary pulse-badge';
+                }
+                if (stageCode === 'prefetch') {
+                    return 'bg-purple pulse-badge';
+                }
+                if (stageCode === 'compress') {
+                    return 'bg-amber text-dark pulse-badge';
+                }
+                if (stageCode === 'finalize') {
+                    return 'bg-emerald pulse-badge';
+                }
+                // 有进度信息时根据进度百分比改变颜色
                 if (progressPercent !== null && progressPercent >= 0) {
-                    // 根据进度百分比设置颜色
-                    // >= 80%: 绿色（接近完成）
-                    // 50-80%: 黄色（进行中）
-                    // < 50%: 蓝色/红色（刚开始）
                     if (progressPercent >= 80) {
-                        return 'bg-success pulse-badge'; // 接近完成 - 绿色脉冲
+                        return 'bg-success pulse-badge';
                     } else if (progressPercent >= 50) {
-                        return 'bg-warning text-dark pulse-badge'; // 进行中 - 黄色脉冲
+                        return 'bg-warning text-dark pulse-badge';
                     } else {
-                        // 根据阶段类型设置初始颜色
                         switch (stageCode) {
                             case 'scan':
-                                return 'bg-info pulse-badge'; // 扫描文件 - 蓝色脉冲
+                                return 'bg-info pulse-badge';
                             case 'compress':
-                                return 'bg-warning text-dark pulse-badge'; // 压缩文件 - 黄色脉冲
-                            case 'copy':
-                                return 'bg-danger text-white pulse-badge'; // 写入磁带 - 红色脉冲
+                                return 'bg-amber text-dark pulse-badge';
+                            case 'prefetch':
+                                return 'bg-purple pulse-badge';
                             default:
                                 return 'bg-primary pulse-badge';
                         }
                     }
                 }
-                // 没有进度信息时，使用原来的逻辑
                 switch (stageCode) {
                     case 'scan':
-                        return 'bg-info pulse-badge'; // 扫描文件 - 蓝色脉冲
+                        return 'bg-info pulse-badge';
+                    case 'prefetch':
+                        return 'bg-purple pulse-badge';
                     case 'compress':
-                        return 'bg-warning text-dark pulse-badge'; // 压缩文件 - 黄色脉冲
+                        return 'bg-amber text-dark pulse-badge';
                     case 'copy':
-                        return 'bg-danger text-white pulse-badge'; // 写入磁带 - 红色脉冲
+                        return 'bg-primary pulse-badge';
+                    case 'finalize':
+                        return 'bg-emerald pulse-badge';
                     default:
                         return 'bg-primary pulse-badge';
                 }
@@ -355,17 +356,18 @@
                 return 'bg-secondary';
         }
     }
-
     function getStageProgressCircleClass(stageCode) {
         switch ((stageCode || '').toLowerCase()) {
             case 'scan':
                 return 'bg-info text-white';
+            case 'prefetch':
+                return 'bg-purple text-white';
             case 'compress':
-                return 'bg-warning text-dark';
+                return 'bg-amber text-dark';
             case 'copy':
-                return 'bg-danger text-white';
+                return 'bg-teal';
             case 'finalize':
-                return 'bg-success text-white';
+                return 'bg-emerald text-white';
             default:
                 return 'bg-primary text-white';
         }
@@ -374,28 +376,28 @@
     function getCompletedStageBadgeClass(state, stageCode, task = null) {
         switch ((state || '').toLowerCase()) {
             case 'done':
-                // 完成的阶段根据类型使用不同颜色
+            case 'completed':
+                // 写入磁带完成 → 绿色
+                if (stageCode === 'copy') {
+                    return 'bg-success';
+                }
                 switch (stageCode) {
                     case 'scan':
-                        return 'bg-info'; // 扫描完成 - 蓝色
+                        return 'bg-info';
                     case 'compress':
-                        return 'bg-warning text-dark'; // 压缩完成 - 黄色
-                    case 'copy':
-                        // 写入磁带完成：熄灭（不显示高亮），只有进行中才亮起
-                        // 如果整个任务完成，显示绿色；否则不显示（已完成但任务未完成）
-                        if (task && task.status && task.status.toLowerCase() === 'completed') {
-                            return 'bg-success'; // 任务完成时亮起绿色（任务整体完成）
-                        }
-                        return 'bg-secondary'; // 写入磁带完成但任务未完成 - 熄灭（灰色）
+                        return 'bg-warning text-dark';
                     case 'finalize':
-                        return 'bg-success pulse-badge'; // 最终完成 - 绿色脉冲
+                        return 'bg-success pulse-badge';
                     default:
                         return 'bg-success';
                 }
             case 'current':
-                // 当前阶段（完成状态下的finalize阶段）
+            case 'active':
+                if (stageCode === 'copy') {
+                    return 'bg-primary pulse-badge';
+                }
                 if (stageCode === 'finalize') {
-                    return 'bg-success pulse-badge'; // 最终完成阶段 - 绿色脉冲
+                    return 'bg-success pulse-badge';
                 }
                 return 'bg-primary pulse-badge';
             case 'pending':
@@ -547,6 +549,7 @@
                 let state = step.state || step.status || 'pending';
                 if (state === 'completed') state = 'done';
                 if (state === 'active') state = 'current';
+                if (state === 'failed') state = 'failed';
                 
                 // 优先使用后端返回的 label（基于内存变量动态构建，如"预分组中"、"分组完成"、"写入磁带中"等）
                 let label = step.label || stageLabels[step.code] || step.code;
@@ -672,23 +675,8 @@
                     </div>
                     <div class="d-flex flex-wrap gap-1 mt-1">
                         ${stageSteps.map(step => {
-                            // 特殊处理：finalize 阶段正在写入磁带时，copy 阶段应该亮起
-                            let badgeClass = getCompletedStageBadgeClass(step.state, step.code, task);
-                            if (step.code === 'copy' && operationStage === 'finalize') {
-                                // 检查是否正在写入磁带
-                                const operationStatus = (task.operation_status || '').toLowerCase();
-                                const isWritingToTape = operationStatus.includes('写入') || 
-                                                       operationStatus.includes('复制') ||
-                                                       operationStatus.includes('向磁带');
-                                
-                                if (isWritingToTape) {
-                                    // 正在写入磁带，copy 阶段亮起（红色脉冲）
-                                    badgeClass = 'bg-danger text-white pulse-badge';
-                                } else {
-                                    // 写入完成，copy 阶段熄灭（灰色）
-                                    badgeClass = 'bg-secondary';
-                                }
-                            }
+                            // copy 步骤状态完全由后端 stage_steps 决定
+                            const badgeClass = getCompletedStageBadgeClass(step.state, step.code, task);
                             return `<span class="badge ${badgeClass}">${step.label}</span>`;
                         }).join('')}
                     </div>
@@ -782,27 +770,9 @@
                     </div>
                     <div class="d-flex flex-wrap gap-1 mt-1">
                         ${stageSteps.map(step => {
-                            // 如果是当前阶段且有进度信息，传递进度百分比
+                            // copy 步骤状态完全由后端 stage_steps 决定
                             const progress = (step.state === 'current' && progressPercent !== null) ? progressPercent : null;
-                            
-                            // 特殊处理：finalize 阶段正在写入磁带时，copy 阶段应该亮起
-                            let badgeClass = getStageBadgeClass(step.state, step.code, progress, task);
-                            if (step.code === 'copy' && operationStage === 'finalize') {
-                                // 检查是否正在写入磁带
-                                const operationStatus = (task.operation_status || '').toLowerCase();
-                                const isWritingToTape = operationStatus.includes('写入') || 
-                                                       operationStatus.includes('复制') ||
-                                                       operationStatus.includes('向磁带');
-                                
-                                if (isWritingToTape) {
-                                    // 正在写入磁带，copy 阶段亮起（红色脉冲）
-                                    badgeClass = 'bg-danger text-white pulse-badge';
-                                } else {
-                                    // 写入完成，copy 阶段熄灭（灰色）
-                                    badgeClass = 'bg-secondary';
-                                }
-                            }
-                            
+                            const badgeClass = getStageBadgeClass(step.state, step.code, progress, task);
                             return `<span class="badge ${badgeClass}">${step.label}</span>`;
                         }).join('')}
                     </div>

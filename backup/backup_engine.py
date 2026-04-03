@@ -307,10 +307,13 @@ class BackupEngine:
                         month_diff = 12 - month_diff
 
                     if month_diff > 1:
-                        error_msg = f"卷标不符（磁带{month:02d}月，当前{current_month:02d}月）"
-                        logger.error(f"✗ {error_msg}")
-                        await self._send_tape_error_notification(error_msg)
-                        return False
+                        if manual_run:
+                            logger.warning(f"⚠️ 卷标不符（磁带{month:02d}月，当前{current_month:02d}月），手动运行跳过检查")
+                        else:
+                            error_msg = f"卷标不符（磁带{month:02d}月，当前{current_month:02d}月）"
+                            logger.error(f"✗ {error_msg}")
+                            backup_task.error_message = error_msg
+                            return False
                     logger.info(f"✓ 卷标符合要求")
 
             # 2. 检查LTFS格式和空盘（仅当卷标可读时）
@@ -372,6 +375,7 @@ class BackupEngine:
                 if not success:
                     error_msg = f"格式化失败: {format_msg}"
                     logger.error(f"✗ {error_msg}")
+                    backup_task.error_message = error_msg
                     await self._send_tape_error_notification(error_msg)
                     return False
                 logger.info(f"✓ 格式化成功")
@@ -465,6 +469,7 @@ class BackupEngine:
                 if not mount_success:
                     error_msg = f"挂载失败: {mount_msg}"
                     logger.error(f"✗ {error_msg}")
+                    backup_task.error_message = error_msg
                     await self._send_tape_error_notification(error_msg)
                     return False
                 logger.info(f"✓ 挂载成功")
@@ -1385,9 +1390,15 @@ class BackupEngine:
                 max_checks = max_wait_time // check_interval
                 
                 while wait_count < max_checks:
-                    if self.final_dir_monitor.is_final_dir_empty():
-                        logger.info("[备份引擎] ✅ final目录已为空，所有文件已移动到final目录")
+                    current_set_id = backup_set.set_id if backup_set else None
+                    if self.final_dir_monitor.is_final_dir_empty(current_set_id):
+                        logger.info("[备份引擎] ✅ final目录已为空，所有文件已写入磁带")
                         final_move_completed = True
+
+                        # 清理当前任务的 set_id 空目录
+                        if backup_set and backup_set.set_id:
+                            self.final_dir_monitor.cleanup_set_id_dir(backup_set.set_id)
+
                         break
                     
                     remaining_files = self.final_dir_monitor.get_processed_count()
@@ -1441,7 +1452,37 @@ class BackupEngine:
                 from models.backup import BackupTaskStatus
                 backup_task.status = BackupTaskStatus.COMPLETED
                 await self.backup_db.update_task_status(backup_task, BackupTaskStatus.COMPLETED)
-                
+
+                # 更新磁带的已用容量（LTFS路径不走tape_manager.write_data，需要在此手动更新）
+                tape_id = getattr(backup_task, 'tape_id', None) or (backup_set.tape_id if backup_set else None)
+                if tape_id:
+                    from utils.db_connection_helper import get_psycopg_connection_from_url
+                    from config.settings import get_settings
+                    try:
+                        bytes_written = getattr(backup_task, 'compressed_bytes', 0) or total_size
+                        if bytes_written > 0:
+                            settings = get_settings()
+                            conn, _ = get_psycopg_connection_from_url(settings.DATABASE_URL, prefer_psycopg3=True)
+                            if conn:
+                                try:
+                                    with conn.cursor() as cur:
+                                        cur.execute(
+                                            """
+                                            UPDATE tape_cartridges
+                                            SET used_bytes = used_bytes + %s,
+                                                write_count = write_count + 1,
+                                                updated_at = NOW()
+                                            WHERE tape_id = %s
+                                            """,
+                                            (bytes_written, tape_id)
+                                        )
+                                        conn.commit()
+                                    logger.info(f"[备份引擎] 更新磁带已用容量: tape_id={tape_id}, bytes_written={format_bytes(bytes_written)}")
+                                finally:
+                                    conn.close()
+                    except Exception as tape_update_err:
+                        logger.warning(f"[备份引擎] 更新磁带已用容量失败: {tape_update_err}")
+
                 # 更新操作状态
                 await self.backup_db.update_scan_progress(
                     backup_task, 

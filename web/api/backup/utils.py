@@ -178,7 +178,7 @@ def _build_stage_info(description: Optional[str], scan_status: Optional[str], st
                 label = "扫描完成"
                 step_status = "completed"
             elif is_failed:
-                step_status = "completed" if scan_done else "active"
+                step_status = "completed" if scan_done else "failed"
             elif is_running:
                 label = "扫描文件"
                 step_status = "active"
@@ -190,7 +190,7 @@ def _build_stage_info(description: Optional[str], scan_status: Optional[str], st
                 label = "分组完成"
                 step_status = "completed"
             elif is_failed:
-                step_status = "completed" if prefetch_done_flag else "active"
+                step_status = "completed" if prefetch_done_flag else "failed"
             elif is_running and not prefetch_done:
                 # 预取器还在循环（等待扫描产出或正在分组）
                 label = "预分组中"
@@ -204,7 +204,7 @@ def _build_stage_info(description: Optional[str], scan_status: Optional[str], st
                 label = "压缩完成"
                 step_status = "completed"
             elif is_failed:
-                step_status = "completed" if compress_done_flag else "active"
+                step_status = "completed" if compress_done_flag else "failed"
             elif is_running and compression_completed:
                 # 压缩已完成但上游依赖尚未传播（竞态），仍显示完成
                 label = "压缩完成"
@@ -220,7 +220,7 @@ def _build_stage_info(description: Optional[str], scan_status: Optional[str], st
                 label = "写入磁带完成"
                 step_status = "completed"
             elif is_failed:
-                step_status = "pending"
+                step_status = "failed"
             elif is_running and final_dir_has_files:
                 # final 目录有文件，正在写入磁带
                 label = "写入磁带中"
@@ -237,7 +237,7 @@ def _build_stage_info(description: Optional[str], scan_status: Optional[str], st
                 step_status = "completed"
             elif is_failed:
                 label = "任务失败" if normalized_status == "failed" else "已取消"
-                step_status = "active"
+                step_status = "failed"
             else:
                 step_status = "pending"
 

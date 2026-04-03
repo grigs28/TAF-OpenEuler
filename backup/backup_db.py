@@ -76,7 +76,7 @@ class BatchDBWriter:
                 # 临时性错误：队列满或超时，无限重试
                 retry_count += 1
                 if retry_count % 100 == 0:  # 每100次重试记录一次日志
-                    logger.info(f"批量写入队列满，重试第 {retry_count} 次: {file_info.get('path', 'unknown')[:200]}")
+                    logger.debug(f"批量写入队列满，重试第 {retry_count} 次: {file_info.get('path', 'unknown')[:200]}")
                 # 等待一小段时间后重试
                 await asyncio.sleep(0.1)
             except (ValueError, KeyError, TypeError) as e:
@@ -94,7 +94,7 @@ class BatchDBWriter:
                     raise  # 永久性错误，抛出异常
                 # 可能是临时性错误，重试
                 if retry_count % 100 == 0:
-                    logger.info(f"批量写入队列未知错误，重试第 {retry_count} 次: {file_info.get('path', 'unknown')[:200]}, 错误: {str(e)}")
+                    logger.debug(f"批量写入队列未知错误，重试第 {retry_count} 次: {file_info.get('path', 'unknown')[:200]}, 错误: {str(e)}")
                 await asyncio.sleep(0.1)
     
     async def write_batch_sync(self, file_batch: List[Dict]):
@@ -169,7 +169,7 @@ class BatchDBWriter:
                     queue_size = self.file_queue.qsize()
                     speed = len(batch) / batch_time if batch_time > 0 else float('inf')
                     # 仅保留 openGauss / 内存数据库模式的日志
-                    logger.info(f"[批量写入] 批次 #{self._stats['batch_count']}: {len(batch)} 个文件，耗时 {batch_time:.2f}s，速度 {speed:.1f} 个/秒，队列剩余 {queue_size} 个")
+                    logger.debug(f"[批量写入] 批次 #{self._stats['batch_count']}: {len(batch)} 个文件，耗时 {batch_time:.2f}s，速度 {speed:.1f} 个/秒，队列剩余 {queue_size} 个")
 
         except Exception as e:
             logger.error(f"批量写入worker异常: {e}")
@@ -262,7 +262,7 @@ class BatchDBWriter:
                 if update_data:
                     await self._batch_update(conn, update_data)
         else:
-            logger.info(f"当前仅支持 openGauss，跳过批量写入 {len(file_batch)} 个文件")
+            logger.debug(f"当前仅支持 openGauss，跳过批量写入 {len(file_batch)} 个文件")
 
     def _build_file_record_fields(self, file_info: Dict) -> Dict[str, Any]:
         """根据扫描器数据构建与 backup_files 表一致的字段"""
@@ -526,7 +526,7 @@ class BatchDBWriter:
 
                     if transaction_status == 0:  # IDLE: 事务成功提交
                         insert_success = True
-                        logger.info(f"[批量插入] ✅ openGauss模式下批量插入事务提交成功：{len(insert_data)} 个文件")
+                        logger.debug(f"[批量插入] openGauss模式下批量插入事务提交成功：{len(insert_data)} 个文件")
                     else:
                         # 事务状态异常
                         logger.warning(
@@ -656,7 +656,7 @@ class BatchDBWriter:
 
                     if transaction_status == 0:  # IDLE: 事务成功提交
                         update_success = True
-                        logger.info(f"[批量更新] ✅ openGauss模式下批量更新事务提交成功：{len(update_data)} 个文件")
+                        logger.debug(f"[批量更新] openGauss模式下批量更新事务提交成功：{len(update_data)} 个文件")
                     else:
                         # 事务状态异常
                         logger.warning(
@@ -1100,7 +1100,7 @@ class BackupDB:
                                 logger.debug(f"无法获取文件统计信息: {file_path} (错误: {str(stat_error)})")
                                 file_stat = None
                             except Exception as stat_error:
-                                logger.info(f"获取文件统计信息失败: {file_path} (错误: {str(stat_error)})")
+                                logger.debug(f"获取文件统计信息失败: {file_path} (错误: {str(stat_error)})")
                                 file_stat = None
                             
                             # 跳过单个文件的校验和计算（文件已压缩，压缩包本身有校验和，避免阻塞）
@@ -1124,7 +1124,7 @@ class BackupDB:
                                 'file_checksum': file_checksum
                             }
                         except Exception as process_error:
-                            logger.info(f"处理文件信息失败: {file_info.get('path', 'unknown')} (错误: {str(process_error)})")
+                            logger.debug(f"处理文件信息失败: {file_info.get('path', 'unknown')} (错误: {str(process_error)})")
                             return None
                     
                     # 批量处理文件信息（在线程池中执行）
@@ -1138,7 +1138,7 @@ class BackupDB:
                     
                     if len(valid_processed_files) < len(file_group):
                         failed_count = len(file_group) - len(valid_processed_files)
-                        logger.info(f"⚠️ 处理文件信息时，{failed_count} 个文件失败，继续保存其他文件")
+                        logger.debug(f"处理文件信息时，{failed_count} 个文件失败，继续保存其他文件")
                     
                     # 批量插入文件记录（使用事务）
                     success_count = 0
@@ -1188,7 +1188,7 @@ class BackupDB:
                     # 数据库错误不影响备份流程，继续执行（不抛出异常）
                     
         except Exception as e:
-            logger.info(f"⚠️ 保存备份文件信息到数据库失败: {str(e)}，但备份流程继续")
+            logger.warning(f"保存备份文件信息到数据库失败: {str(e)}，但备份流程继续")
             import traceback
             logger.debug(f"错误堆栈:\n{traceback.format_exc()}")
             # 不抛出异常，因为文件已经写入磁带，数据库记录失败不应该影响备份流程
@@ -1293,7 +1293,7 @@ class BackupDB:
         table_name = await get_backup_files_table_by_set_id(conn, backup_set_db_id)
 
         # 使用优化版本：临时表 + JOIN 更新方式
-        logger.info(
+        logger.debug(
             f"[mark_files_as_queued] 使用优化版本（临时表+JOIN）："
             f"传入路径总数={len(file_paths)}，"
             f"有效路径数={len(effective_paths)}，"
@@ -1866,7 +1866,7 @@ class BackupDB:
         batch_size = int(max_file_size_gb * 0.5 * 1000)
         # 设置合理的上下限：最小5000，最大50000
         batch_size = max(3000, min(batch_size, 50000))
-        logger.info(
+        logger.debug(
             f"[openGauss优化] 动态计算批次大小: {batch_size} (基于 max_file_size={max_file_size_gb:.1f}GB), "
             f"start_from_id={start_from_id}"
         )
@@ -1947,7 +1947,7 @@ class BackupDB:
                 logger.info(f"[openGauss优化] 当前备份集 {backup_set_db_id} 没有未压缩文件")
                 return ([], start_from_id)
             
-            logger.info(
+            logger.debug(
                 f"[openGauss优化] 当前备份集 {backup_set_db_id} 第一个未压缩文件ID: {first_pending_id}, "
                 f"传入的 start_from_id={start_from_id}"
             )
@@ -1959,14 +1959,14 @@ class BackupDB:
             # 注意：start_from_id = first_pending_id - 1 是正常的（查询条件 id > start_from_id 能包含第一个文件）
             if start_from_id > first_pending_id:
                 # start_from_id 大于第一个未压缩文件ID，说明可能跳过了某些文件，应该从第一个文件开始
-                logger.info(
+                logger.debug(
                     f"[openGauss优化] ⚠️ start_from_id ({start_from_id}) 大于第一个未压缩文件ID ({first_pending_id})，"
                     f"可能存在ID更小的未压缩文件，从第一个文件ID开始查询"
                 )
                 last_processed_id = first_pending_id - 1  # 从第一个文件开始（id > first_pending_id - 1 即 id >= first_pending_id）
             elif start_from_id > 0 and start_from_id < first_pending_id - 1:
                 # start_from_id 小于第一个未压缩文件ID - 1，说明可能跳过了某些文件，应该从第一个文件开始
-                logger.info(
+                logger.debug(
                     f"[openGauss优化] ⚠️ start_from_id ({start_from_id}) 小于第一个未压缩文件ID - 1 ({first_pending_id - 1})，"
                     f"可能存在ID更小的未压缩文件，从第一个文件ID开始查询"
                 )
@@ -1978,7 +1978,7 @@ class BackupDB:
                 # start_from_id = 0，从第一个文件开始
                 last_processed_id = first_pending_id - 1  # 从第一个文件开始
             
-            logger.info(
+            logger.debug(
                 f"[openGauss优化] 确定查询起始ID: last_processed_id={last_processed_id} "
                 f"(first_pending_id={first_pending_id}, start_from_id={start_from_id})"
             )
@@ -2065,7 +2065,7 @@ class BackupDB:
                     else:
                         reason = "未知错误"
                     
-                    logger.info(
+                    logger.debug(
                         f"[openGauss优化] 统计查询失败（不影响主流程）: {error_type}: {error_msg}，"
                         f"原因: {reason}，继续执行主查询"
                     )
@@ -2091,7 +2091,7 @@ class BackupDB:
                             # 尝试更小的批次：10条
                             if retry_count % 100 == 0:  # 每100次重试尝试一次更小的批次
                                 current_batch_size = 10
-                                logger.info(
+                                logger.debug(
                                     f"[openGauss优化] 批次大小50持续失败（第 {retry_count} 次重试），"
                                     f"尝试更小批次：{current_batch_size}，"
                                     f"可能是某些文件记录数据量过大（路径很长等）"
@@ -2100,7 +2100,7 @@ class BackupDB:
                             # 如果10条还是失败，尝试1条
                             if retry_count % 200 == 0:  # 每200次重试尝试一次单条查询
                                 current_batch_size = 1
-                                logger.info(
+                                logger.debug(
                                     f"[openGauss优化] 批次大小10持续失败（第 {retry_count} 次重试），"
                                     f"尝试单条查询：{current_batch_size}，"
                                     f"将逐条处理以避免缓冲区错误"
@@ -2112,22 +2112,22 @@ class BackupDB:
                             # 2. 如果批次已经是 min_batch_size，不再减小（避免无限减小）
                             if current_batch_size > min_batch_size:
                                 current_batch_size = max(min_batch_size, current_batch_size // 2)
-                                logger.info(
+                                logger.debug(
                                     f"[openGauss优化] 重试查询（第 {retry_count} 次），"
                                     f"减小批次大小至 {current_batch_size}"
                                 )
                             
                             # 每10次重试记录一次详细信息
                             if retry_count % 10 == 0:
-                                logger.info(
+                                logger.debug(
                                     f"[openGauss优化] 持续重试中（第 {retry_count} 次），"
                                     f"批次大小={current_batch_size}"
                                 )
                             
                             # 每50次重试记录一次警告（批次很小但持续失败）
                             if retry_count % 50 == 0 and current_batch_size <= 50:
-                                logger.info(
-                                    f"[openGauss优化] ⚠️ 批次大小已降至 {current_batch_size} 但持续失败（第 {retry_count} 次重试），"
+                                logger.debug(
+                                    f"[openGauss优化] 批次大小已降至 {current_batch_size} 但持续失败（第 {retry_count} 次重试），"
                                     f"可能原因：\n"
                                     f"  1. 某些文件记录的数据量过大（路径很长、文件名很长等）\n"
                                     f"  2. 数据库连接不稳定或网络传输问题\n"
@@ -2194,7 +2194,7 @@ class BackupDB:
                         )
                         # 查询成功，退出循环
                         if retry_count > 0:
-                            logger.info(
+                            logger.debug(
                                 f"[openGauss优化] 查询成功（经过 {retry_count} 次重试），"
                                 f"最终批次大小={current_batch_size}，返回 {len(rows)} 行"
                             )
@@ -2206,7 +2206,7 @@ class BackupDB:
                         if "insufficient data in buffer" in error_msg:
                             retry_count += 1
                             
-                            logger.info(
+                            logger.debug(
                                 f"[openGauss优化] 缓冲区错误（第 {retry_count} 次重试）: {e}, "
                                 f"当前批次大小={current_batch_size}，将无限重试直到成功"
                             )
@@ -2225,7 +2225,7 @@ class BackupDB:
                             
                             if new_batch_size < current_batch_size:
                                 current_batch_size = new_batch_size
-                                logger.info(
+                                logger.debug(
                                     f"[openGauss优化] 批次大小已减小至 {current_batch_size} 以避免缓冲区错误"
                                 )
                             
@@ -2234,7 +2234,7 @@ class BackupDB:
                         else:
                             # 其他 AssertionError，也继续重试（可能是临时错误）
                             retry_count += 1
-                            logger.info(
+                            logger.debug(
                                 f"[openGauss优化] 查询错误（第 {retry_count} 次重试）: {e}, "
                                 f"将无限重试直到成功"
                             )
@@ -2255,7 +2255,7 @@ class BackupDB:
                         if isinstance(e, asyncio.TimeoutError):
                             # 超时错误，继续重试
                             retry_count += 1
-                            logger.info(
+                            logger.debug(
                                 f"[openGauss优化] 查询超时（第 {retry_count} 次重试）: {e}, "
                             f"将无限重试直到成功"
                         )
@@ -2297,7 +2297,7 @@ class BackupDB:
                             
                             if new_batch_size < current_batch_size:
                                 current_batch_size = new_batch_size
-                                logger.info(
+                                logger.debug(
                                     f"[openGauss优化] BufferError：批次大小已减小至 {current_batch_size}"
                                 )
                         
@@ -2309,7 +2309,7 @@ class BackupDB:
                         )
                         
                         if is_buffer_error:
-                            logger.info(
+                            logger.debug(
                                 f"[openGauss优化] 查询异常（第 {retry_count} 次重试）: {error_type}: {e}\n"
                                 f"说明: 这是数据库缓冲区错误，通常由以下原因导致：\n"
                                 f"  1. 查询结果数据量过大，超出缓冲区容量\n"
@@ -2318,7 +2318,7 @@ class BackupDB:
                                 f"处理: 已自动减小批次大小至 {current_batch_size}，将无限重试直到成功"
                             )
                         else:
-                            logger.info(
+                            logger.debug(
                                 f"[openGauss优化] 查询异常（第 {retry_count} 次重试）: {error_type}: {e}, "
                                 f"将无限重试直到成功"
                             )
@@ -2546,7 +2546,7 @@ class BackupDB:
                         current_group_size = new_group_size
                         last_processed_id = row['id']
                         total_files_processed += 1  # 累计处理的文件数
-                        logger.info(
+                        logger.debug(
                             f"[openGauss优化] 文件组大小超过阈值：{format_bytes(new_group_size)} > {format_bytes(min_group_size)}，返回文件组"
                         )
                         should_stop = True
@@ -2577,7 +2577,7 @@ class BackupDB:
             # 文件已在检索时处理并分组，all_files 就是当前组
             current_group = all_files
             
-            logger.info(
+            logger.debug(
                 f"[openGauss优化] 检索到 {len(current_group)} 个未压缩文件，"
                 f"总大小 {format_bytes(current_group_size)}，"
                 f"阈值：{format_bytes(min_group_size)}（文件组大小 > {format_bytes(min_group_size)} 时返回），"
@@ -2588,7 +2588,7 @@ class BackupDB:
             
             # 检查文件组是否为空
             if not current_group:
-                logger.info("[openGauss优化] 没有待压缩文件")
+                logger.debug("[openGauss优化] 没有待压缩文件")
                 return ([], last_processed_id if last_processed_id > start_from_id else start_from_id)
             
             # 计算大小比例
@@ -2659,7 +2659,7 @@ class BackupDB:
 
         # 处理最终的文件组
         if not current_group:
-            logger.info("[openGauss优化] 没有待压缩文件")
+            logger.debug("[openGauss优化] 没有待压缩文件")
             return ([], last_processed_id if last_processed_id > start_from_id else start_from_id)
 
         # 检查当前组大小是否在容差范围内
@@ -3050,10 +3050,10 @@ class BackupDB:
             if processed_files:
                 # 调试：打印第一个文件的结构
                 first_file = processed_files[0]
-                logger.info(f"[mark_files_as_copied] 第一个文件的结构: {list(first_file.keys())}")
+                logger.debug(f"[mark_files_as_copied] 第一个文件的结构: {list(first_file.keys())}")
             return
         
-        logger.info(f"[mark_files_as_copied] 准备更新 {len(file_paths)} 个文件的 is_copy_success 状态")
+        logger.debug(f"[mark_files_as_copied] 准备更新 {len(file_paths)} 个文件的 is_copy_success 状态")
         
         # 分批查询已存在的文件，避免单次查询过多文件导致超时
         # openGauss 批次大小：1000 个文件一批（减小批次大小以降低查询超时和缓冲区错误风险）
@@ -3062,7 +3062,7 @@ class BackupDB:
         import asyncio
         
         if len(file_paths) > batch_size:
-            logger.info(f"[mark_files_as_copied] 文件数量较多（{len(file_paths)} 个），将分批查询（每批 {batch_size} 个）")
+            logger.debug(f"[mark_files_as_copied] 文件数量较多（{len(file_paths)} 个），将分批查询（每批 {batch_size} 个）")
             for i in range(0, len(file_paths), batch_size):
                 batch_paths = file_paths[i:i + batch_size]
                 batch_num = i // batch_size + 1
@@ -3078,9 +3078,9 @@ class BackupDB:
                         # 每次查询前重置超时设置（使用 SQL statement_timeout，确保每次查询独立计时）
                         # 设置查询超时为 180 秒（3分钟），给查询足够的执行时间
                         if retry_count == 0:
-                            logger.info(f"[mark_files_as_copied] 开始查询批次 {batch_num}/{total_batches}，包含 {len(batch_paths)} 个文件...")
+                            logger.debug(f"[mark_files_as_copied] 开始查询批次 {batch_num}/{total_batches}，包含 {len(batch_paths)} 个文件...")
                         else:
-                            logger.info(f"[mark_files_as_copied] 批次 {batch_num}/{total_batches} 重试查询（第 {retry_count + 1}/{max_retries} 次）...")
+                            logger.debug(f"[mark_files_as_copied] 批次 {batch_num}/{total_batches} 重试查询（第 {retry_count + 1}/{max_retries} 次）...")
                         
                         await conn.execute("SET LOCAL statement_timeout = '180s'")
                         logger.debug(f"[mark_files_as_copied] 已设置 statement_timeout，开始执行查询...")
@@ -3105,7 +3105,7 @@ class BackupDB:
                             ),
                             timeout=180.0  # 180秒超时
                         )
-                        logger.info(f"[mark_files_as_copied] 批次 {batch_num}/{total_batches} 查询完成，找到 {len(batch_existing)} 个已存在文件")
+                        logger.debug(f"[mark_files_as_copied] 批次 {batch_num}/{total_batches} 查询完成，找到 {len(batch_existing)} 个已存在文件")
                         for row in batch_existing:
                             existing_map[row['file_path']] = row
                         logger.debug(f"[mark_files_as_copied] 已查询批次 {batch_num}/{total_batches}，找到 {len(batch_existing)} 个已存在文件")
@@ -3156,9 +3156,9 @@ class BackupDB:
                 try:
                     # 每次查询前重置超时设置（使用 SQL statement_timeout，确保每次查询独立计时）
                     if retry_count == 0:
-                        logger.info(f"[mark_files_as_copied] 开始查询已存在文件，文件数={len(file_paths)}")
+                        logger.debug(f"[mark_files_as_copied] 开始查询已存在文件，文件数={len(file_paths)}")
                     else:
-                        logger.info(f"[mark_files_as_copied] 重试查询已存在文件（第 {retry_count + 1}/{max_retries} 次）...")
+                        logger.debug(f"[mark_files_as_copied] 重试查询已存在文件（第 {retry_count + 1}/{max_retries} 次）...")
                     
                     await conn.execute("SET LOCAL statement_timeout = '300s'")
                     

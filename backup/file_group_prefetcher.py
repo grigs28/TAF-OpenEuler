@@ -263,7 +263,7 @@ class FileGroupPrefetcher:
                     self.total_queued_size += total_size
                     self.queued_files_count += len(group)
 
-                    logger.info(
+                    logger.debug(
                         f"[文件组预取器-内存模式] 预取文件组：{len(group)} 个文件，"
                         f"大小={format_bytes(total_size)}，"
                         f"累计预取={self.prefetched_groups} 组，"
@@ -351,9 +351,9 @@ class FileGroupPrefetcher:
                     import time
                     retrieval_start_time = time.time()
                     
-                    logger.info(
+                    logger.debug(
                         f"[文件组预取器] [循环 #{self.prefetch_loop_count}] 开始检索文件组："
-                        f"队列大小✅={self.file_group_queue.qsize()}/{self.queue_maxsize}, "
+                        f"队列大小={self.file_group_queue.qsize()}/{self.queue_maxsize}, "
                         f"last_processed_id={self.last_processed_file_id}, "
                         f"max_file_size={settings.MAX_FILE_SIZE}"
                     )
@@ -426,7 +426,7 @@ class FileGroupPrefetcher:
                     # 构建去重信息日志（始终显示去重数量，即使为0）
                     dedup_info = f"，去重（{duplicate_count_in_groups}）"
                     
-                    logger.info(
+                    logger.debug(
                         f"[文件组预取器] [循环 #{self.prefetch_loop_count}] 检索完成："
                         f"耗时 {retrieval_elapsed:.2f}秒 | "
                         f"文件组 {len(deduplicated_groups) if deduplicated_groups else 0} 个 | "
@@ -444,7 +444,7 @@ class FileGroupPrefetcher:
                         # 在放入队列前，直接设置 is_copy_success = TRUE
                         try:
                             dedup_log = f"，去重（{duplicate_count_in_groups}）"
-                            logger.info(
+                            logger.debug(
                                 f"[文件组预取器] [循环 #{self.prefetch_loop_count}] 开始标记文件为已入队："
                                 f"{len(deduplicated_groups)} 个文件组，共 {total_files_in_groups} 个文件{dedup_log}，"
                                 f"总大小={format_bytes(total_size_in_groups)}"
@@ -453,8 +453,8 @@ class FileGroupPrefetcher:
                                 backup_set=self.backup_set,
                                 file_groups=deduplicated_groups
                             )
-                            logger.info(
-                                f"[文件组预取器] [循环 #{self.prefetch_loop_count}] ✅ 文件标记完成，"
+                            logger.debug(
+                                f"[文件组预取器] [循环 #{self.prefetch_loop_count}] 文件标记完成，"
                                 f"is_copy_success 已设置为 TRUE"
                             )
                         except Exception as mark_error:

@@ -268,6 +268,61 @@ const SchedulerManager = {
                 ActionConfigManager.updateBackupTargetConfig(backupTargetTypeSelect.value);
             });
         }
+
+        // 验证类型切换：控制磁带设备容器显隐
+        const verifyTypeSelect = document.getElementById('verifyType');
+        if (verifyTypeSelect) {
+            verifyTypeSelect.addEventListener('change', () => {
+                const tapeContainer = document.getElementById('verifyTapeDeviceContainer');
+                if (tapeContainer) {
+                    tapeContainer.style.display = verifyTypeSelect.value === 'tape' ? 'block' : 'none';
+                }
+            });
+        }
+
+        // 验证源路径管理
+        window._verifySourcePaths = [];
+        window._renderVerifySourcePaths = () => {
+            const list = document.getElementById('verifySourcePathsList');
+            if (!list) return;
+            list.textContent = '';
+            window._verifySourcePaths.forEach((p, i) => {
+                const div = document.createElement('div');
+                div.className = 'd-flex align-items-center mb-1';
+                const badge = document.createElement('span');
+                badge.className = 'badge bg-secondary me-2';
+                badge.textContent = '📁';
+                const pathSpan = document.createElement('span');
+                pathSpan.className = 'text-light flex-grow-1';
+                pathSpan.textContent = p;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'btn btn-sm btn-outline-danger';
+                btn.textContent = '✕';
+                btn.addEventListener('click', () => {
+                    window._verifySourcePaths.splice(i, 1);
+                    window._renderVerifySourcePaths();
+                });
+                div.appendChild(badge);
+                div.appendChild(pathSpan);
+                div.appendChild(btn);
+                list.appendChild(div);
+            });
+        };
+        const verifySourceInput = document.getElementById('verifySourcePath');
+        if (verifySourceInput) {
+            verifySourceInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const val = verifySourceInput.value.trim();
+                    if (val && !window._verifySourcePaths.includes(val)) {
+                        window._verifySourcePaths.push(val);
+                        window._renderVerifySourcePaths();
+                        verifySourceInput.value = '';
+                    }
+                }
+            });
+        }
         
         // 备份类型顶部选择器同步
         const backupTaskTypeHeader = document.getElementById('backupTaskTypeHeader');

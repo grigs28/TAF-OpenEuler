@@ -524,43 +524,44 @@ async def get_tape_drive_history(request: Request, limit: int = 50, offset: int 
         from utils.scheduler.db_utils import get_opengauss_connection
 
         async with get_opengauss_connection() as conn:
-            # 查询磁带机相关操作日志（resource_type = 'tape_drive' 或操作名称包含'磁带机'）
+            # 从 system_logs 表查询磁带相关日志
             sql = """
                 SELECT
-                    id, operation_time, resource_name,
-                    operation_name, operation_description, username,
-                    success, result_message, error_message, operation_type
-                FROM operation_logs
-                WHERE resource_type = $1
-                   OR operation_name LIKE $2
-                   OR operation_description LIKE $3
-                ORDER BY operation_time DESC
-                LIMIT $4 OFFSET $5
+                    id, log_time, log_level, category, message,
+                    module, function, duration_ms, exception_type
+                FROM system_logs
+                WHERE category = $1
+                ORDER BY log_time DESC
+                LIMIT $2 OFFSET $3
             """
 
-            rows = await conn.fetch(sql, "tape_drive", "%磁带机%", "%磁带机%", limit, offset)
+            rows = await conn.fetch(sql, "tape", limit, offset)
+
+            # 获取总数
+            count_row = await conn.fetchrow(
+                "SELECT COUNT(*) as total FROM system_logs WHERE category = $1", "tape"
+            )
+            total = count_row["total"] if count_row else 0
 
             history = []
             for row in rows:
-                operation_name = row['operation_name'] or row['operation_description'] or ""
-                # 如果operation_type是枚举值，转换为字符串
-                operation_type = row['operation_type']
-                if hasattr(operation_type, 'value'):
-                    operation_type = operation_type.value
+                ts = row['log_time']
+                level = row['log_level']
+                if hasattr(level, 'value'):
+                    level = level.value
                 else:
-                    operation_type = str(operation_type) if operation_type else ""
-
-                message = row['result_message'] or row['error_message'] or row['operation_description'] or ""
+                    level = str(level) if level else "info"
 
                 history.append({
                     "id": row['id'],
-                    "time": row['operation_time'].isoformat() if row['operation_time'] else None,
-                    "operation": operation_name,
-                    "device_name": row['resource_name'] or "",
-                    "username": row['username'] or "system",
-                    "success": row['success'],
-                    "message": message,
-                    "operation_type": operation_type
+                    "time": ts.isoformat() if ts else None,
+                    "operation": row['function'] or row['module'] or "",
+                    "device_name": row['module'] or "",
+                    "username": "system",
+                    "success": level != 'error',
+                    "message": row['message'] or "",
+                    "level": level,
+                    "duration_ms": row['duration_ms']
                 })
 
             duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
@@ -576,7 +577,8 @@ async def get_tape_drive_history(request: Request, limit: int = 50, offset: int 
             return {
                 "success": True,
                 "history": history,
-                "count": len(history)
+                "count": len(history),
+                "total": total
             }
     
     except Exception as e:

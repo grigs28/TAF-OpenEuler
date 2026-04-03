@@ -316,10 +316,24 @@ class DingTalkNotifier:
         elif action == "error" and not self._should_send_notification("notify_tape_error"):
             logger.debug("磁带错误通知已禁用")
             return
+        elif action == "eject_failed" and not self._should_send_notification("notify_tape_error"):
+            logger.debug("磁带弹出失败通知已禁用")
+            return
         elif action == "change_required" and not self._should_send_notification("notify_tape_change"):
             logger.debug("磁带更换通知已禁用")
             return
-        
+        elif action == "eject":
+            # 弹出成功发送通知
+            title = "📤 磁带已弹出"
+            content = f"""## 磁带弹出通知
+
+**磁带ID**: {tape_id}
+**状态**: 弹出成功
+**时间**: {format_datetime(now())}
+
+磁带已成功弹出，可以安全取出。
+"""
+
         if action == "change_required":
             title = "📼 需要更换磁带"
             content = f"""## 磁带更换提醒
@@ -350,6 +364,18 @@ class DingTalkNotifier:
 
 **磁带ID**: {tape_id}
 **状态**: 操作异常
+**时间**: {format_datetime(now())}
+
+"""
+            if details:
+                content += f"**错误信息**: {details.get('error', '未知错误')}\n"
+
+        elif action == "eject_failed":
+            title = "⚠️ 磁带弹出失败"
+            content = f"""## 磁带弹出失败通知
+
+**磁带ID**: {tape_id}
+**状态**: 弹出操作失败
 **时间**: {format_datetime(now())}
 
 """

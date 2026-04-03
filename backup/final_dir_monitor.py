@@ -8,6 +8,7 @@ Final目录监控器
 import asyncio
 import logging
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -187,6 +188,25 @@ class FinalDirMonitor:
 
                 if tape_file_path:
                     logger.info(f"[Final监控] ✅ 文件已成功移动到磁带: {source_file.name} -> {tape_file_path}")
+
+                    # 记录文件写入磁带到数据库
+                    try:
+                        from utils.log_utils import log_operation
+                        from models.system_log import OperationType
+                        loop.run_until_complete(
+                            log_operation(
+                                operation_type=OperationType.TAPE_LOAD,
+                                resource_type="tape",
+                                resource_name=str(file_path.name),
+                                operation_name="文件写入磁带",
+                                operation_description=f"文件 {file_path.name} 已写入磁带",
+                                category="tape",
+                                success=True,
+                            )
+                        )
+                    except Exception:
+                        pass
+
                     return True
                 else:
                     error_msg = f"文件移动到磁带失败: {source_file.name}"
@@ -269,7 +289,8 @@ class FinalDirMonitor:
                             self._processed_files.add(file_key)
                             
                             if success:
-                                logger.info(f"[Final监控] 文件处理完成: {file_path.name}")
+                                logger.debug(f"[Final监控] 文件处理完成: {file_path.name}")
+
                             else:
                                 logger.error(f"[Final监控] 文件处理失败: {file_path.name}")
                     else:
@@ -285,18 +306,25 @@ class FinalDirMonitor:
         finally:
             logger.info("[Final监控] Final目录监控线程已退出")
     
-    def is_final_dir_empty(self) -> bool:
+    def is_final_dir_empty(self, set_id: str = None) -> bool:
         """
         检查final目录是否为空（用于任务完成判断）
-        
+
+        Args:
+            set_id: 备份集ID（如 "2026-03_000001"）。如果传入，只检查 final/{set_id}/ 子目录；
+                    如果为 None，检查整个 final/ 目录。
+
         Returns:
-            bool: final目录是否为空
+            bool: final目录（指定set_id目录）是否为空
         """
         try:
             final_dir = self._get_final_dir()
+            if set_id:
+                final_dir = final_dir / set_id
+
             if not final_dir.exists():
                 return True
-            
+
             # 检查是否有压缩文件
             for root, dirs, files in os.walk(final_dir):
                 for file_name in files:
@@ -305,7 +333,7 @@ class FinalDirMonitor:
                         # 检查是否是压缩文件
                         if file_path.suffix in ['.7z', '.gz', '.tar', '.zst'] or file_path.name.endswith('.tar.gz'):
                             return False
-            
+
             return True
         except Exception as e:
             logger.error(f"[Final监控] 检查final目录是否为空时发生错误: {str(e)}")
@@ -314,6 +342,52 @@ class FinalDirMonitor:
     def get_processed_count(self) -> int:
         """获取已处理文件数量"""
         return len(self._processed_files)
+
+    def cleanup_set_id_dir(self, set_id: str) -> bool:
+        """清理指定set_id的空目录（任务完成后调用）
+
+        在确认final目录中所有压缩文件已移动到磁带后，安全删除空的set_id子目录。
+        会再次检查目录内是否有文件，防止与监控线程的竞态条件。
+
+        Args:
+            set_id: 备份集ID (e.g., "2026-03_000001")
+
+        Returns:
+            bool: 是否成功清理
+        """
+        try:
+            final_dir = self._get_final_dir()
+            set_id_dir = final_dir / set_id
+
+            if not set_id_dir.exists():
+                return True  # 已不存在
+
+            if not set_id_dir.is_dir():
+                logger.warning(f"[Final监控] set_id路径不是目录: {set_id_dir}")
+                return False
+
+            # 再次确认目录内没有文件（防止与监控线程的竞态）
+            has_files = False
+            for root, dirs, files in os.walk(set_id_dir):
+                for f in files:
+                    fp = Path(root) / f
+                    if fp.is_file():
+                        logger.warning(f"[Final监控] set_id目录仍有文件，跳过清理: {fp}")
+                        has_files = True
+                        break
+                if has_files:
+                    break
+
+            if has_files:
+                return False
+
+            # 目录为空，安全删除
+            shutil.rmtree(set_id_dir, ignore_errors=True)
+            logger.info(f"[Final监控] 已清理空的set_id目录: {set_id_dir}")
+            return True
+        except Exception as e:
+            logger.error(f"[Final监控] 清理set_id目录失败: {e}")
+            return False
 
 
 

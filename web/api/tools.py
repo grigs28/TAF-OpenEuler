@@ -11,6 +11,7 @@ import shutil
 import logging
 import asyncio
 import subprocess
+import re
 from typing import Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -23,6 +24,19 @@ from utils.linux_tape import get_linux_tape_operator, LinuxTapeOperator
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
+
+# 允许的设备路径模式
+_DEVICE_PATH_PATTERN = re.compile(r'^/dev/(sg|nst|st)\d+$')
+
+
+def validate_device_path(device_path: str) -> str:
+    """校验设备路径，只允许 /dev/sg*, /dev/nst*, /dev/st* 格式"""
+    if not device_path or not _DEVICE_PATH_PATTERN.match(device_path.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail=f"无效的设备路径: {device_path}，只允许 /dev/sg*, /dev/nst*, /dev/st* 格式"
+        )
+    return device_path.strip()
 
 
 # ===== Pydantic 模型 =====
@@ -72,38 +86,31 @@ async def log_tool_operation(
     details: dict = None,
     error_message: str = None
 ):
-    """记录工具操作日志"""
+    """记录工具操作日志（异步，不阻塞事件循环）"""
     try:
-        from utils.db_connection_helper import get_psycopg_connection_from_url
-        from config.settings import get_settings
+        from utils.scheduler.db_utils import get_opengauss_connection
 
-        settings = get_settings()
-        conn, _ = get_psycopg_connection_from_url(settings.DATABASE_URL, prefer_psycopg3=True)
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    """
-                    INSERT INTO operation_logs
-                    (operation_type, resource_type, operation_name, operation_description,
-                     category, operation_time, success, request_params, error_message,
-                     created_at, updated_at)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-                    """,
-                    (
-                        operation_type.value if hasattr(operation_type, 'value') else str(operation_type),
-                        "tool",
-                        operation_name,
-                        f"工具管理: {operation_name}",
-                        "tape",
-                        datetime.now(),
-                        success,
-                        json.dumps(details or {}, ensure_ascii=False, default=str),
-                        error_message
-                    )
+        async with get_opengauss_connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO operation_logs
+                (operation_type, resource_type, operation_name, operation_description,
+                 category, operation_time, success, request_params, error_message,
+                 created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())
+                """,
+                (
+                    operation_type.value if hasattr(operation_type, 'value') else str(operation_type),
+                    "tool",
+                    operation_name,
+                    f"工具管理: {operation_name}",
+                    "tape",
+                    datetime.now(),
+                    success,
+                    json.dumps(details or {}, ensure_ascii=False, default=str),
+                    error_message
                 )
-                conn.commit()
-        finally:
-            conn.close()
+            )
     except Exception as e:
         logger.error(f"记录工具操作日志失败: {str(e)}")
 
@@ -178,7 +185,7 @@ async def rewind_tape():
 
 
 @router.post("/linux/eject")
-async def eject_tape():
+async def eject_tape(request: Request):
     """弹出磁带"""
     try:
         operator = get_tape_operator()
@@ -198,8 +205,24 @@ async def eject_tape():
         stdout = result.stdout.decode('utf-8', errors='ignore') if result.stdout else ""
         stderr = result.stderr.decode('utf-8', errors='ignore') if result.stderr else ""
 
+        success = result.returncode == 0
+
+        # 发送钉钉通知（走 notify 统一出口）
+        try:
+            system = request.app.state.system
+            if system and hasattr(system, 'dingtalk_notifier') and system.dingtalk_notifier:
+                from utils.notify import notify
+                if success:
+                    await notify(system.dingtalk_notifier, "磁带弹出成功",
+                                 f"设备 {device} 磁带已成功弹出")
+                else:
+                    await notify(system.dingtalk_notifier, "磁带弹出失败",
+                                 f"设备 {device} 弹出失败\n错误: {stderr or '未知'}")
+        except Exception as notify_err:
+            logger.warning(f"发送钉钉通知失败: {notify_err}")
+
         return {
-            "success": result.returncode == 0,
+            "success": success,
             "stdout": stdout,
             "stderr": stderr,
             "returncode": result.returncode
@@ -215,7 +238,7 @@ async def eject_tape():
 async def seek_eod():
     """定位到数据末尾"""
     try:
-        tape_op = await get_linux_tape_operator()
+        tape_op = get_linux_tape_operator()
         success = await tape_op.eod()
         return {"success": success}
     except Exception as e:
@@ -227,7 +250,7 @@ async def seek_eod():
 async def tell_position():
     """获取当前位置"""
     try:
-        tape_op = await get_linux_tape_operator()
+        tape_op = get_linux_tape_operator()
         block = await tape_op.tell()
         return {
             "success": block is not None,
@@ -242,12 +265,9 @@ async def tell_position():
 async def set_compression(request: CompressionRequest):
     """设置压缩"""
     try:
-        tape_op = await get_linux_tape_operator()
+        tape_op = get_linux_tape_operator()
         success = await tape_op.setcompression(request.enable)
         return {"success": success}
-    except Exception as e:
-        logger.error(f"设置压缩失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
     except Exception as e:
         logger.error(f"设置压缩失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -285,6 +305,8 @@ async def scan_tape_devices():
 async def mkltfs_format(request: MkltfsRequest):
     """使用 mkltfs 格式化磁带"""
     try:
+        validate_device_path(request.device_path)
+
         # 查找 mkltfs 路径
         mkltfs_path = shutil.which('mkltfs')
         if not mkltfs_path:
@@ -347,6 +369,8 @@ async def mkltfs_format(request: MkltfsRequest):
 async def mount_ltfs(request: LtfsMountRequest):
     """挂载 LTFS 文件系统"""
     try:
+        validate_device_path(request.device_path)
+
         # 查找 ltfs 路径
         ltfs_path = shutil.which('ltfs')
         if not ltfs_path:
@@ -366,7 +390,6 @@ async def mount_ltfs(request: LtfsMountRequest):
             logger.info(f"目录已挂载，跳过清空: {request.mount_point}")
         else:
             try:
-                import shutil
                 for item in os.listdir(request.mount_point):
                     item_path = os.path.join(request.mount_point, item)
                     if os.path.isdir(item_path):
@@ -387,32 +410,44 @@ async def mount_ltfs(request: LtfsMountRequest):
 
         logger.info(f"执行命令: {' '.join(cmd)}")
 
-        # LTFS 挂载是前台进程，需要后台运行
-        result = subprocess.run(
+        # LTFS 挂载是前台FUSE守护进程，需要后台启动
+        proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            timeout=60,  # 挂载超时60秒
-            text=False
+            stdin=subprocess.DEVNULL
         )
 
-        stdout = result.stdout.decode('utf-8', errors='ignore') if result.stdout else ""
-        stderr = result.stderr.decode('utf-8', errors='ignore') if result.stderr else ""
+        # 等待几秒让LTFS初始化，检查是否立即失败
+        try:
+            stdout_bytes, stderr_bytes = proc.communicate(timeout=10)
+            # 进程在10秒内退出，说明挂载失败
+            stdout = stdout_bytes.decode('utf-8', errors='ignore')
+            stderr = stderr_bytes.decode('utf-8', errors='ignore')
+            return {
+                "success": False,
+                "stdout": stdout,
+                "stderr": stderr or "LTFS 进程意外退出",
+                "returncode": proc.returncode,
+                "command": ' '.join(cmd)
+            }
+        except subprocess.TimeoutExpired:
+            # 进程仍在运行 = 挂载成功（FUSE守护进程）
+            stdout = ""
+            stderr = ""
 
         # 记录日志
         await log_tool_operation(
             OperationType.TAPE_MOUNT, "LTFS挂载",
-            result.returncode == 0,
-            {"device_path": request.device_path, "mount_point": request.mount_point},
-            stderr if result.returncode != 0 else None
+            True,
+            {"device_path": request.device_path, "mount_point": request.mount_point}
         )
 
         return {
-            "success": result.returncode == 0,
+            "success": True,
             "stdout": stdout,
             "stderr": stderr,
-            "returncode": result.returncode,
+            "returncode": 0,
             "command": ' '.join(cmd)
         }
     except subprocess.TimeoutExpired:
@@ -539,6 +574,10 @@ async def check_ltfs_mount():
 async def prepare_tape(request: PrepareTapeRequest):
     """准备磁带（检查状态、格式化、倒带）"""
     try:
+        validate_device_path(request.device_path)
+        if request.ltfs_device:
+            validate_device_path(request.ltfs_device)
+
         operator = get_tape_operator()
 
         # 确定LTFS设备路径

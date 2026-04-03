@@ -9,9 +9,9 @@
                     <hr>
                     <div class="text-start">
                         <p><strong>版本:</strong> <a href="#" id="about-version-link" style="text-decoration: underline; cursor: pointer;">{{ version }}</a></p>
-                        <p><strong>构建日期:</strong> 2024-11-01</p>
-                        <p><strong>Python版本:</strong> 3.10.19</p>
-                        <p><strong>运行时间:</strong> <span id="uptime">计算中...</span></p>
+                        <p><strong>Python版本:</strong> <span id="about-python-version">-</span></p>
+                        <p><strong>启动时间:</strong> <span id="about-start-time">-</span></p>
+                        <p><strong>运行时间:</strong> <span id="about-uptime">加载中...</span></p>
                         <p><strong>许可证:</strong> 企业版</p>
                     </div>
                 </div>
@@ -21,27 +21,8 @@
             <div class="setting-card service-card mb-3">
                 <div class="card-body">
                     <h6 class="card-title">系统组件</h6>
-                    <div class="list-group list-group-flush">
-                        <div class="list-group-item d-flex justify-content-between">
-                            <span>FastAPI</span>
-                            <span class="badge bg-success">0.104.1</span>
-                        </div>
-                        <div class="list-group-item d-flex justify-content-between">
-                            <span>SQLAlchemy</span>
-                            <span class="badge bg-success">2.0.23</span>
-                        </div>
-                        <div class="list-group-item d-flex justify-content-between">
-                            <span>Pydantic</span>
-                            <span class="badge bg-success">2.5.0</span>
-                        </div>
-                        <div class="list-group-item d-flex justify-content-between">
-                            <span>Hypercorn</span>
-                            <span class="badge bg-success">0.17.3</span>
-                        </div>
-                        <div class="list-group-item d-flex justify-content-between">
-                            <span>py7zr</span>
-                            <span class="badge bg-success">0.20.8</span>
-                        </div>
+                    <div class="list-group list-group-flush" id="about-components">
+                        <div class="list-group-item text-muted">加载中...</div>
                     </div>
                 </div>
             </div>
@@ -49,3 +30,57 @@
     </div>
 </div>
 
+<script>
+(function() {
+    function loadAboutInfo() {
+        fetch('/api/system/about')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (!data.success) return;
+
+                // 运行时间
+                var uptimeEl = document.getElementById('about-uptime');
+                if (uptimeEl) uptimeEl.textContent = data.uptime || '-';
+
+                // 启动时间
+                var startTimeEl = document.getElementById('about-start-time');
+                if (startTimeEl) startTimeEl.textContent = data.start_time || '-';
+
+                // Python版本
+                var pyVerEl = document.getElementById('about-python-version');
+                if (pyVerEl) pyVerEl.textContent = data.python_version || '-';
+
+                // 系统组件
+                var container = document.getElementById('about-components');
+                if (container && data.components && data.components.length > 0) {
+                    // 清空现有内容
+                    while (container.firstChild) {
+                        container.removeChild(container.firstChild);
+                    }
+                    data.components.forEach(function(comp) {
+                        var item = document.createElement('div');
+                        item.className = 'list-group-item d-flex justify-content-between';
+                        var nameSpan = document.createElement('span');
+                        nameSpan.textContent = comp.name;
+                        var verBadge = document.createElement('span');
+                        verBadge.className = 'badge bg-success';
+                        verBadge.textContent = comp.version;
+                        item.appendChild(nameSpan);
+                        item.appendChild(verBadge);
+                        container.appendChild(item);
+                    });
+                }
+            })
+            .catch(function(err) {
+                console.error('加载系统信息失败:', err);
+                var uptimeEl = document.getElementById('about-uptime');
+                if (uptimeEl) uptimeEl.textContent = '获取失败';
+            });
+    }
+
+    // 页面加载后立即获取
+    loadAboutInfo();
+    // 每30秒刷新运行时间
+    setInterval(loadAboutInfo, 30000);
+})();
+</script>

@@ -198,7 +198,7 @@
                         <h6 class="mb-0">
                             <i class="bi bi-graph-up me-2"></i>存储使用趋势
                         </h6>
-                        <small class="text-secondary">最近30天</small>
+                        <small class="text-secondary">近12个月</small>
                     </div>
                     
                     <!-- 存储趋势图表 -->
@@ -255,9 +255,14 @@
                         <h6 class="mb-0">
                             <i class="bi bi-clock-history me-2"></i>最近备份活动
                         </h6>
-                        <a href="/backup" class="btn btn-sm btn-primary">
-                            查看全部 <i class="bi bi-arrow-right ms-1"></i>
-                        </a>
+                        <div class="d-flex gap-2">
+                            <a href="/recovery" class="btn btn-sm btn-outline-secondary">
+                                <i class="bi bi-arrow-counterclockwise me-1"></i>数据恢复
+                            </a>
+                            <a href="/backup" class="btn btn-sm btn-outline-secondary">
+                                查看全部 <i class="bi bi-arrow-right ms-1"></i>
+                            </a>
+                        </div>
                     </div>
                     
                     <div class="list-group list-group-flush" id="recentBackupsList">
@@ -474,30 +479,68 @@ async function loadDashboardData() {
     }
 }
 
-// 渲染存储趋势图表
+// 渲染存储趋势图表（固定12个月，均分）
 function renderStorageTrend(trend) {
     const chartEl = document.getElementById('storageTrendChart');
-    if (!chartEl || !trend || trend.length === 0) return;
-    
-    // 找到最大值用于计算百分比
-    const maxBytes = Math.max(...trend.map(t => t.bytes || 0), 1);
-    
-    // 只显示最近7天的数据
-    const recentTrend = trend.slice(-7);
-    
-    chartEl.innerHTML = recentTrend.map(item => {
-        const date = new Date(item.date);
-        const dayName = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][date.getDay()];
-        const height = ((item.bytes || 0) / maxBytes * 100);
-        const isMax = item.bytes === maxBytes;
-        
-        return `
-            <div class="flex-fill d-flex flex-column align-items-center me-1">
-                <div class="${isMax ? 'bg-success' : 'bg-primary'}" style="width: 100%; height: ${height}%; border-radius: 4px 4px 0 0;"></div>
-                <small class="text-secondary mt-2" style="font-size: 0.7rem;">${dayName}</small>
-            </div>
-        `;
-    }).join('');
+    if (!chartEl) return;
+
+    const monthLabels = ['1月', '2月', '3月', '4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月'];
+    const maxBarHeight = 85;
+
+    // 构建 12 个月的 bytes 映射（key = "YYYY-MM"）
+    var bytesMap = {};
+    (trend || []).forEach(function(item) {
+        var d = new Date(item.date);
+        var key = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+        bytesMap[key] = item.bytes || 0;
+    });
+
+    // 从当前月起往前推12个月
+    var now = new Date();
+    var months = [];
+    for (var i = 11; i >= 0; i--) {
+        var m = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        var key = m.getFullYear() + '-' + String(m.getMonth() + 1).padStart(2, '0');
+        months.push({ key: key, idx: m.getMonth(), bytes: bytesMap[key] || 0 });
+    }
+
+    var maxBytes = Math.max.apply(null, months.map(function(m) { return m.bytes; }));
+    if (maxBytes < 1) maxBytes = 1;
+
+    // 清空容器
+    while (chartEl.firstChild) chartEl.removeChild(chartEl.firstChild);
+
+    months.forEach(function(m) {
+        var barHeight = Math.max((m.bytes / maxBytes * maxBarHeight), m.bytes > 0 ? 4 : 2);
+        var isMax = m.bytes === maxBytes && m.bytes > 0;
+
+        var col = document.createElement('div');
+        col.className = 'flex-fill d-flex flex-column align-items-center justify-content-end';
+        col.style.height = '100%';
+        col.style.position = 'relative';
+
+        var bar = document.createElement('div');
+        bar.className = isMax ? 'bg-success' : (m.bytes > 0 ? 'bg-primary' : 'bg-secondary');
+        bar.style.cssText = 'width: 100%; min-height: ' + barHeight + 'px; border-radius: 4px 4px 0 0; opacity: ' + (m.bytes > 0 ? '1' : '0.3') + '; cursor: pointer;';
+
+        // tooltip
+        var tip = document.createElement('div');
+        tip.style.cssText = 'display:none; position:absolute; bottom: 100%; left: 50%; transform: translateX(-50%); background: rgba(0,0,0,0.85); color: #fff; padding: 4px 8px; border-radius: 4px; white-space: nowrap; font-size: 0.75rem; z-index: 10; pointer-events: none;';
+        tip.textContent = monthLabels[m.idx] + ' ' + formatBytes(m.bytes);
+        bar.addEventListener('mouseenter', function() { tip.style.display = 'block'; });
+        bar.addEventListener('mouseleave', function() { tip.style.display = 'none'; });
+
+        col.appendChild(tip);
+
+        var label = document.createElement('small');
+        label.className = 'text-secondary mt-1';
+        label.style.fontSize = '0.65rem';
+        label.textContent = monthLabels[m.idx];
+
+        col.appendChild(bar);
+        col.appendChild(label);
+        chartEl.appendChild(col);
+    });
 }
 
 // 渲染最近备份活动

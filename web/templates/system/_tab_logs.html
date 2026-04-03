@@ -19,7 +19,21 @@
         <div class="col-12">
             <div class="setting-card service-card mb-3">
                 <div class="card-body">
-                    <h6 class="card-title">系统日志</h6>
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <h6 class="card-title mb-0">系统日志</h6>
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="text-secondary small">日志级别</span>
+                            <div class="btn-group btn-group-sm" id="logLevelToggle">
+                                <button class="btn btn-outline-secondary" data-level="DEBUG">DEBUG</button>
+                                <button class="btn btn-outline-info active" data-level="INFO">INFO</button>
+                                <button class="btn btn-outline-warning" data-level="WARNING">WARNING</button>
+                                <button class="btn btn-outline-danger" data-level="ERROR">ERROR</button>
+                            </div>
+                            <button class="btn btn-outline-secondary btn-sm" id="exportLogsBtn" title="导出Excel">
+                                <i class="bi bi-download me-1"></i>导出
+                            </button>
+                        </div>
+                    </div>
                     
                     <!-- 筛选条件 -->
                     <div class="row mb-3">
@@ -27,49 +41,24 @@
                             <label class="form-label small">分类</label>
                             <select class="form-select form-select-sm bg-dark text-light" id="logCategory">
                                 <option value="">所有分类</option>
-                                <option value="system">系统</option>
-                                <option value="tape">磁带</option>
-                                <option value="backup">备份</option>
-                                <option value="recovery">恢复</option>
-                                <option value="user">用户</option>
-                                <option value="security">安全</option>
-                                <option value="scheduler">计划任务</option>
-                                <option value="api">API</option>
-                                <option value="database">数据库</option>
                             </select>
                         </div>
                         <div class="col-md-3">
                             <label class="form-label small">级别</label>
                             <select class="form-select form-select-sm bg-dark text-light" id="logLevel">
                                 <option value="">所有级别</option>
-                                <option value="debug">调试</option>
-                                <option value="info">信息</option>
-                                <option value="warning">警告</option>
-                                <option value="error">错误</option>
-                                <option value="critical">严重</option>
                             </select>
                         </div>
                         <div class="col-md-3">
                             <label class="form-label small">操作类型</label>
                             <select class="form-select form-select-sm bg-dark text-light" id="logOperationType">
                                 <option value="">所有操作</option>
-                                <option value="login">登录</option>
-                                <option value="logout">登出</option>
-                                <option value="tape_load">加载磁带</option>
-                                <option value="tape_scan">扫描磁带</option>
-                                <option value="tape_read_label">读取标签</option>
-                                <option value="backup_start">备份开始</option>
-                                <option value="backup_complete">备份完成</option>
-                                <option value="recovery_start">恢复开始</option>
-                                <option value="recovery_complete">恢复完成</option>
-                                <option value="scheduler_create">创建计划任务</option>
-                                <option value="scheduler_update">更新计划任务</option>
                             </select>
                         </div>
                         <div class="col-md-3">
                             <label class="form-label small">操作</label>
                             <div class="d-flex gap-2">
-                                <button class="btn btn-outline-primary btn-sm flex-fill" id="refreshLogsBtn">
+                                <button class="btn btn-outline-secondary btn-sm flex-fill" id="refreshLogsBtn">
                                     <i class="bi bi-arrow-clockwise me-1"></i>刷新
                                 </button>
                                 <button class="btn btn-outline-secondary btn-sm flex-fill" id="clearLogsBtn">
@@ -88,8 +77,17 @@
                     
                     <!-- 分页 -->
                     <div class="d-flex justify-content-between align-items-center mt-3">
-                        <div class="text-muted small" id="logPaginationInfo">
-                            显示 0-0 条，共 0 条
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="text-muted small">每页</span>
+                            <select class="form-select form-select-sm" id="logPageSize" style="width: auto; min-width: 80px;">
+                                <option value="10">10</option>
+                                <option value="20">20</option>
+                                <option value="50" selected>50</option>
+                                <option value="100">100</option>
+                                <option value="500">500</option>
+                            </select>
+                            <span class="text-muted small">条</span>
+                            <span class="text-muted small ms-2" id="logPaginationInfo">显示 0-0 条，共 0 条</span>
                         </div>
                         <div class="btn-group btn-group-sm">
                             <button class="btn btn-outline-secondary" id="logPrevPage" disabled>

@@ -130,7 +130,7 @@ def _compress_with_7zip_command(
             str(archive_path.absolute()),
         ]
         
-        logger.info(f"7-Zip压缩参数: 字典={dict_size_str}, 线程={compression_threads}, 预计内存使用={memory_gb}GB (7-Zip自动分配)")
+        logger.debug(f"7-Zip压缩参数: 字典={dict_size_str}, 线程={compression_threads}, 预计内存使用={memory_gb}GB (7-Zip自动分配)")
         
         # 添加所有文件路径
         source_paths = getattr(backup_task, 'source_paths', None) or []
@@ -176,7 +176,7 @@ def _compress_with_7zip_command(
         # 使用工作目录方式：创建一个临时目录结构
         # 或者直接使用 -spf 选项保留路径
         # 简单方式：将所有文件添加到压缩包，使用文件名作为归档名称
-        logger.info(f"使用7-Zip命令行压缩 {len(files_to_compress)} 个文件 (线程数: {compression_threads}, 级别: {compression_level})")
+        logger.debug(f"使用7-Zip命令行压缩 {len(files_to_compress)} 个文件 (线程数: {compression_threads}, 级别: {compression_level})")
         
         # 方法1: 直接添加所有文件（简单但可能丢失路径结构）
         # 先尝试使用工作目录方式
@@ -248,9 +248,9 @@ def _compress_with_7zip_command(
             archive_path_abs = archive_path.absolute()
             
             # 记录完整命令（使用INFO级别，确保能看到）
-            logger.info(f"执行7z命令: {' '.join(cmd_work)}")
-            logger.info(f"工作目录（绝对路径）: {temp_work_dir_abs}")
-            logger.info(f"压缩包路径（绝对路径）: {archive_path_abs}")
+            logger.debug(f"执行7z命令: {' '.join(cmd_work)}")
+            logger.debug(f"工作目录（绝对路径）: {temp_work_dir_abs}")
+            logger.debug(f"压缩包路径（绝对路径）: {archive_path_abs}")
             
             # 更新命令中的压缩包路径为绝对路径
             cmd_work_abs = cmd_work.copy()
@@ -341,7 +341,7 @@ def _compress_with_7zip_command(
                             test_file = archive_path_abs.parent / "test_write.tmp"
                             test_file.write_text("test")
                             test_file.unlink()
-                            logger.info(f"压缩包父目录可写: {archive_path_abs.parent}")
+                            logger.debug(f"压缩包父目录可写: {archive_path_abs.parent}")
                         except Exception as write_err:
                             logger.error(f"压缩包父目录不可写: {archive_path_abs.parent}, 错误: {str(write_err)}")
                 
@@ -480,7 +480,7 @@ def _compress_with_pgzip(
 
     close_start_time = None
     try:
-        logger.info(f"[PGZip] 开始打开压缩文件: {archive_path_abs}")
+        logger.debug(f"[PGZip] 开始打开压缩文件: {archive_path_abs}")
         with pgzip.open(
             archive_path_abs,
             'wb',
@@ -488,7 +488,7 @@ def _compress_with_pgzip(
             blocksize=block_size_bytes,
             compresslevel=compresslevel or 5
         ) as gz_source:
-            logger.info(f"[PGZip] 压缩文件已打开，开始创建tar文件")
+            logger.debug(f"[PGZip] 压缩文件已打开，开始创建tar文件")
             with tarfile.open(fileobj=gz_source, mode='w') as tar:
                 total_files_in_group = len(file_group)
                 last_log_time = time.time()
@@ -539,7 +539,7 @@ def _compress_with_pgzip(
                         
                         if file_idx < 10 or file_idx % 1000 == 0 or is_large_file:
                             file_size_mb = file_size / (1024 * 1024) if file_size > 0 else 0
-                            logger.info(f"[PGZip] 开始添加文件 {file_idx + 1}/{total_files_in_group}: {file_path.name} (大小: {file_size_mb:.1f} MB)")
+                            logger.debug(f"[PGZip] 开始添加文件 {file_idx + 1}/{total_files_in_group}: {file_path.name} (大小: {file_size_mb:.1f} MB)")
                         
                         # 对于大文件，记录开始时间
                         if is_large_file:
@@ -567,7 +567,7 @@ def _compress_with_pgzip(
                         # 对于大文件，记录耗时
                         if is_large_file:
                             add_elapsed = time.time() - add_start_time
-                            logger.info(f"[PGZip] 大文件添加完成: {file_path.name} (耗时: {add_elapsed:.1f}秒)")
+                            logger.debug(f"[PGZip] 大文件添加完成: {file_path.name} (耗时: {add_elapsed:.1f}秒)")
                         
                         successful_files.append(str(file_path))
                         if total_files > 0:
@@ -580,24 +580,24 @@ def _compress_with_pgzip(
                         failed_files.append({'path': str(file_path), 'reason': f'写入失败: {add_error}'})
                         continue
                 
-                logger.info(f"[PGZip] 所有文件已添加到tar，共 {len(successful_files)} 个成功，{len(failed_files)} 个失败")
+                logger.debug(f"[PGZip] 所有文件已添加到tar，共 {len(successful_files)} 个成功，{len(failed_files)} 个失败")
             
-            logger.info(f"[PGZip] tar文件已关闭，准备关闭PGZip文件")
+            logger.debug(f"[PGZip] tar文件已关闭，准备关闭PGZip文件")
             # tar 文件已关闭，现在需要关闭 PGZip 文件
             
             # 在 with 语句退出前，显式刷新缓冲区（如果支持）
             # 这可以确保所有数据都写入文件，减少 close() 时的等待时间
             try:
                 if hasattr(gz_source, 'flush'):
-                    logger.info(f"[PGZip] 显式刷新PGZip缓冲区（在关闭前）...")
+                    logger.debug(f"[PGZip] 显式刷新PGZip缓冲区（在关闭前）...")
                     flush_start_time = time.time()
                     gz_source.flush()
                     flush_elapsed = time.time() - flush_start_time
-                    logger.info(f"[PGZip] PGZip缓冲区已刷新（耗时: {flush_elapsed:.2f}秒）")
+                    logger.debug(f"[PGZip] PGZip缓冲区已刷新（耗时: {flush_elapsed:.2f}秒）")
             except Exception as flush_error:
                 logger.warning(f"[PGZip] 刷新PGZip缓冲区失败（可能不支持）: {flush_error}")
             
-            logger.info(f"[PGZip] 准备退出with语句，PGZip将自动调用close()...")
+            logger.debug(f"[PGZip] 准备退出with语句，PGZip将自动调用close()...")
             # with 语句退出时会自动调用 gz_source.close()
             # 如果 PGZip 内部使用了多线程，close() 可能需要等待所有线程完成
             # 记录关闭开始时间，以便定位阻塞点
@@ -606,9 +606,9 @@ def _compress_with_pgzip(
         # with 语句已退出，gz_source.close() 应该已经完成
         if close_start_time is not None:
             close_elapsed = time.time() - close_start_time
-            logger.info(f"[PGZip] PGZip文件已关闭（耗时: {close_elapsed:.2f}秒），检查文件是否存在")
+            logger.debug(f"[PGZip] PGZip文件已关闭（耗时: {close_elapsed:.2f}秒），检查文件是否存在")
         else:
-            logger.info(f"[PGZip] PGZip文件已关闭，检查文件是否存在")
+            logger.debug(f"[PGZip] PGZip文件已关闭，检查文件是否存在")
         if archive_path_abs.exists():
             logger.info(
                 f"PGZip压缩完成: {len(successful_files)} 个文件成功, "
@@ -617,7 +617,7 @@ def _compress_with_pgzip(
             compress_progress['bytes_written'] = archive_path_abs.stat().st_size
 
         # 标记压缩完成（关键修复）
-        logger.info(f"[PGZip] 标记压缩进度为完成")
+        logger.debug(f"[PGZip] 标记压缩进度为完成")
         _finalize_compression_progress(compress_progress, archive_path_abs)
 
         successful_original_size = sum(
@@ -663,7 +663,7 @@ def _compress_with_tar(
     last_log_time = time.time()
     log_interval = 5.0
 
-    logger.info(f"[tar] 开始创建tar归档文件: {archive_path_abs}")
+    logger.debug(f"[tar] 开始创建tar归档文件: {archive_path_abs}")
     try:
         with tarfile.open(archive_path_abs, 'w') as tar:
             for file_idx, file_info in enumerate(file_group):
@@ -771,11 +771,11 @@ def _compress_with_zstd_cli(
     last_file_process_time = time.time()
 
     logger.warning(f"[zstd-cli] 开始创建压缩文件: {archive_path_abs} (level={level}, threads={threads})")
-    logger.info(f"[zstd-cli] 待压缩文件数: {total_files_in_group} 个")
+    logger.debug(f"[zstd-cli] 待压缩文件数: {total_files_in_group} 个")
 
     # 计算总大小
     total_size = sum(f.get('size', 0) or f.get('file_size', 0) or 0 for f in file_group)
-    logger.info(f"[zstd-cli] 文件组总大小: {format_bytes(total_size)}")
+    logger.debug(f"[zstd-cli] 文件组总大小: {format_bytes(total_size)}")
 
     # 启动 zstd 子进程，从 stdin 读取
     zstd_cmd = [
@@ -870,7 +870,7 @@ def _compress_with_zstd_cli(
 
                 # 大文件警告
                 if file_size > 100 * 1024 * 1024:
-                    logger.info(f"[zstd-cli] 开始处理大文件 ({file_size_display}): {file_path.name}")
+                    logger.debug(f"[zstd-cli] 开始处理大文件 ({file_size_display}): {file_path.name}")
 
                 try:
                     tar.add(file_path, arcname=arcname)
@@ -884,7 +884,7 @@ def _compress_with_zstd_cli(
                     # 慢文件处理警告
                     file_process_time = time.time() - file_start_time
                     if file_process_time > 30.0:
-                        logger.info(
+                        logger.debug(
                             f"[zstd-cli] 文件处理时间较长 ({file_process_time:.1f}秒, 大小: {file_size_display}): {file_path}"
                         )
 
@@ -892,7 +892,7 @@ def _compress_with_zstd_cli(
                     if (file_idx + 1) % 1000 == 0:
                         elapsed = time.time() - last_log_time
                         files_per_sec = 1000.0 / elapsed if elapsed > 0 else 0
-                        logger.info(f"[zstd-cli] 最近1000个文件耗时: {elapsed:.1f}秒，{files_per_sec:.1f}文件/秒")
+                        logger.debug(f"[zstd-cli] 最近1000个文件耗时: {elapsed:.1f}秒，{files_per_sec:.1f}文件/秒")
                         last_log_time = time.time()
 
                     # 更新任务进度百分比
@@ -1005,7 +1005,7 @@ def _compress_with_zstd(
     last_file_process_time = time.time()
 
     logger.warning(f"[zstd] 开始创建压缩文件: {archive_path_abs} (level={level}, threads={threads})")
-    logger.info(f"[zstd] 待压缩文件数: {total_files_in_group} 个，预计耗时较长")
+    logger.debug(f"[zstd] 待压缩文件数: {total_files_in_group} 个，预计耗时较长")
     
     # 计算平均文件大小
     total_size = sum(f.get('size', 0) or f.get('file_size', 0) or 0 for f in file_group)
@@ -1053,7 +1053,7 @@ def _compress_with_zstd(
         else:
             logger.warning(f"[zstd] 配置的 ZSTD_WRITE_SIZE ({config_write_size}) 不在合理范围内 (128KB ~ 10MB)，使用根据平均文件大小计算的值: {zstd_write_size}")
     
-    logger.info(f"[zstd] 文件组总大小: {format_bytes(total_size)}, 平均文件大小: {format_bytes(avg_file_size)}, 写入缓冲区大小: {format_bytes(zstd_write_size)}")
+    logger.debug(f"[zstd] 文件组总大小: {format_bytes(total_size)}, 平均文件大小: {format_bytes(avg_file_size)}, 写入缓冲区大小: {format_bytes(zstd_write_size)}")
     
     try:
         with archive_path_abs.open('wb') as raw_out:
@@ -1139,7 +1139,7 @@ def _compress_with_zstd(
                         
                         # 如果文件很大（超过 100MB），在处理前记录日志
                         if file_size > 100 * 1024 * 1024:
-                            logger.info(f"[zstd] 开始处理大文件 ({file_size_display}): {file_path.name}")
+                            logger.debug(f"[zstd] 开始处理大文件 ({file_size_display}): {file_path.name}")
                         
                         try:
                             tar.add(file_path, arcname=arcname)
@@ -1152,7 +1152,7 @@ def _compress_with_zstd(
                             # 如果单个文件处理时间超过30秒，记录警告（包含文件大小）
                             file_process_time = time.time() - file_start_time
                             if file_process_time > 30.0:
-                                logger.info(
+                                logger.debug(
                                     f"[zstd] 文件处理时间较长 ({file_process_time:.1f}秒, 大小: {file_size_display}): {file_path}"
                                 )
                             
@@ -1162,7 +1162,7 @@ def _compress_with_zstd(
                                 # 因为 last_file_process_time 在每100个文件时已更新
                                 elapsed = time.time() - last_log_time
                                 files_per_sec = 1000.0 / elapsed if elapsed > 0 else 0
-                                logger.info(f"[zstd] 最近1000个文件耗时: {elapsed:.1f}秒，{files_per_sec:.1f}文件/秒")
+                                logger.debug(f"[zstd] 最近1000个文件耗时: {elapsed:.1f}秒，{files_per_sec:.1f}文件/秒")
                                 last_log_time = time.time()
                             
                             # 更新任务进度百分比（不更新 bytes_written，避免频繁调用 stat()）
@@ -1365,7 +1365,7 @@ class Compressor:
         
         # 记录分组信息
         group_sizes = [sum(f['size'] for f in group) for group in groups]
-        logger.info(f"文件分组完成: {len(groups)} 个组, "
+        logger.debug(f"文件分组完成: {len(groups)} 个组, "
                    f"组大小范围: {format_bytes(min(group_sizes))} - {format_bytes(max(group_sizes))}, "
                    f"平均组大小: {format_bytes(sum(group_sizes) / len(group_sizes))}")
         
@@ -1484,13 +1484,13 @@ class Compressor:
                         mem = psutil.virtual_memory()
                         total_memory_gb = mem.total / (1024 ** 3)
                         available_memory_gb = mem.available / (1024 ** 3)
-                        logger.info(f"系统内存: 总计={total_memory_gb:.1f}GB, 可用={available_memory_gb:.1f}GB | "
+                        logger.debug(f"系统内存: 总计={total_memory_gb:.1f}GB, 可用={available_memory_gb:.1f}GB | "
                                    f"固定字典={dict_size_str} ({dict_size_gb:.3f}GB), "
                                    f"线程={compression_command_threads}, 预计内存={memory_gb}GB")
                     except Exception as e:
-                        logger.info(f"固定字典={dict_size_str}, 线程={compression_command_threads}, 预计内存={memory_gb}GB")
+                        logger.debug(f"固定字典={dict_size_str}, 线程={compression_command_threads}, 预计内存={memory_gb}GB")
                 else:
-                    logger.info(f"固定字典={dict_size_str}, 线程={compression_command_threads}, 预计内存={memory_gb}GB")
+                    logger.debug(f"固定字典={dict_size_str}, 线程={compression_command_threads}, 预计内存={memory_gb}GB")
             
             # 统一使用相同的压缩流程：先压缩到temp目录
             # 根据配置决定是否移动文件（直接压缩到磁带时，不移动文件）
@@ -1512,13 +1512,13 @@ class Compressor:
             if compress_directly_to_tape:
                 # 直接压缩到磁带，不需要final_dir（不移动文件）
                 final_dir = None
-                logger.info(f"压缩到临时目录: {backup_dir}，直接压缩到磁带模式（不移动文件）")
+                logger.debug(f"压缩到临时目录: {backup_dir}，直接压缩到磁带模式（不移动文件）")
             else:
                 # 先压缩到temp目录，再移动到final目录（原有流程）
                 # final目录：压缩完成后移动到这里，等待移动到磁带机
                 final_dir = compress_dir / "final" / backup_set.set_id
                 final_dir.mkdir(parents=True, exist_ok=True)
-                logger.info(f"压缩到临时目录: {backup_dir}，完成后将移动到: {final_dir}")
+                logger.debug(f"压缩到临时目录: {backup_dir}，完成后将移动到: {final_dir}")
             
             # 预设压缩文件路径（立即确定，不等待压缩完成）
             if compression_enabled:
@@ -1580,7 +1580,7 @@ class Compressor:
             archive_info['last_filename'] = filename
             archive_info['sequence'] = sequence
             
-            logger.info(f"[压缩] 生成压缩文件名: {filename} (序号={sequence}, 上次文件名={archive_info.get('last_filename', '无')})")
+            logger.debug(f"[压缩] 生成压缩文件名: {filename} (序号={sequence}, 上次文件名={archive_info.get('last_filename', '无')})")
             
             # 进度跟踪变量：如果有共享的进度字典，使用它；否则创建新的
             if shared_compress_progress is not None:
@@ -1617,7 +1617,7 @@ class Compressor:
                         
                         if compression_method == '7zip_command':
                             # 使用7-Zip命令行工具进行压缩
-                            logger.info(f"使用7-Zip命令行工具压缩 (路径: {sevenzip_path}, 线程数: {compression_command_threads})")
+                            logger.debug(f"使用7-Zip命令行工具压缩 (路径: {sevenzip_path}, 线程数: {compression_command_threads})")
                             compress_result_inner = _compress_with_7zip_command(
                                 archive_path, file_group, backup_task,
                                 compression_level, compression_command_threads, sevenzip_path,
@@ -1632,7 +1632,7 @@ class Compressor:
                             # 使用预设路径
                             compress_result['archive_path'] = str(temp_archive_path)
                         elif compression_method == 'pgzip':
-                            logger.info(f"使用PGZip压缩 (线程数: {pgzip_threads}, 块大小: {pgzip_block_size}, 等级: {compression_level})")
+                            logger.debug(f"使用PGZip压缩 (线程数: {pgzip_threads}, 块大小: {pgzip_block_size}, 等级: {compression_level})")
                             compress_result_inner = _compress_with_pgzip(
                                 archive_path, file_group, backup_task,
                                 compression_level, pgzip_threads, pgzip_block_size,
@@ -1644,7 +1644,7 @@ class Compressor:
                             # 使用预设路径
                             compress_result['archive_path'] = str(temp_archive_path)
                         elif compression_method == 'tar':
-                            logger.info(f"使用tar打包 (不压缩)")
+                            logger.debug(f"使用tar打包 (不压缩)")
                             compress_result_inner = _compress_with_tar(
                                 archive_path, file_group, backup_task,
                                 compression_level,
@@ -1670,7 +1670,7 @@ class Compressor:
                         else:
                             # 使用py7zr进行7z压缩，启用多进程（mp=True启用多进程压缩）
                             # 注意：py7zr 使用 mp 参数启用多进程，而不是 threads
-                            logger.info(f"使用py7zr压缩 (线程数: {compression_threads}, mp={compression_threads > 1})")
+                            logger.debug(f"使用py7zr压缩 (线程数: {compression_threads}, mp={compression_threads > 1})")
                             with py7zr.SevenZipFile(
                                 archive_path,
                                 mode='w',
@@ -1818,7 +1818,7 @@ class Compressor:
             # 计算压缩比
             if total_original_size > 0:
                 compression_ratio = compressed_size / total_original_size
-                logger.info(f"[压缩] 压缩文件存在，原始大小: {format_bytes(total_original_size)}, "
+                logger.debug(f"[压缩] 压缩文件存在，原始大小: {format_bytes(total_original_size)}, "
                           f"压缩后大小: {format_bytes(compressed_size)}, "
                           f"压缩比: {compression_ratio:.2%}, 路径: {temp_archive_path}")
                 
@@ -1838,7 +1838,7 @@ class Compressor:
                         logger.error(f"[压缩] ❌ 所有文件压缩失败，返回None")
                         return None
             else:
-                logger.info(f"[压缩] 压缩文件存在，大小: {format_bytes(compressed_size)}, 路径: {temp_archive_path}")
+                logger.debug(f"[压缩] 压缩文件存在，大小: {format_bytes(compressed_size)}, 路径: {temp_archive_path}")
             
             # 压缩完成后，标注完成
             from backup.backup_db import BackupDB
@@ -1854,7 +1854,7 @@ class Compressor:
             final_archive_path_for_db = temp_archive_path  # 默认使用temp路径
             if compress_directly_to_tape:
                 # 直接压缩到磁带模式：不移动文件
-                logger.info(f"[压缩] 直接压缩到磁带模式：文件保留在临时目录: {temp_archive_path}")
+                logger.debug(f"[压缩] 直接压缩到磁带模式：文件保留在临时目录: {temp_archive_path}")
                 # 直接压缩到磁带模式，使用temp路径
                 final_archive_path_for_db = temp_archive_path
             else:
@@ -1872,7 +1872,7 @@ class Compressor:
                     logger.error(f"[压缩] 源文件不存在: {temp_archive_path}")
                     return None
                 
-                logger.info(f"[压缩] 开始移动文件到final目录: {final_archive_path}")
+                logger.debug(f"[压缩] 开始移动文件到final目录: {final_archive_path}")
                 
                 # 等待文件稳定
                 max_wait_seconds = 30
@@ -1979,7 +1979,7 @@ class Compressor:
                 return
 
             if free_bytes >= required_free:
-                logger.info(
+                logger.debug(
                     f"磁盘剩余空间充足：{format_bytes(free_bytes)} >= {format_bytes(required_free)}"
                 )
                 return

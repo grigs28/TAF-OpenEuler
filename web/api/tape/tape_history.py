@@ -33,39 +33,46 @@ async def get_tape_history(request: Request, limit: int = 50, offset: int = 0):
     """获取磁带操作历史（从新的日志系统获取，使用openGauss原生SQL）"""
     start_time = datetime.now()
     try:
-        # 使用openGauss连接查询操作日志
+        # 使用openGauss连接查询系统日志（磁带相关）
         async with get_opengauss_connection() as conn:
             rows = await conn.fetch("""
-                SELECT * FROM operation_logs
-                WHERE resource_type = $1
-                ORDER BY operation_time DESC
+                SELECT
+                    id, log_time, log_level, category, message,
+                    module, function, duration_ms, exception_type
+                FROM system_logs
+                WHERE category = $1
+                ORDER BY log_time DESC
                 LIMIT $2 OFFSET $3
             """, "tape", limit, offset)
 
             history = []
             for row in rows:
-                operation_time = row.get('operation_time')
-                operation_time_str = operation_time.isoformat() if operation_time else None
+                ts = row['log_time']
+                level = row['log_level']
+                if hasattr(level, 'value'):
+                    level = level.value
+                else:
+                    level = str(level) if level else "info"
 
                 history.append({
-                    "id": row.get("id"),
-                    "operation_time": operation_time_str,
-                    "operation_type": row.get("operation_type"),
-                    "operation_user": row.get("operation_user"),
-                    "resource_type": row.get("resource_type"),
-                    "resource_id": row.get("resource_id"),
-                    "details": row.get("details"),
-                    "ip_address": row.get("ip_address"),
-                    "user_agent": row.get("user_agent"),
-                    "result": row.get("result"),
-                    "error_message": row.get("error_message"),
-                    "duration_ms": row.get("duration_ms")
+                    "id": row['id'],
+                    "operation_time": ts.isoformat() if ts else None,
+                    "operation_type": row['function'] or row['module'] or "",
+                    "operation_user": "system",
+                    "resource_type": "tape",
+                    "resource_id": row['module'] or "",
+                    "details": row['message'] or "",
+                    "ip_address": None,
+                    "user_agent": None,
+                    "result": "success" if level != "error" else "error",
+                    "error_message": row['message'] if level == "error" else None,
+                    "duration_ms": row['duration_ms']
                 })
 
             # 获取总数
             count_row = await conn.fetchrow("""
-                SELECT COUNT(*) as total FROM operation_logs
-                WHERE resource_type = $1
+                SELECT COUNT(*) as total FROM system_logs
+                WHERE category = $1
             """, "tape")
             total = count_row["total"] if count_row else 0
 

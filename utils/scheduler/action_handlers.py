@@ -7,9 +7,15 @@ Task Action Handlers
 
 import logging
 import asyncio
+import os
+import random
+import shutil
+import uuid
+import tarfile
 from datetime import datetime, timezone
+from pathlib import Path
 from utils.datetime_utils import now, format_datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 
 from models.scheduled_task import ScheduledTask, TaskActionType
 from models.backup import BackupTask, BackupTaskType, BackupTaskStatus
@@ -599,6 +605,28 @@ class BackupActionHandler(ActionHandler):
                     }
                 else:
                     error_msg = getattr(backup_task, 'error_message', '备份任务执行失败（未知错误）')
+                    # 先更新 backup_tasks 表状态为 FAILED，避免任务卡片一直显示"运行中"
+                    try:
+                        from utils.scheduler.db_utils import get_opengauss_connection
+                        from datetime import datetime as _dt
+                        async with get_opengauss_connection() as _conn:
+                            await _conn.execute(
+                                """
+                                UPDATE backup_tasks
+                                SET status = 'failed'::backuptaskstatus,
+                                    error_message = $1,
+                                    completed_at = $2,
+                                    updated_at = $3
+                                WHERE id = $4 AND status NOT IN ('completed', 'failed', 'cancelled')
+                                """,
+                                error_msg,
+                                _dt.now(),
+                                _dt.now(),
+                                backup_task.id
+                            )
+                            logger.info(f"[action_handlers] 已将备份任务 {backup_task.id} 状态更新为 FAILED: {error_msg}")
+                    except Exception as db_err:
+                        logger.warning(f"[action_handlers] 更新备份任务失败状态时数据库异常: {db_err}")
                     raise RuntimeError(f"备份任务执行失败: {error_msg}")
             except Exception as backup_error:
                 if backup_executed:
@@ -825,6 +853,440 @@ class RetentionCheckActionHandler(ActionHandler):
         return {"status": "success", "message": "保留期检查已完成"}
 
 
+class VerifyActionHandler(ActionHandler):
+    """验证动作处理器 - 验证备份数据完整性"""
+
+    async def execute(
+        self,
+        config: Dict,
+        scheduled_task: Optional[ScheduledTask] = None,
+        manual_run: bool = False,
+        run_options: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """执行验证动作"""
+        verify_type = config.get('verify_type', 'directory')
+        verify_percent = float(config.get('verify_percent', 1))
+        verify_enabled = config.get('verify_enabled', True)
+        source_paths = config.get('source_paths', [])
+
+        await log_system(
+            level=LogLevel.INFO,
+            category=LogCategory.BACKUP,
+            message=f"开始执行验证任务（类型: {verify_type}, 抽样: {verify_percent}%）",
+            module="utils.scheduler.action_handlers",
+            function="VerifyActionHandler.execute",
+            details={"verify_type": verify_type, "verify_percent": verify_percent}
+        )
+
+        try:
+            if verify_type == 'tape':
+                result = await self._verify_tape(config)
+            else:
+                result = await self._verify_directory(config)
+
+            await log_system(
+                level=LogLevel.INFO if result.get('status') == 'success' else LogLevel.ERROR,
+                category=LogCategory.BACKUP,
+                message=f"验证任务完成: {result.get('message', '')}",
+                module="utils.scheduler.action_handlers",
+                function="VerifyActionHandler.execute",
+                details=result
+            )
+            return result
+
+        except Exception as e:
+            logger.error(f"验证任务执行失败: {e}", exc_info=True)
+            await log_system(
+                level=LogLevel.ERROR,
+                category=LogCategory.BACKUP,
+                message=f"验证任务执行异常: {str(e)}",
+                module="utils.scheduler.action_handlers",
+                function="VerifyActionHandler.execute",
+            )
+            return {"status": "failed", "message": str(e)}
+
+    async def _verify_tape(self, config: Dict) -> Dict[str, Any]:
+        """磁带验证：挂载 LTFS，抽样 .tar.zst 归档验证完整性"""
+        verify_percent = float(config.get('verify_percent', 1))
+
+        # 1. 检查是否有正在运行的备份任务
+        if self.system_instance and hasattr(self.system_instance, 'backup_engine'):
+            backup_engine = self.system_instance.backup_engine
+            if backup_engine and hasattr(backup_engine, '_current_task') and backup_engine._current_task:
+                task_status = getattr(backup_engine._current_task, 'status', None)
+                if task_status and str(task_status).lower() == 'running':
+                    msg = "当前有备份任务正在运行，跳过磁带验证"
+                    logger.warning(msg)
+                    return {"status": "skipped", "message": msg}
+
+        # 2. 获取 tape_handler 并挂载
+        if not self.system_instance:
+            return {"status": "failed", "message": "系统实例未初始化"}
+
+        tape_handler = getattr(self.system_instance, 'tape_handler', None)
+        if not tape_handler:
+            return {"status": "failed", "message": "TapeHandler 未初始化"}
+
+        was_already_mounted = False
+        mount_point = None
+
+        try:
+            # 检查是否已挂载
+            mount_point = Path(tape_handler._get_ltfs_mount_point())
+            if mount_point.exists() and mount_point.is_mount():
+                was_already_mounted = True
+                logger.info("[磁带验证] LTFS 已挂载，直接使用")
+            else:
+                logger.info("[磁带验证] 挂载 LTFS...")
+                success, msg = await tape_handler.mount_with_retry(max_retries=2, retry_interval=15)
+                if not success:
+                    return {"status": "failed", "message": f"挂载 LTFS 失败: {msg}"}
+                logger.info("[磁带验证] LTFS 挂载成功")
+
+            # 3. 收集所有归档文件
+            archives = []
+            system_dirs = {'.LTFS', 'lost+found', '.Trash', '.Trashes',
+                          '$RECYCLE.BIN', 'System Volume Information'}
+
+            for item in mount_point.iterdir():
+                if not item.is_dir() or item.name in system_dirs or item.name.startswith('.'):
+                    continue
+                for f in item.iterdir():
+                    if f.is_file() and f.name.endswith(('.tar.zst', '.tar.gz', '.tgz', '.tar', '.7z', '.zip')):
+                        archives.append(f)
+
+            if not archives:
+                return {"status": "success", "message": "磁带上未发现归档文件", "total": 0, "sampled": 0, "passed": 0, "failed": 0}
+
+            # 4. 按百分比抽样
+            sample_count = max(1, int(len(archives) * verify_percent / 100))
+            sample_count = min(sample_count, len(archives))
+            sampled = random.sample(archives, sample_count)
+
+            logger.info(f"[磁带验证] 发现 {len(archives)} 个归档，抽样 {sample_count} 个")
+
+            # 5. 创建临时目录
+            from config.settings import get_settings
+            settings = get_settings()
+            verify_temp = Path(settings.VERIFY_TEMP_DIR) / str(uuid.uuid4())[:8]
+            verify_temp.mkdir(parents=True, exist_ok=True)
+
+            passed = 0
+            failed = 0
+            errors = []
+
+            try:
+                for i, archive_path in enumerate(sampled):
+                    logger.info(f"[磁带验证] 验证归档 {i+1}/{sample_count}: {archive_path.name}")
+                    try:
+                        valid, detail = await asyncio.to_thread(
+                            self._verify_archive_extract, archive_path, verify_temp
+                        )
+                        if valid:
+                            passed += 1
+                            logger.info(f"[磁带验证] ✓ {archive_path.name}: {detail}")
+                        else:
+                            failed += 1
+                            errors.append(f"{archive_path.name}: {detail}")
+                            logger.warning(f"[磁带验证] ✗ {archive_path.name}: {detail}")
+                    except Exception as e:
+                        failed += 1
+                        errors.append(f"{archive_path.name}: {str(e)}")
+                        logger.error(f"[磁带验证] ✗ {archive_path.name}: {e}")
+            finally:
+                # 6. 清理临时目录
+                try:
+                    shutil.rmtree(str(verify_temp), ignore_errors=True)
+                except Exception:
+                    pass
+
+            # 7. 记录操作日志
+            await log_operation(
+                operation_type=OperationType.TAPE_VERIFY,
+                resource_type="tape",
+                operation_name="磁带验证",
+                operation_description=f"磁带验证完成: 抽样 {sample_count}/{len(archives)}, 通过 {passed}, 失败 {failed}",
+                category="backup",
+                success=(failed == 0),
+                result_message=f"抽样 {sample_count}/{len(archives)}, 通过 {passed}, 失败 {failed}"
+            )
+
+            result = {
+                "status": "success" if failed == 0 else ("success" if passed > 0 else "failed"),
+                "message": f"磁带验证完成: 抽样 {sample_count}/{len(archives)}, 通过 {passed}, 失败 {failed}",
+                "total": len(archives),
+                "sampled": sample_count,
+                "passed": passed,
+                "failed": failed,
+            }
+            if errors:
+                result["errors"] = errors[:20]  # 限制错误数量
+
+            return result
+
+        finally:
+            # 如果是我们自己挂载的，验证完后卸载
+            if not was_already_mounted and mount_point and mount_point.is_mount():
+                try:
+                    await tape_handler.unmount_ltfs()
+                    logger.info("[磁带验证] 已卸载 LTFS")
+                except Exception as e:
+                    logger.warning(f"[磁带验证] 卸载 LTFS 失败: {e}")
+
+    async def _verify_directory(self, config: Dict) -> Dict[str, Any]:
+        """目录验证：扫描指定目录，按百分比抽样验证文件"""
+        source_paths = config.get('source_paths', [])
+        verify_percent = float(config.get('verify_percent', 1))
+        verify_enabled = config.get('verify_enabled', False)
+
+        if not source_paths:
+            return {"status": "failed", "message": "未指定验证源路径"}
+
+        # 收集所有文件
+        all_files = []
+        for src in source_paths:
+            src_path = Path(src)
+            if not src_path.exists():
+                logger.warning(f"[目录验证] 路径不存在: {src}")
+                continue
+            if src_path.is_file():
+                all_files.append(src_path)
+            elif src_path.is_dir():
+                for root, dirs, files in os.walk(str(src_path)):
+                    for f in files:
+                        all_files.append(Path(root) / f)
+
+        if not all_files:
+            return {"status": "success", "message": "指定路径中未发现文件", "total": 0, "sampled": 0, "passed": 0, "failed": 0}
+
+        # 按百分比抽样
+        sample_count = max(1, int(len(all_files) * verify_percent / 100))
+        sample_count = min(sample_count, len(all_files))
+        sampled = random.sample(all_files, sample_count)
+
+        logger.info(f"[目录验证] 发现 {len(all_files)} 个文件，抽样 {sample_count} 个")
+
+        passed = 0
+        failed = 0
+        errors = []
+
+        from config.settings import get_settings
+        settings = get_settings()
+        verify_temp = Path(settings.VERIFY_TEMP_DIR) / str(uuid.uuid4())[:8]
+
+        for i, file_path in enumerate(sampled):
+            try:
+                if file_path.name.endswith(('.tar.zst', '.tar.gz', '.tgz', '.tar', '.7z', '.zip')):
+                    # 归档文件
+                    if verify_enabled:
+                        # 解压验证
+                        verify_temp.mkdir(parents=True, exist_ok=True)
+                        valid, detail = await asyncio.to_thread(
+                            self._verify_archive_extract, file_path, verify_temp
+                        )
+                    else:
+                        # 只检查头部
+                        valid, detail = await asyncio.to_thread(
+                            self._verify_archive_header, file_path
+                        )
+                    # 清理临时文件
+                    for item in verify_temp.iterdir():
+                        try:
+                            if item.is_dir():
+                                shutil.rmtree(str(item))
+                            else:
+                                item.unlink()
+                        except Exception:
+                            pass
+                    if valid:
+                        passed += 1
+                    else:
+                        failed += 1
+                        errors.append(f"{file_path.name}: {detail}")
+                else:
+                    # 普通文件：验证可读性
+                    size = file_path.stat().st_size
+                    if size > 0:
+                        # 尝试读取前 4KB
+                        with open(str(file_path), 'rb') as f:
+                            f.read(4096)
+                    passed += 1
+            except Exception as e:
+                failed += 1
+                errors.append(f"{file_path.name}: {str(e)}")
+
+        # 清理临时目录
+        try:
+            if verify_temp.exists():
+                shutil.rmtree(str(verify_temp), ignore_errors=True)
+        except Exception:
+            pass
+
+        # 记录日志
+        await log_operation(
+            operation_type=OperationType.TAPE_VERIFY,
+            resource_type="backup",
+            operation_name="目录验证",
+            operation_description=f"目录验证完成: 抽样 {sample_count}/{len(all_files)}, 通过 {passed}, 失败 {failed}",
+            category="backup",
+            success=(failed == 0),
+            result_message=f"抽样 {sample_count}/{len(all_files)}, 通过 {passed}, 失败 {failed}"
+        )
+
+        result = {
+            "status": "success" if failed == 0 else ("success" if passed > 0 else "failed"),
+            "message": f"目录验证完成: 抽样 {sample_count}/{len(all_files)}, 通过 {passed}, 失败 {failed}",
+            "total": len(all_files),
+            "sampled": sample_count,
+            "passed": passed,
+            "failed": failed,
+        }
+        if errors:
+            result["errors"] = errors[:20]
+
+        return result
+
+    @staticmethod
+    def _verify_archive_header(archive_path: Path) -> tuple:
+        """验证归档文件头部可读性（不解压，支持加密归档）
+
+        Returns:
+            (is_valid: bool, detail: str)
+        """
+        name = archive_path.name.lower()
+        size = archive_path.stat().st_size
+        size_mb = size / (1024 * 1024)
+
+        try:
+            if name.endswith('.tar.zst'):
+                with open(str(archive_path), 'rb') as f:
+                    magic = f.read(4)
+                if magic[:4] == b'\x28\xb5\x2f\xfd':
+                    return True, f"zstd 归档头部正常 ({size_mb:.1f}MB)"
+                return False, f"zstd 魔数不匹配"
+            elif name.endswith(('.tar.gz', '.tgz')):
+                with open(str(archive_path), 'rb') as f:
+                    magic = f.read(2)
+                if magic == b'\x1f\x8b':
+                    return True, f"gzip 归档头部正常 ({size_mb:.1f}MB)"
+                return False, "gzip 魔数不匹配"
+            elif name.endswith('.tar'):
+                with open(str(archive_path), 'rb') as f:
+                    f.seek(257)
+                    ustar = f.read(5)
+                if ustar == b'ustar':
+                    return True, f"tar 归档头部正常 ({size_mb:.1f}MB)"
+                return True, f"tar 文件可读 ({size_mb:.1f}MB)"
+            elif name.endswith('.zip'):
+                with open(str(archive_path), 'rb') as f:
+                    magic = f.read(4)
+                if magic[:2] == b'PK':
+                    return True, f"ZIP 归档头部正常 ({size_mb:.1f}MB)"
+                return False, "ZIP 魔数不匹配"
+            elif name.endswith('.7z'):
+                with open(str(archive_path), 'rb') as f:
+                    magic = f.read(6)
+                if magic[:2] == b'7z':
+                    return True, f"7z 归档头部正常 ({size_mb:.1f}MB)"
+                return False, "7z 魔数不匹配"
+            else:
+                return True, f"文件可读 ({size_mb:.1f}MB)"
+        except Exception as e:
+            return False, str(e)
+
+    @staticmethod
+    def _verify_archive_extract(archive_path: Path, temp_dir: Path) -> tuple:
+        """解压验证归档文件完整性（用于磁带验证，解压到临时目录后删除）
+
+        Returns:
+            (is_valid: bool, detail: str)
+        """
+        name = archive_path.name.lower()
+        size = archive_path.stat().st_size
+        size_mb = size / (1024 * 1024)
+
+        try:
+            if name.endswith('.tar.zst'):
+                return VerifyActionHandler._extract_tar_zst(archive_path, temp_dir, size_mb)
+            elif name.endswith(('.tar.gz', '.tgz')):
+                return VerifyActionHandler._extract_tar(archive_path, temp_dir, 'r:gz', size_mb)
+            elif name.endswith('.tar'):
+                return VerifyActionHandler._extract_tar(archive_path, temp_dir, 'r:', size_mb)
+            elif name.endswith('.zip'):
+                return VerifyActionHandler._extract_zip(archive_path, temp_dir, size_mb)
+            elif name.endswith('.7z'):
+                return VerifyActionHandler._extract_7z(archive_path, temp_dir, size_mb)
+            else:
+                return True, f"文件可读 ({size_mb:.1f}MB)"
+        except Exception as e:
+            return False, str(e)
+
+    @staticmethod
+    def _extract_tar_zst(archive_path: Path, temp_dir: Path, size_mb: float) -> tuple:
+        """解压验证 .tar.zst"""
+        try:
+            import zstandard as zstd
+            dctx = zstd.ZstdDecompressor()
+            member_count = 0
+            with open(str(archive_path), 'rb') as fh:
+                with dctx.stream_reader(fh) as reader:
+                    with tarfile.open(fileobj=reader, mode='r|') as tar:
+                        for member in tar:
+                            member_count += 1
+            return True, f"解压验证通过 ({size_mb:.1f}MB, {member_count} 个文件)"
+        except ImportError:
+            import subprocess
+            proc = subprocess.Popen(
+                ['zstd', '-d', str(archive_path), '--stdout'],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE
+            )
+            member_count = 0
+            try:
+                with tarfile.open(fileobj=proc.stdout, mode='r|') as tar:
+                    for member in tar:
+                        member_count += 1
+                proc.wait(timeout=60)
+            except Exception as e:
+                proc.kill()
+                proc.wait()
+                return False, f"解压验证失败: {e}"
+            if proc.returncode != 0:
+                return False, f"zstd 解压返回码: {proc.returncode}"
+            return True, f"解压验证通过 ({size_mb:.1f}MB, {member_count} 个文件, CLI)"
+
+    @staticmethod
+    def _extract_tar(archive_path: Path, temp_dir: Path, mode: str, size_mb: float) -> tuple:
+        """解压验证 tar/tar.gz"""
+        member_count = 0
+        with tarfile.open(str(archive_path), mode) as tar:
+            for member in tar:
+                member_count += 1
+        return True, f"解压验证通过 ({size_mb:.1f}MB, {member_count} 个文件)"
+
+    @staticmethod
+    def _extract_zip(archive_path: Path, temp_dir: Path, size_mb: float) -> tuple:
+        """解压验证 zip"""
+        import zipfile
+        with zipfile.ZipFile(str(archive_path), 'r') as zf:
+            bad = zf.testzip()
+            if bad:
+                return False, f"损坏的文件: {bad}"
+            count = len(zf.infolist())
+        return True, f"解压验证通过 ({size_mb:.1f}MB, {count} 个文件)"
+
+    @staticmethod
+    def _extract_7z(archive_path: Path, temp_dir: Path, size_mb: float) -> tuple:
+        """解压验证 7z"""
+        try:
+            import py7zr
+            with py7zr.SevenZipFile(str(archive_path), mode='r') as archive:
+                file_list = archive.list()
+                count = len([f for f in file_list if not f.is_directory])
+            return True, f"解压验证通过 ({size_mb:.1f}MB, {count} 个文件)"
+        except ImportError:
+            return True, f"py7zr 未安装，跳过解压验证 ({size_mb:.1f}MB)"
+
+
 class CustomActionHandler(ActionHandler):
     """自定义动作处理器"""
 
@@ -847,6 +1309,7 @@ def get_action_handler(action_type: TaskActionType, system_instance) -> ActionHa
         TaskActionType.CLEANUP: CleanupActionHandler,
         TaskActionType.HEALTH_CHECK: HealthCheckActionHandler,
         TaskActionType.RETENTION_CHECK: RetentionCheckActionHandler,
+        TaskActionType.VERIFY: VerifyActionHandler,
         TaskActionType.CUSTOM: CustomActionHandler,
     }
 

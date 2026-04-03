@@ -145,6 +145,9 @@ async def remount_tape_stream(request: Request):
         # 步骤1：卸载（流式）
         try:
             async for event in engine.unmount_tape_streaming():
+                # 给 unmount 的 result 事件添加 step 标识，前端依赖此字段判断
+                if event.get('type') == 'result' and 'step' not in event:
+                    event['step'] = 'unmount'
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                 if event.get('type') == 'result' and not event.get('success'):
                     return
@@ -205,6 +208,21 @@ async def scan_tape(request: Request):
     """扫描磁带内容，发现备份集"""
     engine = _get_engine(request)
     return await engine.scan_tape_contents()
+
+
+@router.post("/scan-tape-stream")
+async def scan_tape_stream(request: Request):
+    """流式扫描磁带内容（SSE），逐个归档实时推送"""
+    engine = _get_engine(request)
+
+    async def _stream():
+        try:
+            async for event in engine.scan_tape_contents_streaming():
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 @router.get("/backup-sets/{set_id}/contents")

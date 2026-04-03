@@ -31,6 +31,7 @@ export class ActionConfigManager {
             'cleanup': 'cleanupActionConfig',
             'health_check': 'healthCheckActionConfig',
             'retention_check': 'retentionCheckActionConfig',
+            'verify': 'verifyActionConfig',
             'custom': 'customActionConfig'
         };
         
@@ -249,6 +250,22 @@ export class ActionConfigManager {
                     config = {};
                     break;
 
+                case 'verify':
+                    config = {
+                        verify_type: val('#verifyType', 'directory'),
+                        verify_percent: parseFloat(val('#verifyPercent', '1')) || 1,
+                        source_paths: window.pathManager ? window.pathManager.verifySourcePaths : [],
+                    };
+                    const verifyTapeDevice = val('#verifyTapeDevice', '');
+                    if (verifyTapeDevice) {
+                        config.tape_device = verifyTapeDevice;
+                    }
+                    if (config.verify_type === 'directory' && config.source_paths.length === 0) {
+                        showMessage('请至少添加一个验证源路径', 'error');
+                        return null;
+                    }
+                    break;
+
                 case 'custom':
                     // 安全获取自定义配置
                     let customConfigText = '';
@@ -346,6 +363,25 @@ export class ActionConfigManager {
                 }
                 break;
                 
+            case 'verify':
+                if (config.verify_type) {
+                    const verifyTypeEl = document.getElementById('verifyType');
+                    if (verifyTypeEl) verifyTypeEl.value = config.verify_type;
+                }
+                if (config.verify_percent) {
+                    const verifyPercentEl = document.getElementById('verifyPercent');
+                    if (verifyPercentEl) verifyPercentEl.value = config.verify_percent;
+                }
+                if (config.source_paths) {
+                    window._verifySourcePaths = config.source_paths;
+                    if (window._renderVerifySourcePaths) window._renderVerifySourcePaths();
+                }
+                if (config.tape_device) {
+                    const verifyTapeDeviceEl = document.getElementById('verifyTapeDevice');
+                    if (verifyTapeDeviceEl) verifyTapeDeviceEl.value = config.tape_device;
+                }
+                break;
+
             case 'custom':
                 if (config) {
                     const customConfigEl = document.getElementById('customActionConfigJson');

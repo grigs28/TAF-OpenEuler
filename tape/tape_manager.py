@@ -75,6 +75,7 @@ class TapeManager:
         self.cached_devices: List[Dict[str, Any]] = []  # 缓存的设备列表
         self._scanning_task = None  # 后台扫描任务
         self._scan_in_progress = False  # 扫描进行中标志
+        self.dingtalk_notifier = None  # 钉钉通知器（由 main.py 注入）
 
     async def initialize(self):
         """初始化磁带管理器"""
@@ -767,13 +768,12 @@ class TapeManager:
                         await self.erase_tape(tape.tape_id)
 
                         # 发送通知
-                        from utils.dingtalk_notifier import DingTalkNotifier
-                        notifier = DingTalkNotifier()
-                        await notifier.send_tape_notification(
-                            tape.tape_id,
-                            "expired",
-                            {'expiry_date': tape.expiry_date.isoformat()}
-                        )
+                        if self.dingtalk_notifier:
+                            from utils.notify import notify
+                            await notify(
+                                self.dingtalk_notifier, "磁带已过期",
+                                f"磁带 {tape.tape_id} 已过期，已自动擦除"
+                            )
 
         except Exception as e:
             logger.error(f"检查磁带保留期失败: {str(e)}")
@@ -798,9 +798,12 @@ class TapeManager:
                         # 检查容量预警
                         usage_percent = tape_info['usage_percent']
                         if usage_percent > 90:
-                            from utils.dingtalk_notifier import DingTalkNotifier
-                            notifier = DingTalkNotifier()
-                            await notifier.send_capacity_warning(usage_percent, tape_info)
+                            if self.dingtalk_notifier:
+                                from utils.notify import notify
+                                await notify(
+                                    self.dingtalk_notifier, "磁带容量预警",
+                                    f"当前使用率: {usage_percent}%"
+                                )
 
                 # 等待下次检查
                 await asyncio.sleep(self.settings.TAPE_CHECK_INTERVAL)

@@ -181,7 +181,7 @@ class DatabaseManager:
             with conn.cursor() as cur:
                 # 先创建枚举类型（明确定义所有枚举类型）
                 from models.scheduled_task import ScheduleType, ScheduledTaskStatus, TaskActionType
-                from models.system_log import LogLevel, LogCategory, OperationType, ErrorLevel
+                from models.system_log import LogLevel, LogCategory, OperationType
                 from models.backup import BackupTaskType, BackupTaskStatus, BackupFileType
                 
                 # 定义所有需要的枚举类型（确保名称和值正确）
@@ -197,7 +197,6 @@ class DatabaseManager:
                     'loglevel': [e.value for e in LogLevel],  # ['debug', 'info', 'warning', 'error', 'critical']
                     'logcategory': [e.value for e in LogCategory],  # ['system', 'backup', 'recovery', 'tape', 'user', 'security', 'performance', 'api', 'web', 'database']
                     'operationtype': [e.value for e in OperationType],  # 所有操作类型
-                    'errorlevel': [e.value for e in ErrorLevel],  # ['low', 'medium', 'high', 'critical']
                     'backuptasktype': [e.value for e in BackupTaskType],  # ['full', 'incremental', 'differential', 'monthly_full']
                     'backuptaskstatus': [e.value for e in BackupTaskStatus],  # ['pending', 'running', 'completed', 'failed', 'cancelled', 'paused']
                     'backupsetstatus': [e.value for e in BackupSetStatus],  # ['active', 'archived', 'corrupted', 'deleted']
@@ -264,6 +263,25 @@ class DatabaseManager:
                             else:
                                 existing_enums.append(enum_name)
                 
+                # 同步枚举值：将 Python 枚举中新增的值添加到数据库已有枚举中
+                updated_enums = []
+                for enum_name, enum_values in enum_definitions.items():
+                    for val in enum_values:
+                        try:
+                            cur.execute(
+                                f"SELECT 1 FROM pg_enum e JOIN pg_type t ON e.enumtypid = t.oid "
+                                f"WHERE t.typname = %s AND e.enumlabel = %s",
+                                (enum_name, val)
+                            )
+                            if not cur.fetchone():
+                                cur.execute(f"ALTER TYPE {enum_name} ADD VALUE %s", (val,))
+                                updated_enums.append(f"{enum_name}.{val}")
+                        except Exception as e:
+                            logger.debug(f"同步枚举值 {enum_name}.{val} 失败（可能已存在）: {e}")
+                if updated_enums:
+                    conn.commit()
+                    logger.info(f"同步了 {len(updated_enums)} 个新枚举值: {', '.join(updated_enums)}")
+
                 # 关键修复：在创建表之前提交枚举类型的创建（openGauss模式下需要显式提交）
                 conn.commit()
                 logger.debug("枚举类型创建已提交")

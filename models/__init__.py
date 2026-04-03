@@ -9,7 +9,7 @@ from .base import Base
 from .backup import BackupTask, BackupSet, BackupFile
 from .tape import TapeCartridge, TapeUsage, TapeLog
 from .user import User, Role, Permission
-from .system_log import SystemLog, OperationLog, ErrorLog
+from .system_log import SystemLog, OperationLog
 from .system_config import SystemConfig
 from .scheduled_task import ScheduledTask, ScheduledTaskLog, ScheduleType, ScheduledTaskStatus, TaskActionType
 from .notification_user import NotificationUser
@@ -36,8 +36,7 @@ __all__ = [
     # 日志相关
     'SystemLog',
     'OperationLog',
-    'ErrorLog',
-    
+
     # 系统配置
     'SystemConfig',
     

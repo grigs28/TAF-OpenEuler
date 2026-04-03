@@ -62,7 +62,7 @@
             <h6 class="mb-3">
                 <i class="bi bi-check-circle me-2"></i>工具可用性检查
             </h6>
-            <button class="btn btn-primary tool-btn" onclick="checkToolsAvailability()">
+            <button class="btn btn-outline-secondary btn-sm" onclick="checkToolsAvailability()">
                 <i class="bi bi-sync-alt me-1"></i>检查工具
             </button>
             <div id="toolsStatus" class="mt-3"></div>
@@ -80,26 +80,26 @@
                     <i class="bi bi-info-circle me-1"></i>
                     <strong>说明：</strong>使用 Linux 原生 mt 命令进行磁带操作。
                 </div>
-                <div class="d-flex flex-wrap">
-                    <button class="btn btn-success tool-btn" onclick="mtStatus()">
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="mtStatus()">
                         <i class="bi bi-heart-pulse me-1"></i>检查状态
                     </button>
-                    <button class="btn btn-info tool-btn" onclick="mtRewind()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="mtRewind()">
                         <i class="bi bi-arrow-counterclockwise me-1"></i>倒带
                     </button>
-                    <button class="btn btn-warning tool-btn" onclick="mtEject()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="mtEject()">
                         <i class="bi bi-eject me-1"></i>弹出磁带
                     </button>
-                    <button class="btn btn-info tool-btn" onclick="mtEOD()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="mtEOD()">
                         <i class="bi bi-skip-end me-1"></i>定位到末尾
                     </button>
-                    <button class="btn btn-info tool-btn" onclick="mtTell()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="mtTell()">
                         <i class="bi bi-geo-alt me-1"></i>获取位置
                     </button>
-                    <button class="btn btn-secondary tool-btn" onclick="mtSetCompression()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="mtSetCompression()">
                         <i class="bi bi-compress me-1"></i>启用压缩
                     </button>
-                    <button class="btn btn-secondary tool-btn" onclick="mtSetBlock()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="mtSetBlock()">
                         <i class="bi bi-bricks me-1"></i>设置变长块
                     </button>
                 </div>
@@ -118,20 +118,20 @@
                     <i class="bi bi-info-circle me-1"></i>
                     <strong>说明：</strong>使用 mkltfs 格式化磁带，使用 ltfs 挂载磁带。
                 </div>
-                <div class="d-flex flex-wrap">
-                    <button class="btn btn-primary tool-btn" onclick="showScanDevicesModal()">
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="showScanDevicesModal()">
                         <i class="bi bi-search me-1"></i>扫描设备
                     </button>
-                    <button class="btn btn-danger tool-btn" onclick="showMkltfsModal()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="showMkltfsModal()">
                         <i class="bi bi-disc me-1"></i>LTFS格式化
                     </button>
-                    <button class="btn btn-success tool-btn" onclick="showLtfsMountModal()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="showLtfsMountModal()">
                         <i class="bi bi-folder2-open me-1"></i>挂载LTFS
                     </button>
-                    <button class="btn btn-warning tool-btn" onclick="showLtfsUnmountModal()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="showLtfsUnmountModal()">
                         <i class="bi bi-folder me-1"></i>卸载LTFS
                     </button>
-                    <button class="btn btn-info tool-btn" onclick="checkLtfsMount()">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="checkLtfsMount()">
                         <i class="bi bi-check-circle me-1"></i>检查挂载
                     </button>
                 </div>
@@ -146,11 +146,11 @@
                 <h6 class="mb-3">
                     <i class="bi bi-diagram-3 me-2"></i>组合操作流程
                 </h6>
-                <div class="d-flex flex-wrap">
-                    <button class="btn btn-success tool-btn" style="min-width: 180px;" onclick="showPrepareTapeModal()">
+                <div class="d-flex flex-wrap gap-2">
+                    <button class="btn btn-outline-secondary btn-sm" style="min-width: 160px;" onclick="showPrepareTapeModal()">
                         <i class="bi bi-arrow-repeat me-1"></i>准备磁带
                     </button>
-                    <button class="btn btn-info tool-btn" style="min-width: 180px;" onclick="readTapeLabel()">
+                    <button class="btn btn-outline-secondary btn-sm" style="min-width: 160px;" onclick="readTapeLabel()">
                         <i class="bi bi-tag me-1"></i>读取卷标
                     </button>
                 </div>
@@ -196,8 +196,8 @@
                 <p>扫描系统中所有可用的磁带设备，包括 SCSI 地址、厂商、型号等信息。</p>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="scanDevices()">扫描</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="scanDevices()">扫描</button>
             </div>
         </div>
     </div>
@@ -234,8 +234,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-danger" onclick="mkltfsFormat()">格式化</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="mkltfsFormat()">格式化</button>
             </div>
         </div>
     </div>
@@ -274,8 +274,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-success" onclick="ltfsMount()">挂载</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="ltfsMount()">挂载</button>
             </div>
         </div>
     </div>
@@ -307,8 +307,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-warning" onclick="ltfsUnmount()">卸载</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="ltfsUnmount()">卸载</button>
             </div>
         </div>
     </div>
@@ -352,8 +352,8 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
-                <button type="button" class="btn btn-primary" onclick="prepareTape()">开始准备</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-outline-secondary btn-sm" onclick="prepareTape()">开始准备</button>
             </div>
         </div>
     </div>

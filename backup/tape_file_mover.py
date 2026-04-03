@@ -242,19 +242,19 @@ class TapeFileMover:
             if tape_file_path:
                 logger.info(f"文件移动成功: {source_file.name} -> {tape_file_path} (耗时: {elapsed:.2f}秒)")
 
-                # 更新任务状态为"完成"
+                # 更新任务状态：保持 copy 阶段，只更新 description 记录进度
+                # 不再逐文件设为 finalize，任务完成由 _perform_backup 的四条件判定统一处理
                 if task.backup_task:
                     try:
                         from backup.backup_db import BackupDB
                         backup_db = BackupDB()
-                        # 使用主事件循环更新状态（如果可用）
                         backup_db.update_task_stage(
                             task.backup_task,
-                            "finalize",
+                            "copy",
                             main_loop=self._main_loop,
-                            description=f"[写入完成] 文件已写入磁带：{source_file.name}"
+                            description=f"[写入磁带中] 已写入文件：{source_file.name}"
                         )
-                        logger.info(f"任务 {task.backup_task.task_name} 状态更新为: 完成备份")
+                        logger.info(f"任务 {task.backup_task.task_name} 文件写入磁带完成: {source_file.name}")
                     except Exception as stage_error:
                         logger.warning(f"更新任务状态失败: {str(stage_error)}")
 

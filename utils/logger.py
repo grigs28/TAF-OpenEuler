@@ -50,8 +50,8 @@ def setup_logging():
     # 文件处理器（按大小轮转，最大10MB，保留30个备份文件）
     file_handler = logging.handlers.RotatingFileHandler(
         filename=settings.LOG_FILE,
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=30,  # 保留30个备份文件
+        maxBytes=settings.LOG_MAX_BYTES,
+        backupCount=settings.LOG_BACKUP_COUNT,
         encoding='utf-8'
     )
     file_handler.setLevel(getattr(logging, settings.LOG_LEVEL.upper()))
@@ -63,8 +63,8 @@ def setup_logging():
     error_log_file = log_dir / 'error.log'
     error_handler = logging.handlers.RotatingFileHandler(
         filename=error_log_file,
-        maxBytes=10 * 1024 * 1024,  # 10MB
-        backupCount=30,  # 保留30个备份文件
+        maxBytes=settings.LOG_MAX_BYTES,
+        backupCount=settings.LOG_BACKUP_COUNT,
         encoding='utf-8'
     )
     error_handler.setLevel(logging.WARNING)  # 改为WARNING级别，包含所有警告及以上日志
