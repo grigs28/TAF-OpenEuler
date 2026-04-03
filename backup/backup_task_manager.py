@@ -226,6 +226,7 @@ class BackupTaskManager:
             in_memory_processed_bytes = None
             in_memory_compressed_bytes = None
             in_memory_scan_status = None
+            in_memory_compression_completed = None
 
             # 1. 从 task_manager._current_task 获取
             if self._current_task and self._current_task.id == task_id:
@@ -235,6 +236,7 @@ class BackupTaskManager:
                 in_memory_processed_bytes = getattr(self._current_task, 'processed_bytes', None)
                 in_memory_compressed_bytes = getattr(self._current_task, 'compressed_bytes', None)
                 in_memory_scan_status = getattr(self._current_task, 'scan_status', None)
+                in_memory_compression_completed = getattr(self._current_task, 'compression_completed', None)
 
             # 2. 如果获取不到，尝试从 backup_engine._current_task 获取
             if (in_memory_total_files is None or in_memory_total_bytes is None or
@@ -258,6 +260,8 @@ class BackupTaskManager:
                                 in_memory_compressed_bytes = getattr(backup_engine._current_task, 'compressed_bytes', None)
                             if in_memory_scan_status is None:
                                 in_memory_scan_status = getattr(backup_engine._current_task, 'scan_status', None)
+                            if in_memory_compression_completed is None:
+                                in_memory_compression_completed = getattr(backup_engine._current_task, 'compression_completed', None)
                 except Exception:
                     pass
 
@@ -331,7 +335,8 @@ class BackupTaskManager:
                         'tape_device': row['tape_device'],
                         'tape_id': row['tape_id'],
                         'description': row['description'],
-                        'current_compression_progress': current_compression_progress
+                        'current_compression_progress': current_compression_progress,
+                        'compression_completed': bool(in_memory_compression_completed) if in_memory_compression_completed is not None else None
                     }
 
             return None

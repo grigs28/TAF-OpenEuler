@@ -1,190 +1,381 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-恢复管理API
-Recovery Management API
+磁带恢复 API
+Tape Recovery API
+
+提供从 LTFS 磁带直接恢复的 API 端点，不依赖数据库。
 """
 
+import asyncio
+import io
+import json
 import logging
-from typing import List, Dict, Any, Optional
-from datetime import datetime
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Request
+from pathlib import Path
+from typing import Optional, List, Dict
+from fastapi import APIRouter, HTTPException, BackgroundTasks, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-class RecoveryRequest(BaseModel):
-    """恢复请求模型"""
-    backup_set_id: str
-    files: List[Dict[str, Any]]
+# ============================================================
+# 请求模型
+# ============================================================
+
+class MountTapeRequest(BaseModel):
+    max_retries: int = 3
+    retry_interval: int = 30
+
+
+class RestoreRequest(BaseModel):
+    """恢复请求"""
+    set_id: str
     target_path: str
+    overwrite: str = "skip"           # skip / overwrite
+    preserve_permissions: bool = True
+    verify_integrity: bool = True
+    selected_archives: Optional[List[str]] = None
+    # 文件级选择: key=归档文件名, value=文件路径列表; null/空=恢复该归档全部文件
+    selected_files: Optional[Dict[str, Optional[List[str]]]] = None
 
 
-# 注意：路由顺序很重要，更具体的路径应该放在前面
-# 先定义带路径参数的具体路由，再定义通用路由
+# ============================================================
+# 辅助函数
+# ============================================================
 
-@router.get("/backup-sets/{backup_set_id}/top-level")
-async def get_top_level_directories(backup_set_id: str, request: Request):
-    """获取备份集的顶层目录结构（优化性能，避免一次性加载所有文件）"""
-    try:
-        logger.debug(f"收到获取顶层目录请求: backup_set_id={backup_set_id}")
-        system = request.app.state.system
-        if not system:
-            logger.error("系统未初始化")
-            raise HTTPException(status_code=500, detail="系统未初始化")
-
-        directories = await system.recovery_engine.get_top_level_directories(backup_set_id)
-        logger.info(f"返回 {len(directories)} 个顶层目录项")
-        return {"items": directories}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"获取顶层目录结构失败: {str(e)}", exc_info=True)
-        raise HTTPException(status_code=500, detail=str(e))
+def _get_engine(request: Request):
+    """获取磁带恢复引擎实例"""
+    system = request.app.state.system
+    if not system:
+        raise HTTPException(status_code=500, detail="系统未初始化")
+    engine = getattr(system, 'tape_recovery_engine', None)
+    if not engine:
+        raise HTTPException(status_code=500, detail="磁带恢复引擎未初始化")
+    return engine
 
 
-@router.get("/backup-sets/{backup_set_id}/directory")
-async def get_directory_contents(
-    backup_set_id: str, 
-    path: str = "",
-    request: Request = None
-):
-    """获取指定目录下的文件和子目录列表"""
-    try:
-        system = request.app.state.system
-        if not system:
-            raise HTTPException(status_code=500, detail="系统未初始化")
+# ============================================================
+# 端点
+# ============================================================
 
-        contents = await system.recovery_engine.get_directory_contents(backup_set_id, path)
-        return {"items": contents}
-
-    except Exception as e:
-        logger.error(f"获取目录内容失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+@router.get("/tape-status")
+async def get_tape_status(request: Request):
+    """获取磁带状态（是否加载、是否挂载 LTFS）"""
+    engine = _get_engine(request)
+    return await engine.get_tape_status()
 
 
-@router.get("/backup-sets/{backup_set_id}/files")
-async def get_backup_set_files(backup_set_id: str, request: Request):
-    """获取备份集文件列表"""
-    try:
-        system = request.app.state.system
-        if not system:
-            raise HTTPException(status_code=500, detail="系统未初始化")
-
-        files = await system.recovery_engine.get_backup_set_files(backup_set_id)
-        return {"files": files}
-
-    except Exception as e:
-        logger.error(f"获取备份集文件列表失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+@router.post("/mount-tape")
+async def mount_tape(req: MountTapeRequest, request: Request):
+    """挂载 LTFS 文件系统"""
+    engine = _get_engine(request)
+    return await engine.mount_tape(
+        max_retries=req.max_retries,
+        retry_interval=req.retry_interval,
+    )
 
 
-@router.get("/backup-sets")
-async def search_backup_sets(
-    request: Request,
-    backup_group: Optional[str] = None,
-    tape_id: Optional[str] = None,
-    date_from: Optional[datetime] = None,
-    date_to: Optional[datetime] = None
-):
-    """搜索备份集"""
-    try:
-        # 获取系统实例
-        system = request.app.state.system
-        if not system:
-            return {"backup_sets": []}
+@router.post("/mount-tape-stream")
+async def mount_tape_stream(req: MountTapeRequest, request: Request):
+    """挂载 LTFS 文件系统（SSE 流式输出，实时显示命令日志）"""
+    engine = _get_engine(request)
 
-        filters = {}
-        if backup_group:
-            filters['backup_group'] = backup_group
-        if tape_id:
-            filters['tape_id'] = tape_id
-        if date_from:
-            filters['date_from'] = date_from
-        if date_to:
-            filters['date_to'] = date_to
+    async def _stream():
+        try:
+            async for event in engine.mount_tape_streaming(
+                max_retries=req.max_retries,
+                retry_interval=req.retry_interval,
+            ):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'log', 'message': f'挂载异常: {str(e)}'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'result', 'success': False, 'message': str(e)}, ensure_ascii=False)}\n\n"
 
-        backup_sets = await system.recovery_engine.search_backup_sets(filters)
-        return {"backup_sets": backup_sets}
-
-    except Exception as e:
-        logger.error(f"搜索备份集失败: {str(e)}")
-        return {"backup_sets": []}
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
-@router.post("/tasks")
-async def create_recovery_task(
-    recovery_request: RecoveryRequest,
+@router.post("/unmount-tape")
+async def unmount_tape(request: Request):
+    """卸载 LTFS 文件系统"""
+    engine = _get_engine(request)
+    return await engine.unmount_tape()
+
+
+@router.post("/unmount-tape-stream")
+async def unmount_tape_stream(request: Request):
+    """卸载 LTFS 文件系统（SSE 流式输出，实时显示命令日志）"""
+    engine = _get_engine(request)
+
+    async def _stream():
+        try:
+            async for event in engine.unmount_tape_streaming():
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'log', 'message': f'卸载异常: {str(e)}'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'result', 'success': False, 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@router.post("/remount-tape")
+async def remount_tape(request: Request):
+    """先卸载再重新挂载 LTFS"""
+    engine = _get_engine(request)
+
+    # 先卸载
+    unmount_result = await engine.unmount_tape()
+    if not unmount_result["success"]:
+        return {"success": False, "message": f"卸载失败: {unmount_result['message']}", "step": "unmount"}
+
+    # 再挂载
+    mount_result = await engine.mount_tape()
+    mount_result["step"] = "mount"
+    return mount_result
+
+
+@router.post("/remount-tape-stream")
+async def remount_tape_stream(request: Request):
+    """先卸载再重新挂载 LTFS（SSE 流式输出，实时显示命令日志）"""
+    engine = _get_engine(request)
+
+    async def _stream():
+        # 步骤1：卸载（流式）
+        try:
+            async for event in engine.unmount_tape_streaming():
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+                if event.get('type') == 'result' and not event.get('success'):
+                    return
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'log', 'message': f'卸载异常: {str(e)}'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'result', 'success': False, 'message': str(e), 'step': 'unmount'}, ensure_ascii=False)}\n\n"
+            return
+
+        # 步骤1完成
+        yield f"data: {json.dumps({'type': 'step_done', 'step': 0}, ensure_ascii=False)}\n\n"
+
+        # 步骤2：挂载（流式）
+        try:
+            async for event in engine.mount_tape_streaming():
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'log', 'message': f'挂载异常: {str(e)}'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'result', 'success': False, 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@router.post("/eject-tape")
+async def eject_tape(request: Request):
+    """卸载并弹出磁带"""
+    engine = _get_engine(request)
+    return await engine.eject_tape()
+
+
+@router.post("/eject-tape-stream")
+async def eject_tape_stream(request: Request):
+    """卸载并弹出磁带（SSE 流式输出，实时显示命令日志）"""
+    engine = _get_engine(request)
+
+    async def _stream():
+        # 步骤1：卸载（流式）
+        try:
+            async for event in engine.unmount_tape_streaming():
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'log', 'message': f'卸载异常: {str(e)}'}, ensure_ascii=False)}\n\n"
+
+        yield f"data: {json.dumps({'type': 'step_done', 'step': 0}, ensure_ascii=False)}\n\n"
+
+        # 步骤2：弹出（流式）
+        try:
+            async for event in engine.eject_tape_streaming():
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'log', 'message': f'弹出异常: {str(e)}'}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'result', 'success': False, 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@router.post("/scan-tape")
+async def scan_tape(request: Request):
+    """扫描磁带内容，发现备份集"""
+    engine = _get_engine(request)
+    return await engine.scan_tape_contents()
+
+
+@router.get("/backup-sets/{set_id}/contents")
+async def get_backup_set_contents(set_id: str, request: Request):
+    """获取备份集的完整文件列表（合并所有归档）"""
+    engine = _get_engine(request)
+    return await engine.list_backup_set_contents(set_id)
+
+
+@router.get("/backup-sets/{set_id}/archive-contents")
+async def get_archive_contents(set_id: str, archive: str, request: Request):
+    """获取单个归档文件的内部文件列表"""
+    engine = _get_engine(request)
+    return await engine.list_archive_contents(set_id, archive)
+
+
+@router.post("/restore")
+async def start_restore(
+    req: RestoreRequest,
     background_tasks: BackgroundTasks,
-    request: Request
+    request: Request,
 ):
-    """创建恢复任务"""
+    """创建并启动恢复任务"""
+    engine = _get_engine(request)
+
     try:
-        system = request.app.state.system
-        if not system:
-            raise HTTPException(status_code=500, detail="系统未初始化")
-
-        recovery_id = await system.recovery_engine.create_recovery_task(
-            backup_set_id=recovery_request.backup_set_id,
-            files=recovery_request.files,
-            target_path=recovery_request.target_path
+        recovery_id = await engine.create_recovery_task(
+            set_id=req.set_id,
+            target_path=req.target_path,
+            overwrite=req.overwrite,
+            preserve_permissions=req.preserve_permissions,
+            verify_integrity=req.verify_integrity,
+            selected_archives=req.selected_archives,
+            selected_files=req.selected_files,
         )
 
-        if not recovery_id:
-            raise HTTPException(status_code=500, detail="创建恢复任务失败")
-
-        # 添加到后台任务
-        background_tasks.add_task(
-            system.recovery_engine.execute_recovery,
-            recovery_id
-        )
+        # 后台执行恢复
+        background_tasks.add_task(engine.execute_recovery, recovery_id)
 
         return {
             "success": True,
             "recovery_id": recovery_id,
-            "message": "恢复任务创建成功"
+            "message": "恢复任务已创建",
         }
-
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"创建恢复任务失败: {str(e)}")
+        logger.error(f"创建恢复任务失败: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/tasks/{recovery_id}/status")
+@router.get("/recovery-status/{recovery_id}")
 async def get_recovery_status(recovery_id: str, request: Request):
-    """获取恢复状态"""
+    """获取恢复任务状态和进度"""
+    engine = _get_engine(request)
+    status = await engine.get_recovery_status(recovery_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="恢复任务不存在")
+    return status
+
+
+@router.post("/cancel/{recovery_id}")
+async def cancel_recovery(recovery_id: str, request: Request):
+    """取消恢复任务"""
+    engine = _get_engine(request)
+    success = await engine.cancel_recovery(recovery_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="恢复任务不存在")
+    return {"success": True, "message": "已请求取消恢复任务"}
+
+
+# ============================================================
+# 下载端点
+# ============================================================
+
+class ZipDownloadRequest(BaseModel):
+    """ZIP 下载请求"""
+    set_id: str
+    selected_files: Optional[Dict[str, Optional[List[str]]]] = None
+
+
+@router.post("/download-zip")
+async def download_zip(req: ZipDownloadRequest, request: Request):
+    """将选中归档中的文件打包为 ZIP 流式下载"""
+    import zipfile
+
+    engine = _get_engine(request)
+    mount_point = engine._get_mount_point()
+    set_dir = mount_point / req.set_id
+
+    if not set_dir.exists():
+        raise HTTPException(status_code=404, detail=f"备份集不存在: {req.set_id}")
+
+    selected_files = req.selected_files or {}
+
+    async def _zip_stream():
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for archive_name, file_list in selected_files.items():
+                archive_path = set_dir / archive_name
+                if not archive_path.exists():
+                    continue
+
+                # 获取文件过滤列表
+                files_filter = file_list if file_list else None
+                try:
+                    entries = await asyncio.to_thread(
+                        engine._extract_to_memory, archive_path, files_filter
+                    )
+                    for rel_path, data in entries:
+                        zf.writestr(rel_path, data)
+                except Exception as e:
+                    logger.error(f"[ZIP下载] 处理归档 {archive_name} 失败: {e}")
+
+        buffer.seek(0)
+        return buffer.getvalue()
+
     try:
-        system = request.app.state.system
-        if not system:
-            raise HTTPException(status_code=500, detail="系统未初始化")
-
-        status = await system.recovery_engine.get_recovery_status(recovery_id)
-        if status:
-            return status
-        else:
-            raise HTTPException(status_code=404, detail="恢复任务不存在")
-
-    except HTTPException:
-        raise
+        data = await _zip_stream()
+        return StreamingResponse(
+            io.BytesIO(data),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{req.set_id}_recovery.zip"'
+            },
+        )
     except Exception as e:
-        logger.error(f"获取恢复状态失败: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"[ZIP下载] 打包失败: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"打包失败: {str(e)}")
 
 
-@router.get("/backup-groups")
-async def get_backup_groups(request: Request):
-    """获取备份组列表"""
+@router.get("/download-raw")
+async def download_raw(
+    set_id: str,
+    archive: str,
+    request: Request,
+):
+    """直接下载原始归档文件"""
+    engine = _get_engine(request)
+    mount_point = engine._get_mount_point()
+
+    # 防止路径穿越
+    if '..' in set_id or '..' in archive or '/' in archive or '\\' in archive:
+        raise HTTPException(status_code=400, detail="非法路径")
+
+    archive_path = mount_point / set_id / archive
+
+    # 确保路径在挂载点内
     try:
-        system = request.app.state.system
-        if not system:
-            return {"backup_groups": []}
+        archive_path.resolve().relative_to(mount_point.resolve())
+    except ValueError:
+        raise HTTPException(status_code=400, detail="非法路径")
 
-        groups = await system.recovery_engine.get_backup_groups()
-        return {"backup_groups": groups}
+    if not archive_path.exists():
+        raise HTTPException(status_code=404, detail=f"归档文件不存在: {archive}")
 
-    except Exception as e:
-        logger.error(f"获取备份组列表失败: {str(e)}")
-        return {"backup_groups": []}
+    file_size = archive_path.stat().st_size
+
+    def _iter_file():
+        with open(str(archive_path), 'rb') as f:
+            while True:
+                chunk = f.read(8192)
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(
+        _iter_file(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{archive}"',
+            "Content-Length": str(file_size),
+        },
+    )

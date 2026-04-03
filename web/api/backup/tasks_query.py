@@ -116,10 +116,12 @@ async def get_backup_tasks(
                    bt.created_at, bt.started_at, bt.completed_at, bt.error_message, bt.is_template,
                    bt.tape_device, bt.source_paths, bt.description, bt.result_summary, bt.scan_status, bt.operation_stage,
                    bt.backup_set_id,
+                   bs.set_id as backup_set_str_id,
                    CASE WHEN st.id IS NOT NULL THEN true ELSE false END as from_scheduler,
                    st.enabled as scheduler_enabled,
                    st.id as scheduler_task_id
             FROM backup_tasks bt
+            LEFT JOIN backup_sets bs ON bt.backup_set_id = bs.id
             LEFT JOIN scheduled_tasks st ON st.backup_task_id = bt.id AND st.action_type = 'backup'
             WHERE {where_sql}
             ORDER BY bt.created_at DESC
@@ -210,6 +212,7 @@ async def get_backup_tasks(
                     in_memory_processed_bytes = None
                     in_memory_compressed_bytes = None
                     in_memory_scan_status = None
+                    in_memory_compression_completed = None
                     task_status = None
 
                     if status_value == 'running':
@@ -237,6 +240,19 @@ async def get_backup_tasks(
                                                 if hasattr(compression_worker.backup_task, 'current_compression_progress') and compression_worker.backup_task.current_compression_progress:
                                                     current_compression_progress = compression_worker.backup_task.current_compression_progress
                                                     logger.debug(f"[任务查询] 任务 {row['id']} get_aggregated_compression_progress 返回 None，使用 backup_task 中的上一次进度")
+
+                                        # 获取预取器循环次数和运行状态（用于预分组徽章判断）
+                                        in_memory_prefetch_loop_count = 0
+                                        in_memory_prefetcher_running = True
+                                        if hasattr(compression_worker, 'file_group_prefetcher') and compression_worker.file_group_prefetcher:
+                                            fp = compression_worker.file_group_prefetcher
+                                            in_memory_prefetch_loop_count = getattr(fp, 'prefetch_loop_count', 0) or 0
+                                            in_memory_prefetcher_running = getattr(fp, '_running', True)
+
+                                        # 获取 compression_completed 状态
+                                        if in_memory_compression_completed is None:
+                                            in_memory_compression_completed = getattr(compression_worker.backup_task, 'compression_completed', None)
+
                                 # 从get_task_status获取所有内存统计（优先使用内存数据）
                                 task_status = await system.backup_engine.get_task_status(row["id"])
                                 logger.debug(f"[任务查询] 任务 {row['id']} 状态: {task_status}")
@@ -274,6 +290,8 @@ async def get_backup_tasks(
                                             in_memory_compressed_bytes = None
                                     if 'scan_status' in task_status:
                                         in_memory_scan_status = task_status.get('scan_status')
+                                    if 'compression_completed' in task_status:
+                                        in_memory_compression_completed = task_status.get('compression_completed')
                         except Exception as e:
                             logger.error(f"[任务查询] 获取任务 {row['id']} 压缩进度失败: {str(e)}", exc_info=True)
 
@@ -281,13 +299,35 @@ async def get_backup_tasks(
                     # scan_status 优先使用内存中的值，其次回退到数据库字段
                     scan_status_value = in_memory_scan_status if in_memory_scan_status is not None else row.get("scan_status")
 
+                    # 检查 final 目录是否有待写入磁带的文件（用于 copy 步骤状态判断）
+                    final_dir_has_files = None
+                    if status_value == 'running':
+                        try:
+                            if system and system.backup_engine:
+                                if hasattr(system.backup_engine, 'final_dir_monitor') and system.backup_engine.final_dir_monitor:
+                                    _set_id = row.get("backup_set_str_id")
+                                    if _set_id:
+                                        final_dir_has_files = not system.backup_engine.final_dir_monitor.is_final_dir_empty(_set_id)
+                        except Exception:
+                            pass
+
+                    # 预分组完成：预取器执行过（loop_count > 0）且已停止（_running == False）
+                    prefetch_done = False
+                    try:
+                        prefetch_done = in_memory_prefetch_loop_count > 0 and not in_memory_prefetcher_running
+                    except NameError:
+                        pass
+
                     # 预分组完成状态由预分组任务在完成时更新description字段来标记，不需要查询数据库
                     stage_info = _build_stage_info(
                         row.get("description"),
                         scan_status_value,
                         status_value,
                         row.get("operation_stage"),  # 优先使用数据库中的 operation_stage 字段
-                        current_compression_progress  # 传入从内存获取的压缩进度
+                        current_compression_progress,  # 传入从内存获取的压缩进度
+                        final_dir_has_files,  # 传入 final 目录状态
+                        prefetch_done,  # 传入预取器是否完成
+                        in_memory_compression_completed  # 传入压缩是否完成
                     )
 
                     # 所有统计字段：优先使用内存中的实时统计，其次回退到数据库字段
@@ -501,12 +541,14 @@ async def get_backup_task(task_id: int, http_request: Request):
         async with get_opengauss_connection() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT id, task_name, task_type, status, progress_percent, total_files,
-                       processed_files, total_bytes, processed_bytes, compressed_bytes,
-                       created_at, started_at, completed_at, error_message, is_template,
-                       tape_device, source_paths, description, result_summary, scan_status, operation_stage, enabled
-                FROM backup_tasks
-                WHERE id = $1
+                SELECT bt.id, bt.task_name, bt.task_type, bt.status, bt.progress_percent, bt.total_files,
+                       bt.processed_files, bt.total_bytes, bt.processed_bytes, bt.compressed_bytes,
+                       bt.created_at, bt.started_at, bt.completed_at, bt.error_message, bt.is_template,
+                       bt.tape_device, bt.source_paths, bt.description, bt.result_summary, bt.scan_status, bt.operation_stage,
+                       bt.backup_set_id, bs.set_id as backup_set_str_id
+                FROM backup_tasks bt
+                LEFT JOIN backup_sets bs ON bt.backup_set_id = bs.id
+                WHERE bt.id = $1
                 """,
                 task_id
             )
@@ -549,29 +591,62 @@ async def get_backup_task(task_id: int, http_request: Request):
                 compression_ratio = 0.0
 
             status_value = _normalize_status_value(row["status"])
-
-            # 构建阶段信息
-            # 预分组完成状态由预分组任务在完成时更新description字段来标记，不需要查询数据库
             scan_status = row.get("scan_status")
-            stage_info = _build_stage_info(
-                row.get("description"),
-                scan_status,
-                status_value,
-                row.get("operation_stage"),  # 优先使用数据库中的 operation_stage 字段
-                None  # current_compression_progress
-            )
-            # 对于运行中的任务，尝试获取 current_compression_progress
+
+            # 对于运行中的任务，同时获取 current_compression_progress 和 prefetch_done
             current_compression_progress = None
+            prefetch_done = False
+            single_compression_completed = None
             if status_value and status_value.lower() == 'running':
                 try:
                     from web.api.backup.utils import get_system_instance
                     system = get_system_instance(http_request)
                     if system and system.backup_engine:
+                        # 获取 current_compression_progress
                         task_status = await system.backup_engine.get_task_status(row["id"])
                         if task_status and 'current_compression_progress' in task_status:
                             current_compression_progress = task_status['current_compression_progress']
+                        # 获取 compression_completed（从 task_status）
+                        if task_status and 'compression_completed' in task_status:
+                            single_compression_completed = task_status.get('compression_completed')
+                        # 获取 prefetch_done
+                        cw = getattr(system.backup_engine, '_current_compression_worker', None)
+                        if cw and hasattr(cw, 'file_group_prefetcher') and cw.file_group_prefetcher:
+                            fp = cw.file_group_prefetcher
+                            prefetch_loop_count = getattr(fp, 'prefetch_loop_count', 0) or 0
+                            prefetcher_running = getattr(fp, '_running', True)
+                            prefetch_done = prefetch_loop_count > 0 and not prefetcher_running
+                        # 获取 compression_completed（从 compression_worker.backup_task）
+                        if cw and hasattr(cw, 'backup_task') and single_compression_completed is None:
+                            single_compression_completed = getattr(cw.backup_task, 'compression_completed', None)
                 except Exception as e:
                     logger.debug(f"获取任务压缩进度失败: {str(e)}")
+
+            # 检查 final 目录是否有待写入磁带的文件（用于 copy 步骤状态判断）
+            final_dir_has_files = None
+            if status_value and status_value.lower() == 'running':
+                try:
+                    from web.api.backup.utils import get_system_instance
+                    system = get_system_instance(http_request)
+                    if system and system.backup_engine:
+                        if hasattr(system.backup_engine, 'final_dir_monitor') and system.backup_engine.final_dir_monitor:
+                            _set_id = row.get("backup_set_str_id")
+                            if _set_id:
+                                final_dir_has_files = not system.backup_engine.final_dir_monitor.is_final_dir_empty(_set_id)
+                except Exception:
+                    pass
+
+            # 构建阶段信息
+            stage_info = _build_stage_info(
+                row.get("description"),
+                scan_status,
+                status_value,
+                row.get("operation_stage"),  # 优先使用数据库中的 operation_stage 字段
+                current_compression_progress,
+                final_dir_has_files,  # 传入 final 目录状态
+                prefetch_done,  # 传入预取器是否完成
+                single_compression_completed  # 传入压缩是否完成
+            )
 
             return {
                 "task_id": row["id"],
