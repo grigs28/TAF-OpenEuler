@@ -1,0 +1,34 @@
+[Unit]
+Description=TAF Enterprise Tape Backup System
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=grigs
+Group=grigs
+WorkingDirectory=/mnt/SSD/webapp/TAF
+Environment=PATH=/opt/conda3/envs/taf/bin:/opt/conda3/condabin:/usr/local/bin:/usr/bin:/bin
+Environment=CONDA_DEFAULT_ENV=taf
+ExecStart=/opt/conda3/envs/taf/bin/python main.py
+ExecStop=/bin/kill -SIGINT $MAINPID
+
+# 优雅关闭：发送SIGINT后等待进程自行清理（最多120秒）
+TimeoutStopSec=120
+KillMode=mixed
+KillSignal=SIGINT
+
+# 失败后自动重启
+Restart=on-failure
+RestartSec=30
+
+# 日志输出到 journalctl
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=taf
+
+# 资源限制
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

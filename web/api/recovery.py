@@ -183,16 +183,7 @@ async def eject_tape_stream(request: Request):
     engine = _get_engine(request)
 
     async def _stream():
-        # 步骤1：卸载（流式）
-        try:
-            async for event in engine.unmount_tape_streaming():
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'log', 'message': f'卸载异常: {str(e)}'}, ensure_ascii=False)}\n\n"
-
-        yield f"data: {json.dumps({'type': 'step_done', 'step': 0}, ensure_ascii=False)}\n\n"
-
-        # 步骤2：弹出（流式）
+        # eject_tape_streaming() 内部已包含卸载步骤，直接调用即可
         try:
             async for event in engine.eject_tape_streaming():
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
@@ -237,6 +228,21 @@ async def get_archive_contents(set_id: str, archive: str, request: Request):
     """获取单个归档文件的内部文件列表"""
     engine = _get_engine(request)
     return await engine.list_archive_contents(set_id, archive)
+
+
+@router.get("/backup-sets/{set_id}/search-files-stream")
+async def search_files_stream(set_id: str, q: str, request: Request):
+    """在备份集所有归档中搜索文件名（SSE 流式，逐个归档检索）"""
+    engine = _get_engine(request)
+
+    async def _stream():
+        try:
+            async for event in engine.search_files_streaming(set_id, q):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
 
 
 @router.post("/restore")

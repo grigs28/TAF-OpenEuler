@@ -607,7 +607,6 @@ class BackupActionHandler(ActionHandler):
                     error_msg = getattr(backup_task, 'error_message', '备份任务执行失败（未知错误）')
                     # 先更新 backup_tasks 表状态为 FAILED，避免任务卡片一直显示"运行中"
                     try:
-                        from utils.scheduler.db_utils import get_opengauss_connection
                         from datetime import datetime as _dt
                         async with get_opengauss_connection() as _conn:
                             await _conn.execute(

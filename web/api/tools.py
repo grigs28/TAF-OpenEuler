@@ -186,26 +186,27 @@ async def rewind_tape():
 
 @router.post("/linux/eject")
 async def eject_tape(request: Request):
-    """弹出磁带"""
+    """弹出磁带（先卸载 LTFS，再弹出）"""
     try:
-        operator = get_tape_operator()
-        # 使用 mt eject 命令
         settings = get_settings()
+        mount_point = getattr(settings, 'LTFS_MOUNT_POINT', '/mnt/ltfs')
+
+        # 步骤1：先卸载 LTFS（如果已挂载）
+        if os.path.ismount(mount_point):
+            from utils.ltfs_ops import safe_unmount_ltfs
+            unmount_success, unmount_msg = await safe_unmount_ltfs(
+                mount_point=mount_point,
+                tape_device=None,
+                wait_ltfs=True,
+            )
+            if not unmount_success:
+                logger.warning(f"弹出前卸载失败: {unmount_msg}，继续尝试弹出")
+            await asyncio.sleep(2)
+
+        # 步骤2：弹出磁带
+        from utils.ltfs_ops import eject_tape as do_eject
         device = getattr(settings, 'TAPE_DEVICE_PATH', '/dev/nst0')
-
-        result = subprocess.run(
-            ['mt', '-f', device, 'eject'],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            timeout=120,
-            text=False
-        )
-
-        stdout = result.stdout.decode('utf-8', errors='ignore') if result.stdout else ""
-        stderr = result.stderr.decode('utf-8', errors='ignore') if result.stderr else ""
-
-        success = result.returncode == 0
+        success, msg = await do_eject(device)
 
         # 发送钉钉通知（走 notify 统一出口）
         try:
@@ -217,18 +218,16 @@ async def eject_tape(request: Request):
                                  f"设备 {device} 磁带已成功弹出")
                 else:
                     await notify(system.dingtalk_notifier, "磁带弹出失败",
-                                 f"设备 {device} 弹出失败\n错误: {stderr or '未知'}")
+                                 f"设备 {device} 弹出失败\n错误: {msg}")
         except Exception as notify_err:
             logger.warning(f"发送钉钉通知失败: {notify_err}")
 
         return {
             "success": success,
-            "stdout": stdout,
-            "stderr": stderr,
-            "returncode": result.returncode
+            "stdout": msg if success else "",
+            "stderr": msg if not success else "",
+            "returncode": 0 if success else 1
         }
-    except subprocess.TimeoutExpired:
-        return {"success": False, "stderr": "命令超时", "returncode": -1}
     except Exception as e:
         logger.error(f"弹出磁带失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -461,62 +460,30 @@ async def mount_ltfs(request: LtfsMountRequest):
 async def unmount_ltfs(request: LtfsUnmountRequest):
     """卸载 LTFS 文件系统"""
     try:
-        # 尝试使用 fusermount（FUSE）
-        fusermount_path = shutil.which('fusermount')
+        from utils.ltfs_ops import safe_unmount_ltfs
 
-        if fusermount_path:
-            cmd = [fusermount_path, '-u', request.mount_point]
-        else:
-            # 使用 umount
-            cmd = ['umount', request.mount_point]
+        settings = get_settings()
+        tape_device = getattr(settings, 'TAPE_DEVICE_PATH', '/dev/nst0') if request.eject_after else None
 
-        logger.info(f"执行命令: {' '.join(cmd)}")
-
-        result = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            stdin=subprocess.DEVNULL,
-            timeout=60,
-            text=False
+        success, msg = await safe_unmount_ltfs(
+            mount_point=request.mount_point,
+            tape_device=tape_device,
         )
-
-        stdout = result.stdout.decode('utf-8', errors='ignore') if result.stdout else ""
-        stderr = result.stderr.decode('utf-8', errors='ignore') if result.stderr else ""
-
-        success = result.returncode == 0
-
-        # 如果卸载成功且需要弹出
-        if success and request.eject_after:
-            settings = get_settings()
-            device = getattr(settings, 'TAPE_DEVICE_PATH', '/dev/nst0')
-            eject_result = subprocess.run(
-                ['mt', '-f', device, 'eject'],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                stdin=subprocess.DEVNULL,
-                timeout=120,
-                text=False
-            )
-            if eject_result.returncode != 0:
-                stderr += f"\n弹出磁带失败: {eject_result.stderr.decode('utf-8', errors='ignore')}"
 
         # 记录日志
         await log_tool_operation(
             OperationType.TAPE_UNMOUNT, "LTFS卸载",
             success,
             {"mount_point": request.mount_point, "eject_after": request.eject_after},
-            stderr if not success else None
+            msg if not success else None
         )
 
         return {
             "success": success,
-            "stdout": stdout,
-            "stderr": stderr,
-            "returncode": result.returncode
+            "stdout": msg,
+            "stderr": "" if success else msg,
+            "returncode": 0 if success else 1
         }
-    except subprocess.TimeoutExpired:
-        return {"success": False, "stderr": "卸载超时", "returncode": -1}
     except Exception as e:
         logger.error(f"LTFS 卸载失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

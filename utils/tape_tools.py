@@ -415,43 +415,18 @@ class TapeToolsManager:
             }
 
     async def unmount_ltfs(self, mount_point: str = None) -> Dict[str, Any]:
-        """卸载 LTFS 文件系统"""
+        """卸载 LTFS 文件系统（使用标准工具函数）"""
+        from utils.ltfs_ops import safe_unmount_ltfs
+
         mount_point = mount_point or self.ltfs_mount_point
         logger.info(f"卸载 LTFS: {mount_point}")
 
-        try:
-            process = await asyncio.create_subprocess_exec(
-                'fusermount', '-u', mount_point,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
-
-            if process.returncode == 0:
-                return {
-                    "success": True,
-                    "message": "LTFS 卸载成功"
-                }
-        except FileNotFoundError:
-            pass
-
-        try:
-            process = await asyncio.create_subprocess_exec(
-                'umount', mount_point,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            stdout, stderr = await process.communicate()
-
-            return {
-                "success": process.returncode == 0,
-                "stderr": stderr.decode('utf-8', errors='ignore') if process.returncode != 0 else None
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "stderr": str(e)
-            }
+        success, msg = await safe_unmount_ltfs(
+            mount_point=mount_point,
+            tape_device=None,  # tape_tools 不负责弹出
+            wait_ltfs=False,   # 工具场景不等LTFS进程
+        )
+        return {"success": success, "message": msg}
 
     # ===== 设备扫描 =====
     async def list_drives_ltfs(self) -> Dict[str, Any]:

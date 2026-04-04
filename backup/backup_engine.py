@@ -52,6 +52,31 @@ from backup.compression_worker import CompressionWorker
 logger = logging.getLogger(__name__)
 
 
+def kill_zstd_processes():
+    """强制终止所有 zstd 压缩进程
+
+    在系统关闭时调用，避免压缩进程继续占用资源。
+    """
+    try:
+        import subprocess
+        result = subprocess.run(['pkill', '-9', '-f', 'zstd'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            logger.info("[关闭] 已终止所有 zstd 进程")
+        else:
+            logger.debug("[关闭] 没有运行中的 zstd 进程")
+    except FileNotFoundError:
+        # pkill 不存在，尝试 killall
+        try:
+            import subprocess
+            result = subprocess.run(['killall', '-9', 'zstd'], capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                logger.info("[关闭] 已终止所有 zstd 进程 (killall)")
+        except Exception:
+            pass
+    except Exception as e:
+        logger.warning(f"[关闭] 终止 zstd 进程失败: {e}")
+
+
 # 向后兼容：保留 normalize_volume_label 和 extract_label_year_month 的导出
 # 实际实现已移到 backup.utils 模块，这里直接使用导入的函数
 
@@ -149,15 +174,109 @@ class BackupEngine:
             raise
     
     async def shutdown(self):
-        """关闭备份引擎，停止Final目录监控器"""
+        """关闭备份引擎
+
+        关闭策略（不等压缩完成，保护磁带）：
+        1. kill zstd 进程（立即停止压缩）
+        2. 停压缩线程（不等，直接取消）
+        3. 等当前磁带写入完成（最多等5分钟，保护磁带数据完整性）
+        4. 清理 final 目录（删除未写入磁带的文件，保留正在写入的）
+        5. 标记任务为中断状态
+        6. sync + 卸载LTFS
+        7. 卸载SMB
+        """
         try:
+            # 1. 立即终止所有 zstd 压缩进程
+            logger.info("[关闭] 1/7 终止zstd压缩进程...")
+            kill_zstd_processes()
+
+            # 2. 停止压缩工作线程（不等，直接取消）
+            if self._current_compression_worker:
+                try:
+                    logger.info("[关闭] 2/7 停止压缩工作线程（不等待完成）...")
+                    self._current_compression_worker._running = False
+                    # 取消所有正在运行的压缩任务
+                    if self._current_compression_worker.running_compression_futures:
+                        for task in self._current_compression_worker.running_compression_futures:
+                            if not task.done():
+                                task.cancel()
+                        self._current_compression_worker.running_compression_futures.clear()
+                    # 取消主压缩循环
+                    if (self._current_compression_worker.compression_task
+                            and not self._current_compression_worker.compression_task.done()):
+                        self._current_compression_worker.compression_task.cancel()
+                    self._current_compression_worker = None
+                    logger.info("[关闭] 压缩工作线程已停止")
+                except Exception as e:
+                    logger.warning(f"[关闭] 停止压缩工作线程失败: {str(e)}")
+
+            # 3. 等待当前磁带写入完成（保护正在写入的文件，最多等5分钟）
             if self.final_dir_monitor:
-                logger.info("正在停止Final目录监控器...")
-                self.final_dir_monitor.stop()
-                self.final_dir_monitor = None
-                logger.info("文件移动队列管理器已停止")
+                current_file = self.final_dir_monitor._current_tape_file
+                if current_file:
+                    logger.info(f"[关闭] 3/7 等待磁带写入完成: {current_file}（最多5分钟）...")
+                else:
+                    logger.info("[关闭] 3/7 无正在写入的磁带文件，跳过等待")
+
+                # 停止监控线程（等待当前写入完成）
+                try:
+                    self.final_dir_monitor.stop()
+                    logger.info("[关闭] Final目录监控器已停止")
+                except Exception as e:
+                    logger.warning(f"[关闭] 停止Final目录监控器失败: {str(e)}")
+
+            # 4. 清理 final 目录（删除残留的压缩文件）
+            if self.final_dir_monitor:
+                try:
+                    logger.info("[关闭] 4/7 清理final目录...")
+                    deleted = self.final_dir_monitor.cleanup_final_dir()
+                    logger.info(f"[关闭] final目录已清理，删除 {deleted} 个残留文件")
+                except Exception as e:
+                    logger.warning(f"[关闭] 清理final目录失败: {str(e)}")
+
+            # 5. 标记任务为中断状态
+            logger.info("[关闭] 5/7 标记任务为中断状态...")
+            if self._current_task:
+                logger.info(f"[关闭] 取消当前备份任务 (id={self._current_task.id})")
+                self._current_task = None
+            try:
+                from utils.scheduler.db_utils import get_opengauss_connection
+                from datetime import datetime as _dt
+                async with get_opengauss_connection() as conn:
+                    result = await conn.execute(
+                        """
+                        UPDATE backup_tasks
+                        SET status = 'cancelled'::backuptaskstatus,
+                            error_message = '系统关闭，任务被中断',
+                            updated_at = $1
+                        WHERE status IN ('running'::backuptaskstatus, 'pending'::backuptaskstatus)
+                        """,
+                        _dt.now()
+                    )
+                    logger.info(f"[关闭] 已将运行中/等待中的备份任务标记为中断: {result}")
+            except Exception as e:
+                logger.warning(f"[关闭] 标记中断任务失败: {str(e)}")
+
+            # 6. sync + 卸载LTFS（sync确保数据写入磁带）
+            logger.info("[关闭] 6/7 卸载LTFS...")
+            if self.tape_handler and self.tape_handler._ltfs_mounted:
+                try:
+                    await self.tape_handler.unmount_ltfs()
+                    logger.info("[关闭] LTFS已安全卸载")
+                except Exception as e:
+                    logger.warning(f"[关闭] 卸载LTFS失败: {str(e)}")
+
+            # 7. 卸载SMB挂载
+            logger.info("[关闭] 7/7 卸载SMB挂载...")
+            try:
+                from utils.network_path import cleanup_mounts
+                cleanup_mounts()
+                logger.info("[关闭] SMB挂载已卸载")
+            except Exception as e:
+                logger.warning(f"[关闭] 卸载SMB挂载失败: {str(e)}")
+
         except Exception as e:
-            logger.error(f"关闭备份引擎时发生错误: {str(e)}")
+            logger.error(f"[关闭] 关闭备份引擎时发生错误: {str(e)}")
 
     async def _send_tape_error_notification(self, error_msg: str):
         """发送磁带错误通知"""
@@ -1196,10 +1315,27 @@ class BackupEngine:
                 used_bytes=0
             )
             backup_set = None
-            if getattr(backup_task, 'backup_set_id', None):
-                backup_set = await self.backup_db.get_backup_set_by_set_id(backup_task.backup_set_id)
+            stored_backup_set_id = getattr(backup_task, 'backup_set_id', None)
+            if stored_backup_set_id:
+                # backup_task.backup_set_id 可能是字符串 set_id（内存赋值）或整数 id（数据库加载）
+                # 优先按字符串 set_id 查询，如果失败则按整数 id 查询
+                backup_set = await self.backup_db.get_backup_set_by_set_id(stored_backup_set_id)
+                if not backup_set and isinstance(stored_backup_set_id, int):
+                    # 整数：按 backup_sets.id 查询
+                    backup_set = await self.backup_db.get_backup_set_by_pk_id(stored_backup_set_id)
                 if backup_set:
-                    logger.info(f"检测到已有备份集 {backup_task.backup_set_id}，继续使用")
+                    logger.info(f"检测到已有备份集 {backup_set.set_id}，继续使用")
+                    # 确保 backup_tasks.backup_set_id 已写入数据库（续写场景）
+                    try:
+                        from utils.scheduler.db_utils import get_opengauss_connection
+                        async with get_opengauss_connection() as _conn:
+                            await _conn.execute(
+                                "UPDATE backup_tasks SET backup_set_id = $1 WHERE id = $2 AND (backup_set_id IS NULL OR backup_set_id != $1)",
+                                backup_set.id,
+                                backup_task.id
+                            )
+                    except Exception as _e:
+                        logger.debug(f"续写场景：确保 backup_tasks.backup_set_id 已写入数据库: {_e}")
             if not backup_set:
                 backup_set = await self.backup_db.create_backup_set(backup_task, tape_obj)
 

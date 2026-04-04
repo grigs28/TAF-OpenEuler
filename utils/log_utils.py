@@ -49,6 +49,8 @@ async def log_operation(
     **kwargs
 ) -> bool:
     """记录操作日志"""
+    if _shutting_down:
+        return False
     try:
         operation_time = datetime.now()
 

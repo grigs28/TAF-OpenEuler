@@ -941,6 +941,20 @@ class BackupDB:
             backup_task.backup_set_id = set_id
             logger.info(f"创建备份集: {set_id}")
 
+            # 将 backup_set_id 写回 backup_tasks 表（使用独立连接，避免原连接已关闭）
+            if backup_set and backup_task.id:
+                try:
+                    from utils.scheduler.db_utils import get_opengauss_connection as _get_conn
+                    async with _get_conn() as _uconn:
+                        await _uconn.execute(
+                            "UPDATE backup_tasks SET backup_set_id = $1 WHERE id = $2",
+                            backup_set.id,
+                            backup_task.id
+                        )
+                    logger.debug(f"已更新 backup_tasks.backup_set_id = {backup_set.id} (task_id={backup_task.id})")
+                except Exception as update_err:
+                    logger.warning(f"更新 backup_tasks.backup_set_id 失败: {update_err}")
+
             return backup_set
 
         except Exception as e:
@@ -1540,6 +1554,52 @@ class BackupDB:
         backup_set_obj.created_at = row['created_at']
         backup_set_obj.updated_at = row['updated_at']
         return backup_set_obj
+
+    async def get_backup_set_by_pk_id(self, pk_id: int) -> Optional[BackupSet]:
+        """根据 backup_sets.id（整数主键）获取备份集"""
+        from utils.scheduler.db_utils import get_opengauss_connection
+        if not pk_id:
+            return None
+
+        async with get_opengauss_connection() as conn:
+            try:
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, set_id, set_name, backup_group, status, backup_task_id,
+                           tape_id, backup_type, backup_time, total_files, total_bytes,
+                           compressed_bytes, compression_ratio, chunk_count, created_at,
+                           updated_at
+                    FROM backup_sets
+                    WHERE id = $1
+                    """,
+                    pk_id
+                )
+            except Exception as e:
+                logger.error(f"get_backup_set_by_pk_id: 查询失败: {str(e)}", exc_info=True)
+                raise
+
+            if not row:
+                return None
+
+            backup_set_obj = BackupSet(
+                set_id=row['set_id'],
+                set_name=row['set_name'],
+                backup_group=row['backup_group'],
+                backup_type=_parse_enum(BackupTaskType, row.get('backup_type'), BackupTaskType.FULL),
+                backup_time=row['backup_time'],
+                total_files=row['total_files'],
+                total_bytes=row['total_bytes'],
+                compressed_bytes=row['compressed_bytes'],
+                compression_ratio=row['compression_ratio'],
+                chunk_count=row['chunk_count']
+            )
+            backup_set_obj.id = row['id']
+            backup_set_obj.status = _parse_enum(BackupSetStatus, row.get('status'), BackupSetStatus.ACTIVE)
+            backup_set_obj.backup_task_id = row['backup_task_id']
+            backup_set_obj.tape_id = row['tape_id']
+            backup_set_obj.created_at = row['created_at']
+            backup_set_obj.updated_at = row['updated_at']
+            return backup_set_obj
 
     async def clear_backup_files_for_set(self, backup_set_db_id: int):
         """清理指定备份集的文件记录"""

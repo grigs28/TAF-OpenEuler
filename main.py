@@ -359,25 +359,22 @@ class TapeBackupSystem:
             if shutdown_event:
                 async def shutdown_monitor():
                     await shutdown_event.wait()
-                    logger.warning("收到关闭信号（Ctrl+C），准备强制关闭服务...")
-                    
-                    # 再次确保解锁（防止信号处理器中的解锁失败）
+                    logger.warning("收到关闭信号（Ctrl+C），开始优雅关闭...")
+
+                    # 先执行 shutdown（包含 kill_zstd、停压缩、等磁带、sync、卸载LTFS 等关键步骤）
                     try:
-                        from utils.scheduler.task_storage import release_all_active_locks
-                        await release_all_active_locks()
-                    except Exception as unlock_error:
-                        logger.warning(f"关闭时解锁失败: {str(unlock_error)}")
-                    
-                    # 取消所有正在运行的任务
+                        await self.shutdown()
+                    except Exception as shutdown_err:
+                        logger.warning(f"关闭过程中出错: {shutdown_err}")
+
+                    # shutdown 完成后再取消残留任务
                     try:
                         loop = asyncio.get_running_loop()
                         for task in asyncio.all_tasks(loop):
                             if task != asyncio.current_task():
                                 task.cancel()
-                                logger.info(f"已取消任务: {task.get_name()}")
-                    except Exception as cancel_error:
-                        logger.warning(f"取消任务时出错: {str(cancel_error)}")
-                    await self.shutdown()
+                    except Exception:
+                        pass
                 
                 asyncio.create_task(shutdown_monitor())
 
@@ -394,28 +391,35 @@ class TapeBackupSystem:
             logger = logging.getLogger(__name__)
             logger.info("正在关闭系统服务...")
 
-            # 设置正在关闭标志，防止系统日志记录
+            # 1. 设置正在关闭标志，防止系统日志记录
             try:
                 from utils.log_utils import set_shutting_down
                 set_shutting_down()
             except Exception as e:
                 logger.warning(f"设置关闭标志失败: {str(e)}")
 
-            # 释放所有活跃的任务锁
+            # 2. 释放所有活跃的任务锁
             try:
                 from utils.scheduler.task_storage import release_all_active_locks
                 await release_all_active_locks()
             except Exception as e:
                 logger.warning(f"释放任务锁失败: {str(e)}")
 
-            # 停止计划任务
+            # 3. 停止计划任务调度器（不再接受新任务）
             if self.scheduler:
                 try:
                     await self.scheduler.stop()
                 except Exception:
                     pass
 
-            # 关闭openGauss连接池
+            # 4. 关闭备份引擎（停压缩线程 → 停FinalDirMonitor → 卸载LTFS → 卸载SMB）
+            if self.backup_engine:
+                try:
+                    await self.backup_engine.shutdown()
+                except Exception as e:
+                    logger.warning(f"关闭备份引擎失败: {str(e)}")
+
+            # 5. 关闭openGauss连接池（在备份引擎之后，确保所有数据库操作完成）
             try:
                 from utils.scheduler.db_utils import close_opengauss_pool
                 if self.opengauss_monitor:
@@ -424,21 +428,14 @@ class TapeBackupSystem:
             except Exception as e:
                 logger.warning(f"关闭数据库连接池失败: {str(e)}")
 
-            # 关闭备份引擎（停止文件移动队列管理器）
-            if self.backup_engine:
-                try:
-                    await self.backup_engine.shutdown()
-                except Exception as e:
-                    logger.warning(f"关闭备份引擎失败: {str(e)}")
-
-            # 关闭数据库连接（后关闭数据库管理器）
+            # 6. 关闭数据库连接（最后关闭数据库管理器）
             if self.db_manager:
                 try:
                     await self.db_manager.close()
                 except Exception:
                     pass
 
-            # 发送关闭通知
+            # 7. 发送关闭通知
             if self.dingtalk_notifier:
                 try:
                     await self.dingtalk_notifier.send_system_notification(
@@ -450,7 +447,7 @@ class TapeBackupSystem:
 
             logger.info("系统服务已关闭")
 
-            # 记录系统关闭到数据库
+            # 8. 记录系统关闭到数据库（可能因连接池已关而失败，忽略错误）
             try:
                 from utils.log_utils import log_system
                 from models.system_log import LogLevel, LogCategory
@@ -464,7 +461,7 @@ class TapeBackupSystem:
             except Exception:
                 pass
 
-            # 清理单实例锁文件
+            # 9. 清理单实例锁文件
             _remove_lock()
 
         except Exception as e:
@@ -477,64 +474,12 @@ def setup_signal_handlers(system):
     shutdown_event = asyncio.Event()
     
     def signal_handler(signum, frame):
-        """处理信号"""
+        """处理信号：设置关闭事件，由 shutdown_monitor 协调优雅关闭"""
         logger = logging.getLogger(__name__)
-        logger.warning(f"收到信号 {signum}（Ctrl+C），准备强制关闭系统...")
-        
-        # 立即解锁所有任务锁（在关闭前）
-        try:
-            loop = asyncio.get_running_loop()
-            # 创建一个任务来立即解锁
-            async def unlock_immediately():
-                try:
-                    from utils.scheduler.task_storage import release_all_active_locks
-                    logger.info("正在立即释放所有任务锁...")
-                    await release_all_active_locks()
-                    logger.info("所有任务锁已释放")
-                except Exception as unlock_error:
-                    logger.warning(f"立即解锁失败: {str(unlock_error)}")
-            
-            # 在事件循环中调度解锁任务（使用 call_soon_threadsafe 或直接创建任务）
-            try:
-                # 尝试创建任务（如果事件循环正在运行）
-                asyncio.create_task(unlock_immediately())
-            except RuntimeError:
-                # 如果无法创建任务，使用 call_soon_threadsafe
-                loop.call_soon_threadsafe(lambda: asyncio.create_task(unlock_immediately()))
-        except RuntimeError:
-            # 如果没有运行中的事件循环，尝试直接调用（同步方式）
-            try:
-                # 创建一个新的事件循环来执行解锁
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                try:
-                    from utils.scheduler.task_storage import release_all_active_locks
-                    logger.info("正在立即释放所有任务锁...")
-                    new_loop.run_until_complete(release_all_active_locks())
-                    logger.info("所有任务锁已释放")
-                finally:
-                    new_loop.close()
-            except Exception as unlock_error:
-                logger.warning(f"立即解锁失败: {str(unlock_error)}")
-        except Exception as e:
-            logger.warning(f"解锁时出错: {str(e)}")
-        
-        # 设置关闭事件
+        logger.warning(f"收到信号 {signum}（Ctrl+C），准备关闭系统...")
+
+        # 设置关闭事件，触发 system.start() 中的 shutdown_monitor
         shutdown_event.set()
-        
-        # 在 Windows 上，尝试取消所有正在运行的任务
-        try:
-            loop = asyncio.get_running_loop()
-            # 取消所有正在运行的任务（除了当前任务）
-            for task in asyncio.all_tasks(loop):
-                if task != asyncio.current_task():
-                    task.cancel()
-                    logger.info(f"已取消任务: {task.get_name()}")
-        except RuntimeError:
-            # 如果没有运行中的事件循环，忽略
-            pass
-        except Exception as e:
-            logger.warning(f"取消任务时出错: {str(e)}")
     
     # 注册信号处理器
     signal.signal(signal.SIGINT, signal_handler)
@@ -573,6 +518,14 @@ async def main():
         logger = logging.getLogger(__name__)
         logger.info("收到中断信号（KeyboardInterrupt），正在关闭系统...")
         await system.shutdown()
+
+    except asyncio.CancelledError:
+        logger = logging.getLogger(__name__)
+        logger.info("收到取消信号，正在关闭系统...")
+        try:
+            await system.shutdown()
+        except Exception:
+            pass
 
     except Exception as e:
         logger = logging.getLogger(__name__)

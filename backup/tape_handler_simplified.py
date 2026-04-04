@@ -130,10 +130,9 @@ class TapeHandlerSimplified:
         logger.info(f"[LTFS] 设备: {tape_device}, 卷标: {volume_name}")
         
         try:
+            from utils.ltfs_ops import cleanup_mount
             mount_point = self._get_ltfs_mount_point()
-            if mount_point.is_mount():
-                await self._run_command(['fusermount', '-u', str(mount_point)], timeout=30, check=False)
-                await asyncio.sleep(2)
+            await cleanup_mount(mount_point)
             await self._run_command(['pkill', '-9', '-f', 'ltfs'], timeout=10, check=False)
             await asyncio.sleep(2)
         except Exception as cleanup_err:
@@ -198,8 +197,8 @@ class TapeHandlerSimplified:
         
         if mount_point.is_mount():
             try:
-                await self._run_command(['fusermount', '-u', str(mount_point)], timeout=30, check=False)
-                await asyncio.sleep(2)
+                from utils.ltfs_ops import cleanup_mount
+                await cleanup_mount(mount_point)
             except Exception:
                 pass
         
@@ -434,19 +433,19 @@ class TapeHandlerSimplified:
             return True
         
         try:
-            await self._run_command(['fusermount', '-u', str(mount_point)], timeout=60, check=False)
+            from utils.ltfs_ops import safe_unmount_ltfs
+            tape_device = self._get_ltfs_device()
+            success, msg = await safe_unmount_ltfs(
+                mount_point=mount_point,
+                tape_device=tape_device,
+                wait_ltfs=True,
+            )
             self._ltfs_mounted = False
             self._ltfs_process = None
-            logger.info("[LTFS] 已卸载")
-            return True
+            return success
         except Exception as e:
             logger.warning(f"[LTFS] 卸载失败: {e}")
-            try:
-                await self._run_command(['umount', '-l', str(mount_point)], timeout=30, check=False)
-                self._ltfs_mounted = False
-                return True
-            except:
-                return False
+            return False
 
     async def write_to_tape_drive(self, source_path: str, backup_set: BackupSet, group_idx: int) -> Optional[str]:
         """将文件写入磁带"""

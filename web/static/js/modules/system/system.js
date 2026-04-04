@@ -5,6 +5,34 @@ document.addEventListener('DOMContentLoaded', function() {
     if (dbType) {
         loadDatabaseConfig();
         loadSystemConfig();
+        loadServiceStatus();
+
+        // systemd 服务开关
+        const enableSystemService = document.getElementById('enableSystemService');
+        if (enableSystemService) {
+            enableSystemService.addEventListener('change', async function() {
+                const action = this.checked ? 'install' : 'uninstall';
+                const actionName = this.checked ? '安装' : '卸载';
+                if (!confirm('确定要' + actionName + '系统服务吗？')) {
+                    this.checked = !this.checked;
+                    return;
+                }
+                try {
+                    const r = await fetch('/api/system/service/' + action, { method: 'POST' });
+                    const data = await r.json();
+                    if (data.success) {
+                        document.getElementById('serviceStatusHint').textContent = data.message;
+                    } else {
+                        alert(data.detail || data.message || actionName + '失败');
+                        this.checked = !this.checked;
+                    }
+                } catch (e) {
+                    alert(actionName + '失败: ' + e.message);
+                    this.checked = !this.checked;
+                }
+                setTimeout(loadServiceStatus, 2000);
+            });
+        }
         
         // 测试数据库连接
         const testDbConnectionBtn = document.getElementById('testDbConnectionBtn');
@@ -786,9 +814,47 @@ document.addEventListener('DOMContentLoaded', function() {
     if (restartSystemBtn) {
         restartSystemBtn.addEventListener('click', function() {
             if (confirm('确定要重启系统吗？这将中断所有正在运行的任务。')) {
-                alert('重启功能暂未实现，请手动重启服务。');
+                // 尝试通过 systemd 重启，失败则提示手动操作
+                fetch('/api/system/service/restart', { method: 'POST' })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.success) {
+                            alert('重启命令已发送，请等待服务重新启动...');
+                            setTimeout(function() { window.location.reload(); }, 10000);
+                        } else {
+                            alert('systemd 重启失败: ' + (data.detail || data.message || '') + '\n请手动执行: sudo systemctl restart taf');
+                        }
+                    })
+                    .catch(function() {
+                        alert('无法通过服务管理器重启。\n请手动执行: sudo systemctl restart taf\n或: Ctrl+C 后重新运行 python main.py');
+                    });
             }
         });
     }
 });
+
+// 加载 systemd 服务状态
+function loadServiceStatus() {
+    const checkbox = document.getElementById('enableSystemService');
+    const hint = document.getElementById('serviceStatusHint');
+    if (!checkbox || !hint) return;
+
+    fetch('/api/system/service/status')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            checkbox.checked = data.is_installed;
+            if (data.is_systemd) {
+                hint.textContent = 'systemd 服务模式运行中';
+            } else if (data.is_installed) {
+                hint.textContent = '已注册，当前手动运行';
+            } else if (data.is_root) {
+                hint.textContent = '未安装（以 root 运行，可开启）';
+            } else {
+                hint.textContent = '未安装（需要 root 权限，请手动执行: sudo cp deploy/taf.service /etc/systemd/system/）';
+            }
+        })
+        .catch(function() {
+            hint.textContent = '检测失败';
+        });
+}
 

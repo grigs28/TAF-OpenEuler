@@ -235,11 +235,8 @@ class TapeHandler:
                 # 挂载点损坏（Transport endpoint is not connected）
                 logger.warning(f"[LTFS] 挂载点损坏，尝试卸载: {e}")
                 try:
-                    result = await self._run_command(['fusermount', '-u', str(mount_point)], timeout=30, check=False)
-                    await asyncio.sleep(2)
-                    if mount_point.is_mount():
-                        result = await self._run_command(['umount', '-l', str(mount_point)], timeout=30, check=False)
-                        await asyncio.sleep(2)
+                    from utils.ltfs_ops import cleanup_mount
+                    await cleanup_mount(mount_point)
                     logger.info(f"[LTFS] 已卸载损坏的挂载点")
                 except Exception as unmount_err:
                     logger.warning(f"[LTFS] 卸载失败: {unmount_err}")
@@ -352,12 +349,9 @@ class TapeHandler:
 
         # ===== 格式化前清理：终止可能占用设备的 LTFS 进程 =====
         try:
-            # 卸载挂载点
+            from utils.ltfs_ops import cleanup_mount
             mount_point = self._get_ltfs_mount_point()
-            if mount_point.is_mount():
-                logger.info(f"[LTFS] 格式化前卸载挂载点: {mount_point}")
-                result = await self._run_command(['fusermount', '-u', str(mount_point)], timeout=30, check=False)
-                await asyncio.sleep(2)
+            await cleanup_mount(mount_point)
 
             # 终止所有 LTFS 进程
             result = await self._run_command(['pkill', '-9', '-f', 'ltfs'], timeout=10, check=False)
@@ -574,8 +568,12 @@ class TapeHandler:
         await _send_failure_notification(error_msg)
         return False, error_msg
 
-    async def unmount_ltfs(self) -> bool:
-        """卸载 LTFS"""
+    async def unmount_ltfs(self, eject: bool = False) -> bool:
+        """安全卸载 LTFS（委托给标准工具函数）
+
+        Args:
+            eject: 是否在卸载后弹出磁带（默认 False，仅卸载不弹出）
+        """
         if not self._ltfs_mounted:
             return True
 
@@ -584,10 +582,16 @@ class TapeHandler:
             return True
 
         try:
-            result = await self._run_command(['fusermount', '-u', str(mount_point)], timeout=60, check=False)
+            from utils.ltfs_ops import safe_unmount_ltfs
+            tape_device = self._get_tape_device() if eject else None
+            success, msg = await safe_unmount_ltfs(
+                mount_point=mount_point,
+                tape_device=tape_device,
+                wait_ltfs=True,
+            )
             self._ltfs_mounted = False
             self._ltfs_process = None
-            logger.info("[LTFS] 已卸载")
+
             # 记录卸载到数据库
             try:
                 from utils.log_utils import log_operation
@@ -596,22 +600,16 @@ class TapeHandler:
                     operation_type=OperationType.TAPE_UNMOUNT,
                     resource_type="tape",
                     operation_name="磁带卸载",
-                    operation_description="LTFS已卸载",
+                    operation_description=msg,
                     category="tape",
-                    success=True,
+                    success=success,
                 ))
             except Exception:
                 pass
-            return True
+            return success
         except Exception as e:
             logger.warning(f"[LTFS] 卸载失败: {e}")
-            # 尝试强制卸载
-            try:
-                await self._run_command(['umount', '-l', str(mount_point)], timeout=30, check=False)
-                self._ltfs_mounted = False
-                return True
-            except:
-                return False
+            return False
 
     async def mount_with_retry(self, backup_task=None, max_retries: int = 3, retry_interval: int = 30) -> Tuple[bool, str]:
         """尝试挂载磁带，重试多次

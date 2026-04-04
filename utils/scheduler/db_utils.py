@@ -471,13 +471,16 @@ async def _acquire_connection():
 async def get_opengauss_connection():
     """
     获取openGauss数据库连接（使用连接池，自动管理，兼容 asyncpg 和 psycopg3）
-    
+
     用法：
     async with get_opengauss_connection() as conn:
         # 使用 conn
         rows = await conn.fetch("SELECT * FROM backup_tasks")
         # 连接自动释放回连接池
     """
+    # 快速检查：如果连接池已关闭，直接返回
+    if _opengauss_pool is None:
+        raise RuntimeError("数据库连接池未初始化或已关闭")
     pool, conn = await _acquire_connection()
     
     # 检测是 psycopg3 还是 asyncpg

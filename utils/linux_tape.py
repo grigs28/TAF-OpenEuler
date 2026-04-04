@@ -264,17 +264,21 @@ class LinuxTapeOperator:
         # ===== 格式化前清理：卸载 LTFS 并终止进程 =====
         ltfs_mount_point = getattr(self.settings, 'LTFS_MOUNT_POINT', '/mnt/ltfs')
         try:
-            # 检查并卸载 LTFS 挂载点
             if os.path.ismount(ltfs_mount_point):
                 report_progress(f"卸载 LTFS 挂载点: {ltfs_mount_point}")
-                subprocess.run(['fusermount', '-u', ltfs_mount_point],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
-                time.sleep(2)
-                # 如果还在挂载，强制卸载
-                if os.path.ismount(ltfs_mount_point):
-                    subprocess.run(['umount', '-l', ltfs_mount_point],
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
-                    time.sleep(2)
+                from utils.ltfs_ops import cleanup_mount
+                import asyncio
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        # 已经在事件循环中，用同步方式
+                        subprocess.run(['fusermount', '-u', ltfs_mount_point],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+                        time.sleep(2)
+                    else:
+                        loop.run_until_complete(cleanup_mount(ltfs_mount_point))
+                except RuntimeError:
+                    asyncio.run(cleanup_mount(ltfs_mount_point))
                 report_progress("LTFS 挂载点已卸载")
         except Exception as e:
             logger.warning(f"[同步] 卸载 LTFS 挂载点失败: {e}")

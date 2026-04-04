@@ -50,6 +50,7 @@ class FinalDirMonitor:
         self._lock = threading.Lock()
         self._scan_interval = 10  # 扫描间隔（秒）
         self._processed_files: Set[str] = set()  # 已处理文件的集合（完整路径）
+        self._current_tape_file: Optional[str] = None  # 当前正在写入磁带的文件路径
         
     def start(self):
         """启动监控线程"""
@@ -68,16 +69,17 @@ class FinalDirMonitor:
             logger.info("[Final监控] Final目录监控线程已启动（10秒轮询扫描）")
     
     def stop(self):
-        """停止监控线程"""
+        """停止监控线程（等待当前文件写入磁带完成）"""
         with self._lock:
             if not self._running:
                 return
-            
+
             self._running = False
             if self._worker_thread and self._worker_thread.is_alive():
-                self._worker_thread.join(timeout=30)
+                logger.info("[Final监控] 等待当前磁带写入完成...")
+                self._worker_thread.join(timeout=300)  # 5分钟，等待大文件写入完成
                 if self._worker_thread.is_alive():
-                    logger.warning("[Final监控] 监控线程未能及时停止")
+                    logger.warning("[Final监控] 监控线程未能在5分钟内停止")
                 else:
                     logger.info("[Final监控] Final目录监控线程已停止")
     
@@ -283,7 +285,9 @@ class FinalDirMonitor:
                                 continue
                             
                             # 移动文件到磁带
+                            self._current_tape_file = str(file_path)
                             success = self._move_file_to_tape(file_path)
+                            self._current_tape_file = None
                             
                             # 标记为已处理（无论成功与否，避免重复处理）
                             self._processed_files.add(file_key)
@@ -342,6 +346,69 @@ class FinalDirMonitor:
     def get_processed_count(self) -> int:
         """获取已处理文件数量"""
         return len(self._processed_files)
+
+    def cleanup_final_dir(self) -> int:
+        """清理final目录中所有文件（保留当前正在写入磁带的文件）
+
+        用于系统关闭时，删除未写入磁带的压缩文件，避免下次启动时重复处理。
+        正在写入磁带的文件会被保留（由 FinalDirMonitor.stop() 等待其完成）。
+
+        Returns:
+            int: 删除的文件数量
+        """
+        deleted_count = 0
+        try:
+            final_dir = self._get_final_dir()
+            if not final_dir.exists():
+                return 0
+
+            current_file = self._current_tape_file
+            if current_file:
+                logger.info(f"[Final监控] 清理final目录，保留当前写入文件: {current_file}")
+            else:
+                logger.info("[Final监控] 清理final目录（无正在写入的文件）")
+
+            for root, dirs, files in os.walk(final_dir):
+                for file_name in files:
+                    file_path = Path(root) / file_name
+                    if not file_path.is_file():
+                        continue
+
+                    # 保留正在写入磁带的文件
+                    if current_file and str(file_path) == current_file:
+                        logger.info(f"[Final监控] 保留正在写入的文件: {file_path}")
+                        continue
+
+                    try:
+                        file_path.unlink(missing_ok=True)
+                        deleted_count += 1
+                        logger.info(f"[Final监控] 已删除: {file_path}")
+                    except Exception as e:
+                        logger.warning(f"[Final监控] 删除文件失败 {file_path}: {e}")
+
+            # 清理空的 set_id 子目录
+            if deleted_count > 0:
+                for item in final_dir.iterdir():
+                    if item.is_dir():
+                        try:
+                            # 检查目录是否为空
+                            has_files = any(
+                                Path(root) / f
+                                for root, _, files in os.walk(item)
+                                for f in files
+                                if (Path(root) / f).is_file()
+                            )
+                            if not has_files:
+                                shutil.rmtree(item, ignore_errors=True)
+                                logger.info(f"[Final监控] 已清理空目录: {item}")
+                        except Exception:
+                            pass
+
+            logger.info(f"[Final监控] final目录清理完成，共删除 {deleted_count} 个文件")
+        except Exception as e:
+            logger.error(f"[Final监控] 清理final目录失败: {e}")
+
+        return deleted_count
 
     def cleanup_set_id_dir(self, set_id: str) -> bool:
         """清理指定set_id的空目录（任务完成后调用）

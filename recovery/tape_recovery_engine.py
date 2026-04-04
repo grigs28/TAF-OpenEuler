@@ -197,51 +197,38 @@ class TapeRecoveryEngine:
                 # tape_tools.unmount_ltfs() 返回 dict
                 return {"success": result.get("success", False), "message": result.get("message", result.get("stderr", "卸载完成"))}
             else:
-                # 回退：直接使用系统命令卸载
-                proc = await asyncio.create_subprocess_exec(
-                    'umount', str(mount_point),
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
+                # 使用标准卸载函数
+                from utils.ltfs_ops import safe_unmount_ltfs
+                success, msg = await safe_unmount_ltfs(
+                    mount_point=mount_point,
+                    tape_device=None,
+                    wait_ltfs=True,
                 )
-                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
-                if proc.returncode == 0:
-                    return {"success": True, "message": "卸载成功"}
-                else:
-                    err = stderr.decode('utf-8', errors='replace').strip()
-                    return {"success": False, "message": f"卸载失败: {err}"}
+                return {"success": success, "message": msg}
         except Exception as e:
             logger.error(f"[磁带恢复] 卸载失败: {e}")
             return {"success": False, "message": str(e)}
 
     async def eject_tape(self) -> Dict[str, Any]:
-        """弹出磁带（仅执行弹出操作，卸载需在前一步完成）"""
+        """弹出磁带（先卸载 LTFS，再弹出）"""
         try:
-            if self.tape_handler and self.tape_handler.tape_manager:
-                tape_ops = self.tape_handler.tape_manager.tape_operations
-                if tape_ops and hasattr(tape_ops, 'eject'):
-                    await tape_ops.eject()
-                    await self._send_eject_notification(tape_id="unknown", success=True)
-                    return {"success": True, "message": "磁带已弹出"}
+            # 步骤1：先卸载 LTFS
+            mount_point = self._get_mount_point()
+            if mount_point.exists() and mount_point.is_mount():
+                unmount_result = await self.unmount_tape()
+                if not unmount_result.get("success"):
+                    logger.warning(f"[磁带恢复] 弹出前卸载失败: {unmount_result.get('message')}，继续尝试弹出")
 
-            # 回退：使用 mt 命令弹出
-            device = getattr(self.settings, 'TAPE_DRIVE_LETTER', '/dev/nst0')
-            proc = await asyncio.create_subprocess_exec(
-                'mt', '-f', device, 'eject',
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=360)
-            if proc.returncode == 0:
-                await self._send_eject_notification(tape_id="unknown", success=True)
-                return {"success": True, "message": "磁带已弹出"}
-            else:
-                err = stderr.decode('utf-8', errors='replace').strip()
-                await self._send_eject_notification(tape_id="unknown", success=False, error=err)
-                return {"success": False, "message": f"弹出失败: {err}"}
-        except asyncio.TimeoutError:
-            await self._send_eject_notification(tape_id="unknown", success=False, error="弹出超时（120秒）")
-            return {"success": False, "message": "弹出超时（120秒）"}
+            # 步骤2：弹出磁带
+            from utils.ltfs_ops import eject_tape as std_eject
+            device = None
+            if self.tape_handler:
+                device = self.tape_handler._get_tape_device()
+            success, msg = await std_eject(tape_device=device, timeout=360)
+            await self._send_eject_notification(tape_id="unknown", success=success, error=msg if not success else None)
+            return {"success": success, "message": msg}
         except Exception as e:
+            logger.error(f"[磁带恢复] 弹出磁带失败: {e}")
             await self._send_eject_notification(tape_id="unknown", success=False, error=str(e))
             return {"success": False, "message": str(e)}
 
@@ -410,7 +397,7 @@ class TapeRecoveryEngine:
         yield {"type": "result", "success": False, "message": f"挂载失败（{max_retries}次尝试均失败）"}
 
     async def unmount_tape_streaming(self) -> AsyncGenerator[Dict, None]:
-        """卸载 LTFS，实时输出命令日志（async generator）"""
+        """卸载 LTFS，实时输出命令日志（使用标准卸载工具）"""
         mount_point = self._get_mount_point()
 
         if not mount_point.exists() or not mount_point.is_mount():
@@ -420,114 +407,51 @@ class TapeRecoveryEngine:
 
         yield {"type": "log", "message": f"卸载挂载点: {mount_point}"}
 
-        # 尝试 fusermount
-        cmd = ['fusermount', '-u', str(mount_point)]
-        yield {"type": "log", "message": f"$ {' '.join(cmd)}"}
-
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+            from utils.ltfs_ops import safe_unmount_ltfs
+            success, msg = await safe_unmount_ltfs(
+                mount_point=mount_point,
+                tape_device=None,
+                wait_ltfs=True,
             )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
-
-            if stdout:
-                for line in stdout.decode('utf-8', errors='replace').splitlines():
-                    if line.strip():
-                        yield {"type": "log", "message": line.strip()}
-            if stderr:
-                for line in stderr.decode('utf-8', errors='replace').splitlines():
-                    if line.strip():
-                        yield {"type": "log", "message": line.strip()}
-
-            if process.returncode == 0:
-                self._update_tape_handler_state(mounted=False)
-                yield {"type": "log", "message": "卸载成功"}
-                yield {"type": "result", "success": True, "message": "卸载成功"}
-                return
-            else:
-                yield {"type": "log", "message": f"fusermount 返回码: {process.returncode}，尝试 umount..."}
-        except asyncio.TimeoutError:
-            yield {"type": "log", "message": "fusermount 超时，尝试 umount..."}
-        except FileNotFoundError:
-            yield {"type": "log", "message": "fusermount 不可用，尝试 umount..."}
-
-        # 回退到 umount
-        cmd = ['umount', str(mount_point)]
-        yield {"type": "log", "message": f"$ {' '.join(cmd)}"}
-
-        try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60)
-
-            if stdout:
-                for line in stdout.decode('utf-8', errors='replace').splitlines():
-                    if line.strip():
-                        yield {"type": "log", "message": line.strip()}
-            if stderr:
-                for line in stderr.decode('utf-8', errors='replace').splitlines():
-                    if line.strip():
-                        yield {"type": "log", "message": line.strip()}
-
-            if process.returncode == 0:
-                self._update_tape_handler_state(mounted=False)
-                yield {"type": "log", "message": "卸载成功"}
-                yield {"type": "result", "success": True, "message": "卸载成功"}
-            else:
-                err = stderr.decode('utf-8', errors='replace').strip() if stderr else f"返回码: {process.returncode}"
-                yield {"type": "log", "message": f"卸载失败: {err}"}
-                yield {"type": "result", "success": False, "message": f"卸载失败: {err}"}
+            self._update_tape_handler_state(mounted=False)
+            yield {"type": "log", "message": msg}
+            yield {"type": "result", "success": success, "message": msg}
         except Exception as e:
             yield {"type": "log", "message": f"卸载异常: {e}"}
             yield {"type": "result", "success": False, "message": str(e)}
 
     async def eject_tape_streaming(self) -> AsyncGenerator[Dict, None]:
-        """弹出磁带，实时输出命令日志（async generator）"""
-        # mt eject 需要磁带设备(/dev/nst0)，不是 SCSI generic 设备(/dev/sg2)
+        """弹出磁带，实时输出命令日志（先卸载再弹出）"""
+        # 步骤1：先卸载 LTFS
+        mount_point = self._get_mount_point()
+        if mount_point.exists() and mount_point.is_mount():
+            yield {"type": "log", "message": "弹出前先卸载 LTFS..."}
+            async for msg in self.unmount_tape_streaming():
+                yield msg
+                if msg.get("type") == "result" and not msg.get("success"):
+                    yield {"type": "log", "message": f"卸载失败，继续尝试弹出: {msg.get('message')}"}
+                    break
+            await asyncio.sleep(2)
+
+        # 步骤2：弹出磁带（使用标准弹出函数）
         if self.tape_handler:
             device = self.tape_handler._get_tape_device()
         else:
             device = getattr(self.settings, 'TAPE_DEVICE_PATH', '/dev/nst0')
         yield {"type": "log", "message": f"弹出磁带（设备: {device}）"}
 
-        cmd = ['mt', '-f', device, 'eject']
-        yield {"type": "log", "message": f"$ {' '.join(cmd)}"}
-
         try:
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
-
-            if stdout:
-                for line in stdout.decode('utf-8', errors='replace').splitlines():
-                    if line.strip():
-                        yield {"type": "log", "message": line.strip()}
-            if stderr:
-                for line in stderr.decode('utf-8', errors='replace').splitlines():
-                    if line.strip():
-                        yield {"type": "log", "message": line.strip()}
-
-            if process.returncode == 0:
+            from utils.ltfs_ops import eject_tape
+            success, msg = await eject_tape(device)
+            if success:
                 await self._send_eject_notification(tape_id="unknown", success=True)
                 yield {"type": "log", "message": "磁带已弹出"}
                 yield {"type": "result", "success": True, "message": "磁带已弹出"}
             else:
-                err = stderr.decode('utf-8', errors='replace').strip() if stderr else f"返回码: {process.returncode}"
-                await self._send_eject_notification(tape_id="unknown", success=False, error=err)
-                yield {"type": "log", "message": f"弹出失败: {err}"}
-                yield {"type": "result", "success": False, "message": f"弹出失败: {err}"}
-        except asyncio.TimeoutError:
-            await self._send_eject_notification(tape_id="unknown", success=False, error="弹出超时（120秒）")
-            yield {"type": "log", "message": "弹出超时（120秒）"}
-            yield {"type": "result", "success": False, "message": "弹出超时（120秒）"}
+                await self._send_eject_notification(tape_id="unknown", success=False, error=msg)
+                yield {"type": "log", "message": f"弹出失败: {msg}"}
+                yield {"type": "result", "success": False, "message": f"弹出失败: {msg}"}
         except Exception as e:
             await self._send_eject_notification(tape_id="unknown", success=False, error=str(e))
             yield {"type": "log", "message": f"弹出异常: {e}"}
@@ -882,6 +806,72 @@ class TapeRecoveryEngine:
             logger.error(f"[磁带恢复] 列出备份集内容失败: {e}")
             return {"set_id": set_id, "entries": [], "total_entries": 0,
                     "total_files": 0, "total_dirs": 0, "archives": [], "error": str(e)}
+
+    async def search_files_streaming(self, set_id: str, keyword: str) -> AsyncGenerator[Dict, None]:
+        """在备份集所有归档中搜索文件名，逐个归档流式返回"""
+        set_dir = self._get_mount_point() / set_id
+        keyword_lower = keyword.lower().strip()
+
+        if not keyword_lower:
+            yield {"type": "error", "message": "搜索关键词不能为空"}
+            return
+
+        if not set_dir.exists():
+            yield {"type": "error", "message": f"备份集目录不存在: {set_id}"}
+            return
+
+        archive_files = sorted([f for f in set_dir.iterdir() if f.is_file()])
+        total = len(archive_files)
+        yield {"type": "start", "total_archives": total, "keyword": keyword}
+
+        total_matches = 0
+        archives_with_matches = 0
+
+        for idx, archive_file in enumerate(archive_files):
+            # 先发送进度事件（前端可立即显示"正在检索 X/Y"）
+            yield {
+                "type": "progress",
+                "archive": archive_file.name,
+                "current": idx + 1,
+                "total": total,
+            }
+            try:
+                entries = await asyncio.to_thread(self._list_archive_sync, archive_file)
+                matches = []
+                for e in entries:
+                    name = e.get("name", "")
+                    if keyword_lower in name.lower():
+                        matches.append(e)
+
+                yield {
+                    "type": "archive_result",
+                    "archive": archive_file.name,
+                    "total_files": len([e for e in entries if not e.get("is_dir")]),
+                    "match_count": len(matches),
+                    "matches": matches,
+                }
+
+                if matches:
+                    archives_with_matches += 1
+                    total_matches += len(matches)
+            except Exception as e:
+                yield {
+                    "type": "archive_result",
+                    "archive": archive_file.name,
+                    "total_files": 0,
+                    "match_count": 0,
+                    "matches": [],
+                    "error": str(e),
+                }
+
+        yield {
+            "type": "done",
+            "total_archives": total,
+            "archives_with_matches": archives_with_matches,
+            "total_matches": total_matches,
+            "keyword": keyword,
+            "message": f"搜索完成: 在 {total} 个归档中找到 {total_matches} 个匹配文件（{archives_with_matches} 个归档含匹配）",
+        }
 
     def _list_archive_sync(self, archive_path: Path) -> List[Dict]:
         """同步列出归档内容（在线程池中运行）"""
