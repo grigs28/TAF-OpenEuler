@@ -224,10 +224,76 @@ async def get_backup_set_contents(set_id: str, request: Request):
 
 
 @router.get("/backup-sets/{set_id}/archive-contents")
-async def get_archive_contents(set_id: str, archive: str, request: Request):
-    """获取单个归档文件的内部文件列表"""
+async def get_archive_contents(set_id: str, archive: str, request: Request,
+                                          page: int = 1, page_size: int = 100,
+                                          use_cache: bool = True):
+    """获取单个归档文件的内部文件列表（支持分页和数据库缓存）"""
     engine = _get_engine(request)
-    return await engine.list_archive_contents(set_id, archive)
+
+    if use_cache:
+        # 尝试从数据库缓存读取
+        tape_status = await engine.get_tape_status()
+        tape_label = tape_status.get("tape_label") or "unknown"
+
+        cache_info = await engine.check_archive_cache(tape_label, set_id, archive)
+        if cache_info and cache_info.get("cached"):
+            return await engine.get_cached_archive_contents(
+                tape_label, set_id, archive, page, page_size,
+            )
+
+    # 缓存未命中或 use_cache=False，走原始解压
+    result = await engine.list_archive_contents(set_id, archive)
+
+    # 如果缓存未命中，异步保存到数据库
+    if use_cache and result.get("entries"):
+        tape_status_info = await engine.get_tape_status()
+        tape_label = tape_status_info.get("tape_label") or "unknown"
+        archive_path = engine._get_mount_point() / set_id / archive
+        archive_size = archive_path.stat().st_size if archive_path.exists() else None
+        asyncio.create_task(
+            engine.save_archive_contents(
+                tape_label, set_id, archive,
+                result["entries"], archive_size,
+            )
+        )
+
+    return result
+
+
+@router.get("/backup-sets/{set_id}/expand-all-stream")
+async def expand_all_stream(set_id: str, tape_label: str, request: Request):
+    """展开全部归档文件列表（SSE 流式，优先查数据库缓存）
+
+    查询参数:
+        tape_label: 磁带卷标（用作缓存键）
+    """
+    engine = _get_engine(request)
+
+    # 如果没有传 tape_label，尝试获取
+    if not tape_label:
+        status = await engine.get_tape_status()
+        tape_label = status.get("tape_label") or "unknown"
+
+    async def _stream():
+        try:
+            async for event in engine.expand_all_cached(tape_label, set_id):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(_stream(), media_type="text/event-stream")
+
+
+@router.get("/backup-sets/{set_id}/cached-archive-contents")
+async def get_cached_archive_contents(set_id: str, archive: str, request: Request,
+                                             page: int = 1, page_size: int = 100):
+    """从数据库缓存读取归档文件列表（分页）"""
+    engine = _get_engine(request)
+    tape_status = await engine.get_tape_status()
+    tape_label = tape_status.get("tape_label") or "unknown"
+    return await engine.get_cached_archive_contents(
+        tape_label, set_id, archive, page, page_size,
+    )
 
 
 @router.get("/backup-sets/{set_id}/search-files-stream")

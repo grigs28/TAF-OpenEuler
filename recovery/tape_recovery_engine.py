@@ -1555,6 +1555,243 @@ class TapeRecoveryEngine:
         return True
 
     # ================================================================
+    # 归档内容缓存（数据库）
+    # ================================================================
+
+    async def check_archive_cache(self, tape_label: str, set_id: str, archive_filename: str) -> Optional[Dict]:
+        """检查归档内容是否已缓存到数据库
+
+        Returns:
+            None = 未缓存
+            {"cached": True, "count": N} = 已缓存N条记录
+        """
+        try:
+            from utils.scheduler.db_utils import get_opengauss_connection
+            async with get_opengauss_connection() as conn:
+                # 先查归档文件大小（用于校验缓存是否过期）
+                archive_path = self._get_mount_point() / set_id / archive_filename
+                archive_size = archive_path.stat().st_size if archive_path.exists() else None
+
+                row = await conn.fetchrow(
+                    "SELECT COUNT(*) as cnt FROM tape_archive_contents "
+                    "WHERE tape_label = $1 AND set_id = $2 AND archive_filename = $3",
+                    tape_label, set_id, archive_filename,
+                )
+                if row and row['cnt'] > 0:
+                    count = row['cnt']
+                    # 如果有 archive_size，校验大小是否匹配
+                    if archive_size is not None:
+                        size_row = await conn.fetchrow(
+                            "SELECT archive_size FROM tape_archive_contents "
+                            "WHERE tape_label = $1 AND set_id = $2 AND archive_filename = $3 LIMIT 1",
+                            tape_label, set_id, archive_filename,
+                        )
+                        cached_size = size_row['archive_size'] if size_row else None
+                        if cached_size is not None and cached_size != archive_size:
+                            # 大小不匹配，缓存过期，删除旧缓存
+                            logger.info(f"[缓存] 归档 {archive_filename} 大小变化({cached_size} -> {archive_size})，重新缓存")
+                            await conn.execute(
+                                "DELETE FROM tape_archive_contents "
+                                "WHERE tape_label = $1 AND set_id = $2 AND archive_filename = $3",
+                                tape_label, set_id, archive_filename,
+                            )
+                            return None
+                    return {"cached": True, "count": count}
+                return None
+        except Exception as e:
+            logger.warning(f"[缓存] 查询失败: {e}")
+            return None
+
+    async def save_archive_contents(self, tape_label: str, set_id: str,
+                                      archive_filename: str, entries: List[Dict],
+                                      archive_size: int = None) -> bool:
+        """将归档文件列表保存到数据库缓存
+
+        Args:
+            entries: _list_archive_sync() 返回的条目列表
+        """
+        try:
+            from utils.scheduler.db_utils import get_opengauss_connection
+            async with get_opengauss_connection() as conn:
+                # 准备批量数据
+                batch_data = []
+                for entry in entries:
+                    # 跳过目录
+                    if entry.get("is_dir"):
+                        continue
+                    batch_data.append((
+                        tape_label,
+                        set_id,
+                        archive_filename,
+                        archive_size,
+                        entry.get("name", ""),
+                        entry.get("size", 0),
+                        entry.get("is_dir", False),
+                        entry.get("modified_time"),
+                    ))
+
+                if not batch_data:
+                    return True
+
+                # 分批写入（每批5000条）
+                batch_size = 5000
+                for i in range(0, len(batch_data), batch_size):
+                    chunk = batch_data[i:i + batch_size]
+                    await conn.executemany(
+                        "INSERT INTO tape_archive_contents "
+                        "(tape_label, set_id, archive_filename, archive_size, "
+                        "file_path, file_size, is_dir, modified_time) "
+                        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+                        chunk,
+                    )
+
+                logger.info(f"[缓存] 保存 {archive_filename}: {len(batch_data)} 条文件记录")
+                return True
+        except Exception as e:
+            logger.error(f"[缓存] 保存失败: {e}", exc_info=True)
+            return False
+
+    async def get_cached_archive_contents(self, tape_label: str, set_id: str,
+                                              archive_filename: str,
+                                              page: int = 1, page_size: int = 100) -> Dict:
+        """从数据库缓存读取归档文件列表（分页）
+
+        Returns:
+            {"entries": [...], "total": N, "page": P, "page_size": PS}
+        """
+        try:
+            from utils.scheduler.db_utils import get_opengauss_connection
+            async with get_opengauss_connection() as conn:
+                # 总数
+                total_row = await conn.fetchrow(
+                    "SELECT COUNT(*) as total FROM tape_archive_contents "
+                    "WHERE tape_label = $1 AND set_id = $2 AND archive_filename = $3 "
+                    "AND is_dir = FALSE",
+                    tape_label, set_id, archive_filename,
+                )
+                total = total_row['total'] if total_row else 0
+
+                offset = (page - 1) * page_size
+                rows = await conn.fetch(
+                    "SELECT file_path, file_size, is_dir, modified_time "
+                    "FROM tape_archive_contents "
+                    "WHERE tape_label = $1 AND set_id = $2 AND archive_filename = $3 "
+                    "AND is_dir = FALSE "
+                    "ORDER BY file_path "
+                    "LIMIT $4 OFFSET $5",
+                    tape_label, set_id, archive_filename, page_size, offset,
+                )
+
+                entries = []
+                for row in rows:
+                    entries.append({
+                        "name": row['file_path'],
+                        "size": row['file_size'],
+                        "is_dir": row['is_dir'],
+                        "modified_time": row['modified_time'].isoformat() if row['modified_time'] else None,
+                    })
+
+                return {
+                    "entries": entries,
+                    "total": total,
+                    "page": page,
+                    "page_size": page_size,
+                }
+        except Exception as e:
+            logger.error(f"[缓存] 读取失败: {e}", exc_info=True)
+            return {"entries": [], "total": 0, "page": page, "page_size": page_size}
+
+    async def expand_all_cached(self, tape_label: str, set_id: str) -> AsyncGenerator[Dict, None]:
+        """展开全部归档，优先查数据库缓存，未缓存的才走解压
+
+        Yields streaming events for real-time progress.
+        """
+        set_dir = self._get_mount_point() / set_id
+        if not set_dir.exists():
+            yield {"type": "error", "message": f"备份集目录不存在: {set_id}"}
+            return
+
+        archive_files = sorted([f for f in set_dir.iterdir() if f.is_file()])
+        total = len(archive_files)
+        yield {"type": "start", "total_archives": total, "tape_label": tape_label, "set_id": set_id}
+
+        total_cached = 0
+        total_decoded = 0
+        total_files = 0
+
+        for idx, archive_file in enumerate(archive_files):
+            # 检查缓存
+            cache_status = await self.check_archive_cache(
+                tape_label, set_id, archive_file.name
+            )
+
+            if cache_status and cache_status.get("cached"):
+                total_cached += 1
+                # 从缓存读取总数（不需要逐条传输给前端，只传统计）
+                cached_count = cache_status["count"]
+                total_files += cached_count
+                yield {
+                    "type": "archive_done",
+                    "archive": archive_file.name,
+                    "total_files": cached_count,
+                    "source": "cache",
+                    "current": idx + 1,
+                    "total": total,
+                }
+            else:
+                # 未缓存，走解压
+                total_decoded += 1
+                yield {
+                    "type": "archive_progress",
+                    "archive": archive_file.name,
+                    "current": idx + 1,
+                    "total": total,
+                }
+
+                try:
+                    entries = await asyncio.to_thread(
+                        self._list_archive_sync, archive_file
+                    )
+                    file_count = len([e for e in entries if not e.get("is_dir")])
+                    total_files += file_count
+
+                    # 保存到数据库
+                    await self.save_archive_contents(
+                        tape_label, set_id, archive_file.name,
+                        entries, archive_file.stat().st_size,
+                    )
+
+                    yield {
+                        "type": "archive_done",
+                        "archive": archive_file.name,
+                        "total_files": file_count,
+                        "source": "decompress",
+                        "current": idx + 1,
+                        "total": total,
+                    }
+                except Exception as e:
+                    logger.error(f"[缓存] 解压归档 {archive_file.name} 失败: {e}")
+                    yield {
+                        "type": "archive_done",
+                        "archive": archive_file.name,
+                        "total_files": 0,
+                        "source": "error",
+                        "error": str(e),
+                        "current": idx + 1,
+                        "total": total,
+                    }
+
+        yield {
+            "type": "done",
+            "total_archives": total,
+            "total_files": total_files,
+            "total_cached": total_cached,
+            "total_decoded": total_decoded,
+            "message": f"展开完成: {total} 个归档, {total_files} 个文件 "
+                         f"(缓存命中 {total_cached}, 新解压 {total_decoded})",
+        }
+
+    # ================================================================
     # 工具方法
     # ================================================================
 
