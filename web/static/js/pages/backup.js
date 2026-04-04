@@ -526,15 +526,25 @@
         const operationStage = (task.operation_stage || '').toLowerCase();
         const isCompleted = (task.status || '').toLowerCase() === 'completed';
         
-        // 定义阶段顺序和映射
-        const stageOrder = ['scan', 'prefetch', 'compress', 'copy', 'finalize'];
-        const stageLabels = {
-            'scan': '扫描文件',
-            'prefetch': '预分组',
-            'compress': '压缩/打包',
-            'copy': '写入磁带',
-            'finalize': '完成'
-        };
+        // 定义阶段顺序和映射（根据任务类型选择不同阶段流）
+        const isVerify = (task.task_type || '').toLowerCase() === 'verify';
+        let stageOrder, stageLabels;
+        if (isVerify) {
+            stageOrder = ['scan', 'verify'];
+            stageLabels = {
+                'scan': '扫描文件',
+                'verify': '验证完整性'
+            };
+        } else {
+            stageOrder = ['scan', 'prefetch', 'compress', 'copy', 'finalize'];
+            stageLabels = {
+                'scan': '扫描文件',
+                'prefetch': '预分组',
+                'compress': '压缩/打包',
+                'copy': '写入磁带',
+                'finalize': '完成'
+            };
+        }
         
         // 构建阶段步骤，优先使用后端返回的 stage_steps（基于内存变量）
         let stageSteps = [];
@@ -784,10 +794,11 @@
         if (isRunning && progressInfo) {
             const progressSection = document.createElement('div');
             progressSection.className = 'mb-2';
-            
-            // 压缩阶段：始终显示"各任务"行
+            const isVerifyTask = (task.task_type || '').toLowerCase() === 'verify';
+
+            // 压缩阶段：始终显示"各任务"行（验证任务无压缩阶段）
             let batchProgressHtml = '';
-            if (task.operation_stage === 'compress') {
+            if (!isVerifyTask && task.operation_stage === 'compress') {
                 let taskProgressText = '';
                 let hasValidProgress = false;
                 
@@ -834,32 +845,65 @@
                 `;
             }
             
-            progressSection.innerHTML = `
-                ${batchProgressHtml}
-                <div class="d-flex justify-content-between align-items-center">
-                    <small class="text-muted">进度:</small>
-                    <small class="text-muted">${progressInfo.percent}%</small>
-                </div>
-                <div class="progress" style="height:6px;">
-                    <div class="progress-bar bg-primary" role="progressbar" style="width:${progressInfo.percent}%"></div>
-                </div>
-                <div class="d-flex justify-content-between">
-                    <small class="text-muted">文件进度:</small>
-                    <small class="text-muted">${progressInfo.processedFiles}/${progressInfo.totalFiles || progressInfo.processedFiles}</small>
-                </div>
-                <div class="d-flex justify-content-between">
-                    <small class="text-muted">已处理数据:</small>
-                    <small class="text-muted">${formatBytes(progressInfo.processedBytes)} / ${formatBytes(progressInfo.totalBytes || progressInfo.processedBytes)}</small>
-                </div>
-                <div class="d-flex justify-content-between">
-                    <small class="text-muted">压缩后大小:</small>
-                    <small class="text-muted">${formatBytes(progressInfo.compressedBytes)}</small>
-                </div>
-                <div class="d-flex justify-content-between">
-                    <small class="text-muted">压缩率:</small>
-                    <small class="text-muted">${formatCompressionRatio(progressInfo.compressionRatio)}</small>
-                </div>
-            `;
+            // 验证任务：只显示扫描/验证进度，不显示压缩相关字段
+            if (isVerifyTask) {
+                // 从 description 或 operation_status 解析通过/失败数
+                const descText = (task.description || '') + ' ' + (task.operation_status || '');
+                let verifyFailed = 0;
+                const failMatch = descText.match(/失败\s*(\d+)/);
+                if (failMatch) verifyFailed = parseInt(failMatch[1], 10);
+                const failedClass = verifyFailed > 0 ? 'text-danger fw-semibold' : 'text-muted';
+
+                progressSection.innerHTML = `
+                    ${batchProgressHtml}
+                    <div class="d-flex justify-content-between align-items-center">
+                        <small class="text-muted">进度:</small>
+                        <small class="text-muted">${progressInfo.percent}%</small>
+                    </div>
+                    <div class="progress" style="height:6px;">
+                        <div class="progress-bar bg-primary" role="progressbar" style="width:${progressInfo.percent}%"></div>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <small class="text-muted">已扫描文件:</small>
+                        <small class="text-muted">${progressInfo.totalFiles}</small>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <small class="text-muted">已抽样验证:</small>
+                        <small class="text-muted">${progressInfo.processedFiles}</small>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <small class="text-muted">失败数:</small>
+                        <small class="${failedClass}">${verifyFailed}</small>
+                    </div>
+                `;
+            } else {
+                progressSection.innerHTML = `
+                    ${batchProgressHtml}
+                    <div class="d-flex justify-content-between align-items-center">
+                        <small class="text-muted">进度:</small>
+                        <small class="text-muted">${progressInfo.percent}%</small>
+                    </div>
+                    <div class="progress" style="height:6px;">
+                        <div class="progress-bar bg-primary" role="progressbar" style="width:${progressInfo.percent}%"></div>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <small class="text-muted">文件进度:</small>
+                        <small class="text-muted">${progressInfo.processedFiles}/${progressInfo.totalFiles || progressInfo.processedFiles}</small>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <small class="text-muted">已处理数据:</small>
+                        <small class="text-muted">${formatBytes(progressInfo.processedBytes)} / ${formatBytes(progressInfo.totalBytes || progressInfo.processedBytes)}</small>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <small class="text-muted">压缩后大小:</small>
+                        <small class="text-muted">${formatBytes(progressInfo.compressedBytes)}</small>
+                    </div>
+                    <div class="d-flex justify-content-between">
+                        <small class="text-muted">压缩率:</small>
+                        <small class="text-muted">${formatCompressionRatio(progressInfo.compressionRatio)}</small>
+                    </div>
+                `;
+            }
             body.appendChild(progressSection);
         }
 
@@ -1129,8 +1173,12 @@
             incremental: '增量备份',
             differential: '差异备份',
             monthly_full: '月度备份',
+            verify: '验证任务',
         };
         const label = map[type] || type || 'unknown';
+        if (type === 'verify') {
+            return `<span class="badge bg-warning text-dark">${label}</span>`;
+        }
         return `<span class="badge bg-info">${label}</span>`;
     }
 

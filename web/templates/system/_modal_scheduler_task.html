@@ -27,14 +27,14 @@
                             <label for="taskName" class="form-label">任务名称 <span class="text-danger">*</span></label>
                             <input type="text" class="form-control bg-dark text-light" id="taskName" required>
                         </div>
-                        <div class="col-md-4 mb-3">
+                        <div class="col-md-4 mb-3 backup-only-field" id="backupTargetTypeContainer">
                             <label for="backupTargetType" class="form-label">备份目标</label>
                             <select class="form-select bg-dark text-light" id="backupTargetType">
                                 <option value="tape" selected>磁带机</option>
                                 <option value="storage">存储</option>
                             </select>
                         </div>
-                        <div class="col-md-4 mb-3" id="backupTaskTypeContainer">
+                        <div class="col-md-4 mb-3 backup-only-field" id="backupTaskTypeContainer">
                             <label for="backupTaskType" class="form-label">备份类型</label>
                             <select class="form-select bg-dark text-light" id="backupTaskType">
                                 <option value="full">完整备份</option>
@@ -63,9 +63,6 @@
                                 <option value="">请选择</option>
                                 <option value="backup">备份任务</option>
                                 <option value="recovery">恢复任务</option>
-                                <option value="cleanup">清理任务</option>
-                                <option value="health_check">健康检查</option>
-                                <option value="retention_check">保留期检查</option>
                                 <option value="verify">验证任务</option>
                                 <option value="custom">自定义任务</option>
                             </select>
@@ -249,13 +246,13 @@
                                 </div>
                             </div>
                             <div class="row">
-                                <div class="col-md-3 mb-3">
+                                <div class="col-md-3 mb-3 backup-only-field">
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" id="backupCompression" checked>
                                         <label class="form-check-label" for="backupCompression">启用压缩</label>
                                     </div>
                                 </div>
-                                <div class="col-md-3 mb-3">
+                                <div class="col-md-3 mb-3 backup-only-field">
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" id="backupEncryption">
                                         <label class="form-check-label" for="backupEncryption">启用加密</label>
@@ -286,26 +283,7 @@
                                 </div>
                             </div>
                         </div>
-                        
-                        <!-- 清理任务配置 -->
-                        <div id="cleanupActionConfig" class="action-config-panel" style="display: none;">
-                            <div class="mb-3">
-                                <label class="form-label">保留天数</label>
-                                <input type="number" class="form-control bg-dark text-light" id="cleanupRetentionDays" value="180" min="1">
-                                <small class="text-muted">超过此天数的备份将被清理</small>
-                            </div>
-                        </div>
-                        
-                        <!-- 健康检查配置 -->
-                        <div id="healthCheckActionConfig" class="action-config-panel" style="display: none;">
-                            <p class="text-muted">健康检查任务无需额外配置</p>
-                        </div>
-                        
-                        <!-- 保留期检查配置 -->
-                        <div id="retentionCheckActionConfig" class="action-config-panel" style="display: none;">
-                            <p class="text-muted">保留期检查任务无需额外配置</p>
-                        </div>
-                        
+
                         <!-- 自定义任务配置 -->
                         <div id="customActionConfig" class="action-config-panel" style="display: none;">
                             <div class="mb-3">

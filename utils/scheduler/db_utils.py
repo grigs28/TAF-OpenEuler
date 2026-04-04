@@ -478,7 +478,12 @@ async def get_opengauss_connection():
         rows = await conn.fetch("SELECT * FROM backup_tasks")
         # 连接自动释放回连接池
     """
-    # 快速检查：如果连接池已关闭，直接返回
+    # 快速检查：如果连接池未初始化，尝试惰性初始化
+    if _opengauss_pool is None:
+        try:
+            await get_opengauss_pool()
+        except Exception as e:
+            raise RuntimeError(f"数据库连接池初始化失败: {e}")
     if _opengauss_pool is None:
         raise RuntimeError("数据库连接池未初始化或已关闭")
     pool, conn = await _acquire_connection()

@@ -194,6 +194,10 @@
         </div>
     </div>
 
+    <!-- 步骤1-3 左侧内容 + 右侧操作日志 -->
+    <div class="row mb-3" id="stepsRow123">
+    <div class="col-lg-8">
+
     <!-- ====== 步骤1: 磁带检测 ====== -->
     <div class="step-panel visible" id="step1">
         <div class="service-card" style="padding: 1.2rem;">
@@ -217,35 +221,34 @@
             <div id="scanResult">
                 <div class="text-center text-muted py-3">点击"扫描磁带"发现备份集</div>
             </div>
-            <!-- 实时扫描进度日志 -->
-            <div id="scanProgressSection" style="display: none;">
-                <div id="scanProgressLog" style="max-height: 200px; overflow-y: auto; font-size: 0.78rem; font-family: monospace; background: rgba(0,0,0,0.4); border: 1px solid rgba(0,170,255,0.15); border-radius: 4px; padding: 8px; margin-top: 0.5rem;"></div>
-            </div>
         </div>
     </div>
 
     <!-- ====== 步骤3: 选择文件 ====== -->
     <div class="step-panel" id="step3">
-        <div class="row">
-            <div class="col-lg-8">
-                <div class="service-card" style="padding: 1rem;">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
+        <div class="service-card" style="padding: 1rem;">
+            <div class="d-flex justify-content-between align-items-center mb-2">
                         <h6 class="mb-0">
                             <i class="bi bi-folder2-open me-2"></i>归档内容
                             <small class="text-muted ms-2" id="contentInfo"></small>
                         </h6>
-                        <div class="d-flex gap-2" id="selectionBtns" style="display: none;">
-                            <button class="btn btn-outline-secondary btn-sm" id="selectAllBtn" title="全选">
-                                <i class="bi bi-check-all me-1"></i>全选
-                            </button>
-                            <button class="btn btn-outline-secondary btn-sm" id="deselectAllBtn" title="取消全选">
-                                <i class="bi bi-x-lg me-1"></i>取消
-                            </button>
-                            <button class="btn btn-outline-secondary btn-sm" id="expandAllBtn" title="展开全部">
-                                <i class="bi bi-arrows-expand me-1"></i>展开全部
-                            </button>
-                            <button class="btn btn-outline-secondary btn-sm" id="collapseAllBtn" title="折叠全部" style="display:none;">
-                                <i class="bi bi-arrows-collapse me-1"></i>折叠
+                        <div class="d-flex gap-2">
+                            <div class="d-flex gap-2" id="selectionBtns" style="display: none;">
+                                <button class="btn btn-outline-secondary btn-sm" id="selectAllBtn" title="全选">
+                                    <i class="bi bi-check-all me-1"></i>全选
+                                </button>
+                                <button class="btn btn-outline-secondary btn-sm" id="deselectAllBtn" title="取消全选">
+                                    <i class="bi bi-x-lg me-1"></i>取消
+                                </button>
+                                <button class="btn btn-outline-secondary btn-sm" id="expandAllBtn" title="展开全部">
+                                    <i class="bi bi-arrows-expand me-1"></i>展开全部
+                                </button>
+                                <button class="btn btn-outline-secondary btn-sm" id="collapseAllBtn" title="折叠全部" style="display:none;">
+                                    <i class="bi bi-arrows-collapse me-1"></i>折叠
+                                </button>
+                            </div>
+                            <button class="btn btn-outline-secondary btn-sm" id="goToRestoreBtn" disabled>
+                                <i class="bi bi-arrow-right me-1"></i>下一步：恢复配置
                             </button>
                         </div>
                     </div>
@@ -289,28 +292,7 @@
                             <button class="btn btn-outline-secondary btn-sm" id="pagerLast" title="末页">&raquo;</button>
                         </div>
                     </div>
-                    <div class="mt-3 text-end">
-                        <button class="btn btn-outline-secondary btn-sm" id="goToRestoreBtn" disabled>
-                            <i class="bi bi-arrow-right me-1"></i>下一步：恢复配置
-                        </button>
-                    </div>
                 </div>
-            </div>
-            <!-- 备份集列表 -->
-            <div class="col-lg-4">
-                <div class="service-card" style="padding: 1rem;">
-                    <h6 class="mb-2"><i class="bi bi-collection me-2"></i>备份集</h6>
-                    <div id="backupSetList">
-                        <div class="text-center text-muted py-3">扫描后显示备份集</div>
-                    </div>
-                    <!-- 扫描日志 -->
-                    <div id="scanLogSection" style="display: none;">
-                        <h6 class="mb-2 mt-3"><i class="bi bi-terminal me-2"></i>扫描日志</h6>
-                        <div id="scanLog" style="max-height: 300px; overflow-y: auto; font-size: 0.78rem; font-family: monospace; background: rgba(0,0,0,0.4); border: 1px solid rgba(0,170,255,0.15); border-radius: 4px; padding: 8px;"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
     </div>
 
     <!-- ====== 步骤4: 恢复执行 ====== -->
@@ -402,34 +384,31 @@
             <button class="btn btn-outline-secondary w-100 mb-3" id="startRestoreBtn" disabled>
                 <i class="bi bi-play-circle me-2"></i>开始恢复
             </button>
-
-            <!-- 进度条 -->
-            <div id="progressSection" style="display: none;">
-                <div class="d-flex justify-content-between mb-1" style="font-size: 0.85rem;">
-                    <span id="progressLabel">恢复进度</span>
-                    <span id="progressPercent">0%</span>
-                </div>
-                <div class="recovery-progress">
-                    <div class="recovery-progress-fill" id="progressFill" style="width: 0%"></div>
-                </div>
-                <div class="text-muted mt-1" style="font-size: 0.8rem;" id="progressDetail">等待开始...</div>
-            </div>
         </div>
     </div>
 
-    <!-- 操作进度模态框（挂载/弹出） -->
-    <div class="modal-overlay hidden" id="opsModal">
-        <div class="progress-modal" style="min-width: 550px; max-width: 650px;">
-            <div class="d-flex justify-content-between align-items-center mb-3">
-                <h6 class="mb-0" id="opsModalTitle">操作中...</h6>
-                <button class="btn btn-outline-secondary btn-sm" id="opsModalClose" style="display: none;">
-                    <i class="bi bi-x-lg"></i>
-                </button>
+    </div><!-- /col-lg-8 -->
+    <div class="col-lg-4">
+        <!-- 操作日志 -->
+        <div class="service-card" style="padding: 1rem;">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <h6 class="mb-0"><i class="bi bi-terminal me-2"></i>操作日志</h6>
+                <button class="btn btn-outline-secondary btn-sm" id="clearLogBtn" title="清空日志"><i class="bi bi-trash me-1"></i></button>
             </div>
-            <div id="opsModalSteps" style="font-size: 0.85rem;"></div>
-            <div id="opsModalOutput" class="mt-2" style="max-height: 350px; overflow-y: auto; font-size: 0.8rem; color: #aaa; background: rgba(0,0,0,0.4); padding: 10px; border-radius: 6px; font-family: monospace;"></div>
+            <!-- 备份集列表（内嵌在日志卡片上方） -->
+            <div id="backupSetPanel" style="display: none; margin-bottom: 0.5rem; border: 1px solid rgba(0,170,255,0.15); border-radius: 4px; padding: 8px;">
+                <div class="d-flex justify-content-between align-items-center mb-1">
+                    <small class="text-muted"><i class="bi bi-collection me-1"></i>备份集</small>
+                </div>
+                <div id="backupSetList" style="max-height: 150px; overflow-y: auto;">
+                    <div class="text-center text-muted py-2" style="font-size:0.8rem;">扫描后显示备份集</div>
+                </div>
+            </div>
+            <div id="scanLog" style="max-height: 600px; overflow-y: auto; font-size: 0.78rem; font-family: monospace; background: rgba(0,0,0,0.4); border: 1px solid rgba(0,170,255,0.15); border-radius: 4px; padding: 8px;"></div>
         </div>
     </div>
+    </div><!-- /row stepsRow123 -->
+
 </div>
 
 <script>
@@ -526,29 +505,6 @@
     }
 
     // ============ 磁带操作 ============
-    function _showOpsModal(title, steps) {
-        var modal = document.getElementById('opsModal');
-        document.getElementById('opsModalTitle').textContent = title;
-        var container = document.getElementById('opsModalSteps');
-        container.innerHTML = steps.map(function(s, i) {
-            return '<div id="opsStep' + i + '" class="mb-1"><span class="text-muted">&#9744;</span> ' + s + '</div>';
-        }).join('');
-        document.getElementById('opsModalOutput').innerHTML = '';
-        document.getElementById('opsModalClose').style.display = 'none';
-        modal.classList.remove('hidden');
-    }
-    function _hideOpsModal() { document.getElementById('opsModal').classList.add('hidden'); }
-    function _setOpsStepState(idx, state) {
-        var el = document.getElementById('opsStep' + idx);
-        if (!el) return;
-        var icons = { running: '&#9881; <em class="text-primary">(执行中)</em>', done: '&#9745; <span class="text-success">完成</span>', failed: '&#9746; <span class="text-danger">失败</span>' };
-        el.innerHTML = (icons[state] || '') + ' ' + el.textContent.replace(/^[\s\S]*?(?=[^\s])/, '');
-    }
-    function _opsLog(msg) {
-        var output = document.getElementById('opsModalOutput');
-        output.innerHTML += '<div>' + escapeHtml(msg) + '</div>';
-        output.scrollTop = output.scrollHeight;
-    }
 
     // SSE 流式请求辅助函数
     function _streamFetch(url, opts, onEvent, onDone) {
@@ -578,53 +534,46 @@
     }
 
     function mountTape() {
-        _showOpsModal('挂载 LTFS', ['挂载 LTFS 文件系统']);
-        _setOpsStepState(0, 'running');
+        _addScanLog('开始挂载 LTFS 文件系统...', 'info');
         _streamFetch(
             '/api/recovery/mount-tape-stream',
             { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) },
             function(ev) {
-                if (ev.type === 'log') _opsLog(ev.message);
+                if (ev.type === 'log') _addScanLog(ev.message, 'info');
                 if (ev.type === 'result') {
-                    _setOpsStepState(0, ev.success ? 'done' : 'failed');
-                    if (ev.success) { setTimeout(function() { _hideOpsModal(); checkTapeStatus(); }, 800); }
-                    else { document.getElementById('opsModalClose').style.display = ''; checkTapeStatus(); }
+                    _addScanLog(ev.success ? '✅ 挂载成功' : '❌ 挂载失败: ' + (ev.message || ''), ev.success ? 'done' : 'error');
+                    if (ev.success) { setTimeout(function() { checkTapeStatus(); }, 500); }
+                    else { checkTapeStatus(); }
                 }
             },
             function(err) {
-                if (err) { _setOpsStepState(0, 'failed'); _opsLog(err.message || '请求失败'); }
-                document.getElementById('opsModalClose').style.display = '';
+                if (err) { _addScanLog('❌ 请求失败: ' + (err.message || ''), 'error'); }
             }
         );
     }
 
     function remountTape() {
-        _showOpsModal('重新挂载', ['卸载 LTFS', '重新挂载']);
-        _setOpsStepState(0, 'running');
+        _addScanLog('开始重新挂载...', 'info');
         _streamFetch(
             '/api/recovery/remount-tape-stream',
             { method: 'POST' },
             function(ev) {
-                if (ev.type === 'log') _opsLog(ev.message);
+                if (ev.type === 'log') _addScanLog(ev.message, 'info');
                 if (ev.type === 'step_done') {
-                    _setOpsStepState(ev.step, 'done');
-                    _setOpsStepState(ev.step + 1, 'running');
+                    _addScanLog('  步骤 ' + (ev.step + 1) + ' 完成', 'done');
                 }
                 if (ev.type === 'result') {
                     if (ev.step === 'unmount') {
-                        _setOpsStepState(0, ev.success ? 'done' : 'failed');
+                        _addScanLog(ev.success ? '  ✅ 卸载完成' : '  ❌ 卸载失败: ' + (ev.message || ''), ev.success ? 'done' : 'error');
                     } else {
-                        _setOpsStepState(0, 'done');
-                        _setOpsStepState(1, ev.success ? 'done' : 'failed');
+                        _addScanLog(ev.success ? '✅ 重新挂载成功' : '❌ 重新挂载失败: ' + (ev.message || ''), ev.success ? 'done' : 'error');
                     }
-                    var allDone = (ev.step !== 'unmount') && ev.success;
-                    if (allDone) { setTimeout(function() { _hideOpsModal(); checkTapeStatus(); }, 800); }
-                    else { document.getElementById('opsModalClose').style.display = ''; checkTapeStatus(); }
+                    if (ev.step !== 'unmount' && ev.success) { setTimeout(function() { checkTapeStatus(); }, 500); }
+                    else { checkTapeStatus(); }
                 }
             },
             function(err) {
-                if (err) { _setOpsStepState(0, 'failed'); _opsLog(err.message || '请求失败'); }
-                document.getElementById('opsModalClose').style.display = '';
+                if (err) { _addScanLog('❌ 请求失败: ' + (err.message || ''), 'error'); }
             }
         );
     }
@@ -632,31 +581,26 @@
     function ejectTape() {
         var ejectBtn = document.getElementById('ejectBtn');
         ejectBtn.disabled = true;
-        var _ejectPhase = 'unmount';  // unmount -> eject
-        _showOpsModal('弹出磁带', ['卸载 LTFS', '弹出磁带']);
-        _setOpsStepState(0, 'running');
+        var _ejectPhase = 'unmount';
+        _addScanLog('开始弹出磁带...', 'info');
         _streamFetch(
             '/api/recovery/eject-tape-stream',
             { method: 'POST' },
             function(ev) {
-                if (ev.type === 'log') _opsLog(ev.message);
+                if (ev.type === 'log') _addScanLog(ev.message, 'info');
                 if (ev.type === 'result') {
                     if (_ejectPhase === 'unmount') {
-                        // 卸载完成，切换到弹出阶段
-                        _setOpsStepState(0, ev.success ? 'done' : 'failed');
-                        _setOpsStepState(1, 'running');
+                        _addScanLog(ev.success ? '  ✅ 卸载完成' : '  ❌ 卸载失败: ' + (ev.message || ''), ev.success ? 'done' : 'error');
                         _ejectPhase = 'eject';
                     } else {
-                        // 弹出完成
-                        _setOpsStepState(1, ev.success ? 'done' : 'failed');
-                        if (ev.success) { setTimeout(function() { _hideOpsModal(); checkTapeStatus(); }, 800); }
-                        else { document.getElementById('opsModalClose').style.display = ''; checkTapeStatus(); }
+                        _addScanLog(ev.success ? '✅ 磁带已弹出' : '❌ 弹出失败: ' + (ev.message || ''), ev.success ? 'done' : 'error');
+                        if (ev.success) { setTimeout(function() { checkTapeStatus(); }, 500); }
+                        else { checkTapeStatus(); }
                     }
                 }
             },
             function(err) {
-                if (err) { _setOpsStepState(0, 'failed'); _opsLog(err.message || '请求失败'); }
-                document.getElementById('opsModalClose').style.display = '';
+                if (err) { _addScanLog('❌ 请求失败: ' + (err.message || ''), 'error'); }
             }
         );
     }
@@ -670,30 +614,20 @@
     function scanTape() {
         var btn = document.getElementById('scanBtn');
         var result = document.getElementById('scanResult');
-        var scanLog = document.getElementById('scanLog');
         btn.disabled = true;
         btn.textContent = '扫描中...';
         result.innerHTML = '<div class="text-center text-muted py-3"><i class="bi bi-hourglass me-2"></i>扫描中...</div>';
 
-        // 显示步骤2的实时进度日志
-        var progressSection = document.getElementById('scanProgressSection');
-        var progressLog = document.getElementById('scanProgressLog');
-        progressSection.style.display = '';
-        progressLog.innerHTML = '';
-
         // 清空扫描日志和备份集列表
-        scanLog.textContent = '';
-        document.getElementById('scanLogSection').style.display = '';
+        var scanLog = document.getElementById('scanLog');
+        if (scanLog) scanLog.innerHTML = '';
         _scanStreamedSets = {};
         _scanLogCurrentEl = null;
         _scanSetCount = 0;
-        var _scanArchiveCount = 0;  // 累计归档计数
-        document.getElementById('backupSetList').textContent = '';
+        var _scanArchiveCount = 0;
+        var backupSetList = document.getElementById('backupSetList');
+        if (backupSetList) backupSetList.textContent = '';
         document.getElementById('fileTree').innerHTML = '<div class="text-center text-muted py-3"><i class="bi bi-hourglass me-2"></i>扫描中，归档将逐个显示...</div>';
-
-        // 显示弹窗
-        _showOpsModal('扫描磁带内容', ['扫描 LTFS 文件系统']);
-        _setOpsStepState(0, 'running');
 
         _streamFetch(
             '/api/recovery/scan-tape-stream',
@@ -701,17 +635,12 @@
             function(ev) {
                 if (ev.type === 'start') {
                     _addScanLog('开始扫描，发现 ' + (ev.total_dirs || 0) + ' 个目录...', 'info');
-                    _opsLog('发现 ' + (ev.total_dirs || 0) + ' 个目录，开始扫描...');
-                    _addProgressLog('开始扫描，发现 ' + (ev.total_dirs || 0) + ' 个目录...', 'info');
                 }
                 else if (ev.type === 'set_start') {
-                    // 更新上一个扫描行为完成
                     if (_scanLogCurrentEl) {
                         _updateScanLog(_scanLogCurrentEl, _scanLogCurrentEl.textContent.replace(/^[\s\S]*?(?=[^\s])/, ''), 'done');
                     }
                     _scanLogCurrentEl = _addScanLog('扫描备份集: ' + ev.set_id + ' (' + ev.file_count + ' 个文件)...', 'scanning');
-                    _opsLog('扫描备份集: ' + ev.set_id + ' (' + ev.file_count + ' 个文件)...');
-                    _addProgressLog('正在扫描备份集: ' + ev.set_id + ' (' + ev.file_count + ' 个文件)...', 'scanning');
                     if (!_scanStreamedSets[ev.set_id]) {
                         _scanStreamedSets[ev.set_id] = { archives: [], archive_count: 0, total_size_bytes: 0 };
                     }
@@ -720,84 +649,58 @@
                     _scanArchiveCount++;
                     var a = ev.archive;
                     var setId = ev.set_id;
-                    // 累积归档
                     if (!_scanStreamedSets[setId]) _scanStreamedSets[setId] = { archives: [], archive_count: 0, total_size_bytes: 0 };
                     _scanStreamedSets[setId].archives.push(a);
                     _scanStreamedSets[setId].archive_count++;
                     _scanStreamedSets[setId].total_size_bytes += (a.size_bytes || 0);
-                    // 更新当前扫描行显示进度
                     if (_scanLogCurrentEl) {
                         _updateScanLog(_scanLogCurrentEl,
                             '扫描备份集: ' + setId + ' — 已发现 ' + _scanArchiveCount + ' 个归档...',
                             'scanning');
                     }
-                    // 弹窗日志
-                    _opsLog('  ' + a.filename + '  (' + (a.size_display || '?') + ')');
-                    // 实时添加到树
                     _addArchiveToTree(setId, a);
-                    // 步骤2进度日志
-                    _addProgressLog('  发现归档: ' + a.filename + '  (' + (a.size_display || '?') + ')  [累计: ' + _scanArchiveCount + ']', 'file');
                 }
                 else if (ev.type === 'set_done') {
                     _scanSetCount++;
-                    // 更新扫描行为完成
                     if (_scanLogCurrentEl) {
                         _updateScanLog(_scanLogCurrentEl,
-                            '备份集 ' + ev.set_id + ': ' + ev.archive_count + ' 个归档, ' + (ev.total_size_display || '?'),
+                            '✓ 备份集 ' + ev.set_id + ': ' + ev.archive_count + ' 个归档, ' + (ev.total_size_display || '?'),
                             'done');
                     }
-                    _opsLog('✓ 备份集 ' + ev.set_id + ': ' + ev.archive_count + ' 个归档, ' + (ev.total_size_display || '?'));
                     _scanLogCurrentEl = null;
-                    // 添加备份集卡片
                     _addBackupSetCard(ev);
-                    // 步骤2进度日志
-                    _addProgressLog('✓ 备份集 ' + ev.set_id + ' 完成: ' + ev.archive_count + ' 个归档, ' + (ev.total_size_display || '?'), 'done');
                 }
                 else if (ev.type === 'done') {
-                    _setOpsStepState(0, 'done');
-                    _opsLog(ev.message || '扫描完成');
                     btn.disabled = false;
                     btn.innerHTML = '<i class="bi bi-search me-1"></i>扫描磁带';
                     result.innerHTML = '<div class="alert alert-success py-2" style="background: rgba(0,204,136,0.1); border-color: rgba(0,204,136,0.3); color: #adb5bd;">' +
                         '<i class="bi bi-check-circle me-1"></i>' + escapeHtml(ev.message || '扫描完成') + '</div>';
-                    _addScanLog(ev.message || '扫描完成', 'done');
-                    _addProgressLog(ev.message || '扫描完成', 'done');
-                    // 清除树中的加载提示
+                    _addScanLog('✅ ' + (ev.message || '扫描完成'), 'done');
                     var placeholder = document.querySelector('#fileTree > .text-center');
                     if (placeholder) placeholder.remove();
-                    // 自动关闭弹窗，切换到步骤3
-                    setTimeout(function() {
-                        _hideOpsModal();
-                        if (_scanSetCount > 0) {
-                            goToStep(3);
-                            // 自动选中第一个备份集
-                            var firstCard = document.querySelector('.backup-set-card');
-                            if (firstCard) firstCard.click();
-                        }
-                    }, 800);
+                    // 显示备份集面板
+                    var panel = document.getElementById('backupSetPanel');
+                    if (panel) panel.style.display = '';
+                    if (_scanSetCount > 0) {
+                        goToStep(3);
+                        var firstCard = document.querySelector('.backup-set-card');
+                        if (firstCard) firstCard.click();
+                    }
                 }
                 else if (ev.type === 'error') {
-                    _setOpsStepState(0, 'failed');
                     btn.disabled = false;
                     btn.innerHTML = '<i class="bi bi-search me-1"></i>扫描磁带';
                     result.innerHTML = '<div class="alert alert-danger">' + escapeHtml(ev.message || '扫描失败') + '</div>';
-                    _addScanLog('错误: ' + (ev.message || '扫描失败'), 'error');
-                    _opsLog('错误: ' + (ev.message || '扫描失败'));
-                    _addProgressLog('错误: ' + (ev.message || '扫描失败'), 'error');
-                    document.getElementById('opsModalClose').style.display = '';
+                    _addScanLog('❌ ' + (ev.message || '扫描失败'), 'error');
                 }
             },
             function(err) {
-                _setOpsStepState(0, 'failed');
                 btn.disabled = false;
                 btn.innerHTML = '<i class="bi bi-search me-1"></i>扫描磁带';
                 if (err) {
                     result.innerHTML = '<div class="alert alert-danger">扫描失败: ' + escapeHtml(err.message || '') + '</div>';
-                    _addScanLog('连接中断: ' + (err.message || ''), 'error');
-                    _opsLog('连接中断: ' + (err.message || ''));
-                    _addProgressLog('连接中断: ' + (err.message || ''), 'error');
+                    _addScanLog('❌ 连接中断: ' + (err.message || ''), 'error');
                 }
-                document.getElementById('opsModalClose').style.display = '';
             }
         );
     }
@@ -840,24 +743,8 @@
     }
 
     function _addProgressLog(msg, type) {
-        var log = document.getElementById('scanProgressLog');
-        if (!log) return;
-        var div = document.createElement('div');
-        div.style.borderBottom = '1px solid rgba(255,255,255,0.04)';
-        div.style.padding = '2px 0';
-        var color = type === 'done' || type === 'success' ? '#00cc88' :
-                    type === 'error' ? '#ff4081' :
-                    type === 'scanning' ? '#00aaff' :
-                    type === 'info' ? '#00aaff' :
-                    type === 'file' ? '#888' : '#aaa';
-        var prefix = type === 'done' || type === 'success' ? '&#10003; ' :
-                     type === 'error' ? '&#10007; ' :
-                     type === 'scanning' || type === 'info' ? '&#9656; ' : '';
-        div.style.color = color;
-        div.innerHTML = prefix + escapeHtml(msg);
-        log.appendChild(div);
-        log.scrollTop = log.scrollHeight;
-        return div;
+        // 重定向到右侧操作日志
+        return _addScanLog(msg, type);
     }
 
     function _addBackupSetCard(setData) {
@@ -1003,8 +890,7 @@
                         if (childContainer.getAttribute('data-loaded') === 'false') {
                             childContainer.setAttribute('data-loaded', 'loading');
                             childContainer.innerHTML = '<div class="text-center text-muted py-1" style="padding-left:20px;font-size:0.8rem;"><i class="bi bi-hourglass me-1"></i>读取归档文件列表...</div>';
-                            // 输出到扫描日志
-                            document.getElementById('scanLogSection').style.display = '';
+                            // 输出到操作日志
                             var loadLogEl = _addScanLog('正在读取归档文件列表: ' + a.filename + ' ...', 'scanning');
                             _addProgressLog('正在读取归档文件列表: ' + a.filename + ' ...', 'scanning');
                             fetch('/api/recovery/backup-sets/' + encodeURIComponent(setId) + '/archive-contents?archive=' + encodeURIComponent(a.filename))
@@ -1277,6 +1163,7 @@
         var btn = document.getElementById('startRestoreBtn');
         btn.disabled = true;
         btn.textContent = '创建任务...';
+        _addScanLog('开始创建恢复任务，目标: ' + targetPath, 'info');
 
         fetch('/api/recovery/restore', {
             method: 'POST',
@@ -1291,38 +1178,35 @@
         })
         .then(function(r) { return r.json(); })
         .then(function(data) {
-            if (data.detail) { alert('创建恢复任务失败: ' + data.detail); _restoreBtn(); return; }
+            if (data.detail) { _addScanLog('❌ 创建恢复任务失败: ' + data.detail, 'error'); _restoreBtn(); return; }
             currentRecoveryId = data.recovery_id;
-            document.getElementById('progressSection').style.display = 'block';
+            _addScanLog('恢复任务已创建: ' + data.recovery_id, 'done');
             btn.innerHTML = '<i class="bi bi-hourglass me-2"></i>恢复进行中...';
             statusPollTimer = setInterval(pollRecoveryStatus, 2000);
         })
-        .catch(function(e) { alert('请求失败: ' + e.message); _restoreBtn(); });
+        .catch(function(e) { _addScanLog('❌ 请求失败: ' + e.message, 'error'); _restoreBtn(); });
     }
 
+    var _lastRecoveryLogArchive = '';
     function pollRecoveryStatus() {
         if (!currentRecoveryId) return;
         fetch('/api/recovery/recovery-status/' + currentRecoveryId)
         .then(function(r) { return r.json(); })
         .then(function(data) {
             var pct = data.progress_percent || 0;
-            document.getElementById('progressFill').style.width = pct + '%';
-            document.getElementById('progressPercent').textContent = pct.toFixed(1) + '%';
-            document.getElementById('progressLabel').textContent = '恢复进度 (' + (data.status || '') + ')';
-            document.getElementById('progressDetail').textContent =
-                (data.current_archive ? '当前: ' + data.current_archive + ' | ' : '') +
-                '归档: ' + (data.processed_archives || 0) + '/' + (data.total_archives || 0) +
-                '  文件: ' + (data.processed_files || 0);
+            var curArchive = data.current_archive || '';
+            if (curArchive && curArchive !== _lastRecoveryLogArchive) {
+                _addScanLog('▸ 处理归档: ' + curArchive + ' (' + pct.toFixed(0) + '%)', 'scanning');
+                _lastRecoveryLogArchive = curArchive;
+            }
             if (data.status === 'completed') {
                 clearInterval(statusPollTimer);
-                document.getElementById('progressLabel').textContent = '恢复完成';
-                document.getElementById('progressDetail').textContent = '已恢复 ' + (data.processed_files || 0) + ' 个文件';
+                _addScanLog('✅ 恢复完成 — 已恢复 ' + (data.processed_files || 0) + ' 个文件', 'done');
                 _restoreBtn();
             }
             if (data.status === 'failed' || data.status === 'cancelled') {
                 clearInterval(statusPollTimer);
-                document.getElementById('progressLabel').textContent = data.status === 'failed' ? '恢复失败' : '已取消';
-                document.getElementById('progressDetail').textContent = data.error_message || '';
+                _addScanLog('❌ ' + (data.status === 'failed' ? '恢复失败' : '已取消') + ': ' + (data.error_message || ''), 'error');
                 _restoreBtn();
             }
         })
@@ -1333,6 +1217,7 @@
         var btn = document.getElementById('startRestoreBtn');
         btn.disabled = true;
         btn.innerHTML = '<i class="bi bi-hourglass me-2"></i>打包中...';
+        _addScanLog('开始打包 ZIP 下载...', 'info');
         fetch('/api/recovery/download-zip', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -1349,9 +1234,10 @@
             a.href = url; a.download = selectedSetId + '_recovery.zip';
             document.body.appendChild(a); a.click();
             document.body.removeChild(a); URL.revokeObjectURL(url);
+            _addScanLog('✅ ZIP 下载完成 (' + formatBytes(blob.size) + ')', 'done');
             _restoreBtn();
         })
-        .catch(function(e) { alert('下载失败: ' + e.message); _restoreBtn(); });
+        .catch(function(e) { _addScanLog('❌ 下载失败: ' + e.message, 'error'); _restoreBtn(); });
     }
 
     function startRawDownload(sel) {
@@ -1360,10 +1246,16 @@
         if (!archiveNames.length) { alert('未选择归档'); return; }
         var downloaded = 0;
         btn.disabled = true;
+        _addScanLog('开始下载 ' + archiveNames.length + ' 个原始归档...', 'info');
         function downloadNext() {
-            if (downloaded >= archiveNames.length) { _restoreBtn(); return; }
+            if (downloaded >= archiveNames.length) {
+                _addScanLog('✅ 全部归档下载完成', 'done');
+                _restoreBtn();
+                return;
+            }
             var archName = archiveNames[downloaded];
             btn.innerHTML = '<i class="bi bi-hourglass me-2"></i>下载 ' + (downloaded + 1) + '/' + archiveNames.length + '...';
+            _addScanLog('下载归档: ' + archName, 'scanning');
             var url = '/api/recovery/download-raw?set_id=' + encodeURIComponent(selectedSetId) + '&archive=' + encodeURIComponent(archName);
             var a = document.createElement('a');
             a.href = url; a.download = archName;
@@ -1580,10 +1472,7 @@
         if (_searchRunning) return;
         _searchRunning = true;
         var scanLog = document.getElementById('scanLog');
-        scanLog.textContent = '';
-        document.getElementById('scanLogSection').style.display = '';
-        var progressLog = document.getElementById('scanProgressLog');
-        if (progressLog) { progressLog.innerHTML = ''; document.getElementById('scanProgressSection').style.display = ''; }
+        if (scanLog) scanLog.innerHTML = '';
 
         var _searchResults = {};
         var _searchTotalMatches = 0;
@@ -1756,7 +1645,7 @@
     document.getElementById('ejectBtn').addEventListener('click', ejectTape);
     document.getElementById('scanBtn').addEventListener('click', scanTape);
     document.getElementById('startRestoreBtn').addEventListener('click', startRecovery);
-    document.getElementById('opsModalClose').addEventListener('click', function() { _hideOpsModal(); checkTapeStatus(); });
+    document.getElementById('clearLogBtn').addEventListener('click', function() { var log = document.getElementById('scanLog'); if (log) log.innerHTML = ''; });
 
     document.getElementById('selectAllBtn').addEventListener('click', function() {
         document.querySelectorAll('input[data-role="archive"]').forEach(function(cb) {
@@ -1778,102 +1667,85 @@
     document.getElementById('expandAllBtn').addEventListener('click', function() {
         var btn = this;
         btn.disabled = true;
-        document.getElementById('scanLogSection').style.display = '';
-        var progressSection = document.getElementById('scanProgressSection');
-        if (progressSection) progressSection.style.display = '';
+        if (!selectedSetId) { alert('请先选择备份集'); btn.disabled = false; return; }
 
-        // 收集所有未加载的子容器
-        var containers = document.querySelectorAll('#fileTree .tree-children[data-loaded="false"]');
-        var total = containers.length;
-        var loaded = 0;
+        // 获取磁带卷标
+        var tapeLabel = document.getElementById('tapeLabel').textContent || 'unknown';
 
-        if (total === 0) {
-            // 全部已加载，直接展开
-            document.querySelectorAll('#fileTree .tree-children').forEach(function(c) { c.style.display = ''; });
-            document.getElementById('expandAllBtn').style.display = 'none';
-            document.getElementById('collapseAllBtn').style.display = '';
-            btn.disabled = false;
-            return;
-        }
-
-        _addScanLog('开始展开全部，共 ' + total + ' 个归档需要读取...', 'info');
-        _addProgressLog('开始展开全部，共 ' + total + ' 个归档需要读取...', 'info');
+        _addScanLog('开始展开全部，查询缓存并读取归档...', 'info');
+        _addProgressLog('开始展开全部...', 'info');
 
         // 先展开所有已有的
         document.querySelectorAll('#fileTree .tree-children').forEach(function(c) { c.style.display = ''; });
 
-        // 逐个加载未读取的归档
-        function loadNext(idx) {
-            if (idx >= total) {
-                // 全部完成
-                _addScanLog('全部展开完成，共读取 ' + loaded + ' 个归档', 'done');
-                _addProgressLog('全部展开完成，共读取 ' + loaded + ' 个归档', 'done');
-                document.getElementById('expandAllBtn').style.display = 'none';
-                document.getElementById('collapseAllBtn').style.display = '';
-                btn.disabled = false;
-                updateSelectionSummary();
-                return;
-            }
-            var childContainer = containers[idx];
-            // 从相邻的 archive 节点获取归档文件名
-            var archiveNode = childContainer.previousElementSibling;
-            var archiveSpan = archiveNode ? archiveNode.querySelector('span') : null;
-            var archName = archiveSpan ? archiveSpan.textContent : ('归档' + (idx + 1));
-            // 从 checkbox 获取精确的 archive 名
-            var archCb = archiveNode ? archiveNode.querySelector('input[data-role="archive"]') : null;
-            var archDataName = archCb ? archCb.dataset.archive : archName;
+        var expandUrl = '/api/recovery/backup-sets/' + encodeURIComponent(selectedSetId)
+            + '/expand-all-stream?tape_label=' + encodeURIComponent(tapeLabel) + '&_t=' + Date.now();
 
-            childContainer.setAttribute('data-loaded', 'loading');
-            childContainer.innerHTML = '<div class="text-center text-muted py-1" style="padding-left:20px;font-size:0.8rem;"><i class="bi bi-hourglass me-1"></i>读取中...</div>';
-
-            var logEl = _addScanLog('[' + (idx + 1) + '/' + total + '] 正在读取归档文件列表: ' + archDataName, 'scanning');
-            _addProgressLog('[' + (idx + 1) + '/' + total + '] 正在读取归档文件列表: ' + archDataName, 'scanning');
-
-            fetch('/api/recovery/backup-sets/' + encodeURIComponent(selectedSetId) + '/archive-contents?archive=' + encodeURIComponent(archDataName))
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                childContainer.innerHTML = '';
-                childContainer.setAttribute('data-loaded', 'true');
-                loaded++;
-                var entries = data.entries || [];
-                if (!entries.length) {
-                    childContainer.innerHTML = '<div class="text-muted" style="padding-left:20px;font-size:0.8rem;">空归档</div>';
-                    _updateScanLog(logEl, '[' + loaded + '/' + total + '] ' + archDataName + ': 空归档', 'file');
-                    _addProgressLog('[' + loaded + '/' + total + '] ' + archDataName + ': 空归档', 'file');
-                } else {
-                    var files = entries.filter(function(e) { return !e.is_dir; })
-                        .sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
-                    files.forEach(function(f) {
-                        var leaf = document.createElement('div');
-                        leaf.className = 'tree-node';
-                        leaf.style.paddingLeft = '20px';
-                        leaf.innerHTML =
-                            '<input type="checkbox" data-role="file" data-archive="' + escapeHtml(archDataName) + '" data-file="' + escapeHtml(f.name) + '">' +
-                            '<i class="bi bi-file-earmark-text text-muted"></i>' +
-                            '<span style="font-size:0.85rem;">' + escapeHtml(f.name) + '</span>' +
-                            '<small class="text-muted ms-auto" style="font-size:0.7rem;">' + formatBytes(f.size || 0) + '</small>';
-                        childContainer.appendChild(leaf);
-                    });
-                    allArchiveData[archDataName] = files.map(function(f) {
-                        return { name: f.name, size: f.size, is_dir: false, source_archive: archDataName };
-                    });
-                    _updateScanLog(logEl, '[' + loaded + '/' + total + '] ' + archDataName + ': ' + files.length + ' 个文件', 'done');
-                    _addProgressLog('[' + loaded + '/' + total + '] ' + archDataName + ': ' + files.length + ' 个文件', 'done');
+        _streamFetch(
+            expandUrl,
+            { method: 'GET' },
+            function(ev) {
+                if (ev.type === 'start') {
+                    _addScanLog('共 ' + (ev.total_archives || 0) + ' 个归档需要检查', 'info');
+                    _addProgressLog('共 ' + (ev.total_archives || 0) + ' 个归档', 'info');
                 }
-                updateSelectionSummary();
-                // 加载下一个
-                loadNext(idx + 1);
-            })
-            .catch(function(err) {
-                childContainer.innerHTML = '<div class="text-danger" style="padding-left:20px;font-size:0.8rem;">加载失败: ' + escapeHtml(err.message) + '</div>';
-                childContainer.setAttribute('data-loaded', 'false');
-                loaded++;
-                _updateScanLog(logEl, '[' + loaded + '/' + total + '] ' + archDataName + ': 加载失败 - ' + err.message, 'error');
-                _addProgressLog('[' + loaded + '/' + total + '] ' + archDataName + ': 加载失败', 'error');
-                loadNext(idx + 1);
-            });
-        }
-        loadNext(0);
+                else if (ev.type === 'archive_progress') {
+                    var msg = '[' + ev.current + '/' + ev.total + '] 正在解压读取: ' + ev.archive;
+                    _addScanLog(msg, 'scanning');
+                    _addProgressLog(msg, 'scanning');
+                }
+                else if (ev.type === 'archive_done') {
+                    var source = ev.source === 'cache' ? '缓存命中' : (ev.source === 'error' ? '失败' : '解压读取');
+                    var msg = '[' + ev.current + '/' + ev.total + '] ' + ev.archive + ': ' + (ev.total_files || 0) + ' 个文件 (' + source + ')';
+                    var logType = ev.source === 'error' ? 'error' : 'done';
+                    _addScanLog(msg, logType);
+                    _addProgressLog(msg, logType);
+
+                    // 更新对应的 archive 节点显示文件数
+                    var archCbs = document.querySelectorAll('input[data-role="archive"]');
+                    archCbs.forEach(function(cb) {
+                        if (cb.dataset.archive === ev.archive) {
+                            var parent = cb.parentElement;
+                            var countSmall = parent.querySelector('small');
+                            if (countSmall) {
+                                countSmall.textContent = (ev.total_files || 0) + ' 个文件';
+                            }
+                            // 标记为已缓存
+                            var nextSibling = parent.nextElementSibling;
+                            if (nextSibling && nextSibling.classList.contains('tree-children')) {
+                                nextSibling.setAttribute('data-loaded', 'true');
+                                nextSibling.setAttribute('data-cache-count', ev.total_files || 0);
+                                // 显示文件数量提示
+                                if (ev.total_files > 0) {
+                                    nextSibling.innerHTML = '<div class="text-muted" style="padding-left:20px;font-size:0.8rem;">' + (ev.total_files) + ' 个文件（已缓存，点击展开查看）</div>';
+                                }
+                            }
+                        }
+                    });
+                }
+                else if (ev.type === 'done') {
+                    _addScanLog(ev.message || '展开完成', 'done');
+                    _addProgressLog(ev.message || '展开完成', 'done');
+                    document.getElementById('expandAllBtn').style.display = 'none';
+                    document.getElementById('collapseAllBtn').style.display = '';
+                    btn.disabled = false;
+                    // 更新 allArchiveData 的统计
+                    updateSelectionSummary();
+                }
+                else if (ev.type === 'error') {
+                    _addScanLog('错误: ' + (ev.message || '展开失败'), 'error');
+                    _addProgressLog('错误: ' + (ev.message || '展开失败'), 'error');
+                    btn.disabled = false;
+                }
+            },
+            function(err) {
+                if (err) {
+                    _addScanLog('展开全部失败: ' + (err.message || ''), 'error');
+                    _addProgressLog('展开全部失败', 'error');
+                }
+                btn.disabled = false;
+            }
+        );
     });
     document.getElementById('collapseAllBtn').addEventListener('click', function() {
         document.querySelectorAll('#fileTree .tree-children').forEach(function(c) { c.style.display = 'none'; });

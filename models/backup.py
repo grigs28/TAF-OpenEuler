@@ -20,6 +20,7 @@ class BackupTaskType(enum.Enum):
     INCREMENTAL = "incremental"  # 增量备份
     DIFFERENTIAL = "differential"  # 差异备份
     MONTHLY_FULL = "monthly_full"  # 月度完整备份
+    VERIFY = "verify"              # 验证任务
 
 
 class BackupTaskStatus(enum.Enum):

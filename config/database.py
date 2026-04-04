@@ -501,6 +501,45 @@ class DatabaseManager:
                     # 多表方案相关结构创建失败时，仅记录警告，不阻止主流程
                     logger.warning(f"创建多表方案相关结构时出错（backup_files_template / backup_files_groups 等）: {multi_err}", exc_info=True)
 
+                # ========= 磁带归档内容缓存表 =========
+                try:
+                    logger.info("检查并创建 tape_archive_contents（磁带归档内容缓存表）...")
+                    cur.execute("""
+                        SELECT 1 FROM information_schema.tables WHERE table_name = 'tape_archive_contents'
+                    """)
+                    if not cur.fetchone():
+                        cur.execute("""
+                            CREATE TABLE tape_archive_contents (
+                                id BIGSERIAL PRIMARY KEY,
+                                tape_label VARCHAR(64),
+                                set_id VARCHAR(128) NOT NULL,
+                                archive_filename VARCHAR(256) NOT NULL,
+                                archive_size BIGINT DEFAULT 0,
+                                file_path TEXT NOT NULL,
+                                file_size BIGINT DEFAULT 0,
+                                is_dir BOOLEAN DEFAULT FALSE,
+                                modified_time TIMESTAMPTZ,
+                                created_at TIMESTAMPTZ DEFAULT NOW()
+                            )
+                        """)
+                        conn.commit()
+                        logger.info("✅ 创建表 tape_archive_contents 成功")
+                    else:
+                        logger.debug("表 tape_archive_contents 已存在")
+
+                    # 索引（幂等）
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_tape_arc_cache
+                        ON tape_archive_contents(tape_label, set_id, archive_filename)
+                    """)
+                    cur.execute("""
+                        CREATE INDEX IF NOT EXISTS idx_tape_arc_cache_search
+                        ON tape_archive_contents(tape_label, set_id, file_path)
+                    """)
+                    conn.commit()
+                except Exception as cache_err:
+                    logger.warning(f"创建磁带归档内容缓存表时出错: {cache_err}", exc_info=True)
+
                 # 检查并添加缺失的字段（字段迁移）
                 self._migrate_missing_columns(cur)
 

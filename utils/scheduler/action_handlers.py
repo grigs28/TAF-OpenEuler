@@ -12,6 +12,7 @@ import random
 import shutil
 import uuid
 import tarfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from utils.datetime_utils import now, format_datetime
@@ -855,6 +856,72 @@ class RetentionCheckActionHandler(ActionHandler):
 class VerifyActionHandler(ActionHandler):
     """验证动作处理器 - 验证备份数据完整性"""
 
+    async def _create_verify_task_record(self, config: Dict) -> int:
+        """在 backup_tasks 表创建验证任务记录，返回 task_id"""
+        verify_type = config.get('verify_type', 'directory')
+        source_paths = config.get('source_paths', [])
+        task_name = config.get('task_name') or f"验证任务-{format_datetime(now(), '%Y%m%d_%H%M%S')}"
+        description = f"[扫描文件中...] 验证类型: {verify_type}"
+
+        async with get_opengauss_connection() as conn:
+            task_id = await conn.fetchval(
+                """
+                INSERT INTO backup_tasks (
+                    task_name, task_type, source_paths, exclude_patterns,
+                    compression_enabled, encryption_enabled, retention_days,
+                    description, tape_device, status, is_template,
+                    created_by, created_at, updated_at, started_at, scan_status,
+                    operation_stage
+                ) VALUES (
+                    $1, 'verify'::backuptasktype, $2, $3,
+                    FALSE, FALSE, 0,
+                    $4, NULL, 'running'::backuptaskstatus, FALSE,
+                    'scheduled_task', $5, $6, $7, 'running',
+                    'scan'
+                ) RETURNING id
+                """,
+                task_name,
+                json.dumps(source_paths) if source_paths else None,
+                json.dumps(config.get('exclude_patterns', [])) or None,
+                description,
+                now(), now(), now()
+            )
+            actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+            if hasattr(actual_conn, 'commit'):
+                try:
+                    await actual_conn.commit()
+                except Exception:
+                    pass
+        return task_id
+
+    async def _update_verify_progress(self, task_id: int, **kwargs):
+        """更新验证任务进度到 backup_tasks 表"""
+        sets = []
+        params = []
+        idx = 1
+        for key, value in kwargs.items():
+            if key == 'status':
+                sets.append(f"{key} = ${idx}::backuptaskstatus")
+            else:
+                sets.append(f"{key} = ${idx}")
+            params.append(value)
+            idx += 1
+        if not sets:
+            return
+        params.append(task_id)
+        sql = f"UPDATE backup_tasks SET {', '.join(sets)}, updated_at = now() WHERE id = ${idx}"
+        try:
+            async with get_opengauss_connection() as conn:
+                await conn.execute(sql, *params)
+                actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+                if hasattr(actual_conn, 'commit'):
+                    try:
+                        await actual_conn.commit()
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"[验证任务] 更新进度失败 (task_id={task_id}): {e}")
+
     async def execute(
         self,
         config: Dict,
@@ -868,20 +935,44 @@ class VerifyActionHandler(ActionHandler):
         verify_enabled = config.get('verify_enabled', True)
         source_paths = config.get('source_paths', [])
 
+        # 创建 backup_tasks 记录
+        task_id = await self._create_verify_task_record(config)
+
         await log_system(
             level=LogLevel.INFO,
             category=LogCategory.BACKUP,
             message=f"开始执行验证任务（类型: {verify_type}, 抽样: {verify_percent}%）",
             module="utils.scheduler.action_handlers",
             function="VerifyActionHandler.execute",
-            details={"verify_type": verify_type, "verify_percent": verify_percent}
+            details={"verify_type": verify_type, "verify_percent": verify_percent, "backup_task_id": task_id}
         )
 
         try:
+            loop = asyncio.get_event_loop()
             if verify_type == 'tape':
-                result = await self._verify_tape(config)
+                result = await self._verify_tape(config, task_id)
             else:
-                result = await self._verify_directory(config)
+                # 先在 async 中挂载 UNC 路径，再开线程跑验证
+                resolved_paths = await self._resolve_source_paths(source_paths)
+                if not resolved_paths:
+                    raise ValueError("所有源路径均无效（SMB 挂载失败或路径不存在）")
+                thread_config = dict(config)
+                thread_config['source_paths'] = resolved_paths
+                thread_config['_event_loop'] = loop  # 传入事件循环，供线程内 DB 更新使用
+                result = await loop.run_in_executor(None, self._verify_directory_sync, thread_config, task_id)
+
+            # 更新为完成状态
+            final_status = 'completed' if result.get('status') == 'success' else 'failed'
+            await self._update_verify_progress(
+                task_id,
+                status=final_status,
+                progress_percent=100.0,
+                operation_stage='verify',
+                scan_status='completed',
+                description=result.get('message', ''),
+                result_summary=json.dumps(result),
+                completed_at=now()
+            )
 
             await log_system(
                 level=LogLevel.INFO if result.get('status') == 'success' else LogLevel.ERROR,
@@ -891,9 +982,23 @@ class VerifyActionHandler(ActionHandler):
                 function="VerifyActionHandler.execute",
                 details=result
             )
+            result['backup_task_id'] = task_id
             return result
 
         except Exception as e:
+            # 更新为失败状态
+            try:
+                await self._update_verify_progress(
+                    task_id,
+                    status='failed',
+                    error_message=str(e),
+                    operation_stage='verify',
+                    scan_status='completed',
+                    completed_at=now()
+                )
+            except Exception:
+                pass
+
             logger.error(f"验证任务执行失败: {e}", exc_info=True)
             await log_system(
                 level=LogLevel.ERROR,
@@ -902,9 +1007,9 @@ class VerifyActionHandler(ActionHandler):
                 module="utils.scheduler.action_handlers",
                 function="VerifyActionHandler.execute",
             )
-            return {"status": "failed", "message": str(e)}
+            return {"status": "failed", "message": str(e), "backup_task_id": task_id}
 
-    async def _verify_tape(self, config: Dict) -> Dict[str, Any]:
+    async def _verify_tape(self, config: Dict, task_id: int = None) -> Dict[str, Any]:
         """磁带验证：挂载 LTFS，抽样 .tar.zst 归档验证完整性"""
         verify_percent = float(config.get('verify_percent', 1))
 
@@ -986,12 +1091,24 @@ class VerifyActionHandler(ActionHandler):
                             logger.info(f"[磁带验证] ✓ {archive_path.name}: {detail}")
                         else:
                             failed += 1
-                            errors.append(f"{archive_path.name}: {detail}")
-                            logger.warning(f"[磁带验证] ✗ {archive_path.name}: {detail}")
+                            errors.append(f"{archive_path}: {detail}")
+                            logger.warning(f"[磁带验证] ✗ {archive_path}: {detail}")
                     except Exception as e:
                         failed += 1
-                        errors.append(f"{archive_path.name}: {str(e)}")
+                        errors.append(f"{archive_path}: {str(e)}")
                         logger.error(f"[磁带验证] ✗ {archive_path.name}: {e}")
+                    # 更新数据库进度
+                    if task_id:
+                        progress_pct = ((i + 1) / sample_count) * 100
+                        await self._update_verify_progress(
+                            task_id,
+                            total_files=sample_count,
+                            processed_files=i + 1,
+                            progress_percent=min(99.0, progress_pct),
+                            operation_stage='verify',
+                            scan_status='completed',
+                            description=f"[磁带验证中...] {i+1}/{sample_count}, 通过 {passed}, 失败 {failed}"
+                        )
             finally:
                 # 6. 清理临时目录
                 try:
@@ -1032,87 +1149,168 @@ class VerifyActionHandler(ActionHandler):
                 except Exception as e:
                     logger.warning(f"[磁带验证] 卸载 LTFS 失败: {e}")
 
-    async def _verify_directory(self, config: Dict) -> Dict[str, Any]:
-        """目录验证：扫描指定目录，按百分比抽样验证文件"""
-        source_paths = config.get('source_paths', [])
+    @staticmethod
+    def _should_exclude_file(file_path: str, exclude_patterns: List[str]) -> bool:
+        """检查文件/目录是否应该被排除（复用 FileScanner 相同的排除逻辑）"""
+        if not exclude_patterns:
+            return False
+        from fnmatch import fnmatch as _fnmatch
+        normalized = file_path.replace('\\', '/')
+        path_parts = [p for p in normalized.split('/') if p]
+        # 1. 完整路径匹配
+        for pattern in exclude_patterns:
+            normalized_pattern = pattern.replace('\\', '/')
+            if _fnmatch(normalized, path_parts[-1]):
+                return True
+        # 2. 路径段名称匹配
+        for part in path_parts:
+            for pattern in exclude_patterns:
+                normalized_pattern = pattern.replace('\\', "/")
+                tail_pattern = normalized_pattern.split("/")[-1]
+                if _fnmatch(part, tail_pattern):
+                    return True
+        # 3. 父目录匹配
+        try:
+            parent = Path(normalized).parent
+            if VerifyActionHandler._should_exclude_file(str(parent), exclude_patterns):
+                return True
+        except Exception:
+            pass
+        return False
+
+    async def _resolve_source_paths(self, source_paths: list) -> list:
+        """解析源路径：UNC 网络路径自动挂载为本地路径（异步）"""
+        from utils.network_path import is_unc_path, validate_network_path
+        resolved_paths = []
+        for src in source_paths:
+            if is_unc_path(src):
+                logger.info(f"[目录验证] 检测到 UNC 路径，尝试挂载 SMB: {src}")
+                validation = await validate_network_path(src)
+                if validation.get('valid') and validation.get('path'):
+                    local_path = validation['path']
+                    logger.info(f"[目录验证] UNC 路径已映射: {src} -> {local_path}")
+                    resolved_paths.append(local_path)
+                else:
+                    logger.warning(f"[目录验证] SMB 挂载失败: {src} - {validation.get('message', '未知错误')}")
+            else:
+                resolved_paths.append(src)
+        return resolved_paths
+
+    def _verify_directory_sync(self, config: Dict, task_id: int = None) -> Dict[str, Any]:
+        """目录验证（同步，在线程中运行，不阻塞事件循环）"""
+        source_paths = config.get('source_paths', [])  # 已解析为本地路径
         verify_percent = float(config.get('verify_percent', 1))
         verify_enabled = config.get('verify_enabled', False)
+        exclude_patterns = config.get('exclude_patterns', [])
 
         if not source_paths:
             return {"status": "failed", "message": "未指定验证源路径"}
 
-        # 收集所有文件
-        all_files = []
+        BATCH_SIZE = 100
+        passed = 0
+        failed = 0
+        total_scanned = 0
+        total_sampled = 0
+        excluded_count = 0
+        errors = []
+        last_progress_log = time.monotonic()
+        last_db_update = 0.0  # 立即触发首次更新
+
+        from config.settings import get_settings
+        settings = get_settings()
+        verify_temp = Path(settings.VERIFY_TEMP_DIR) / str(uuid.uuid4())[:8]
+
+        # 获取事件循环（必须从调用方传入，线程内无法 get_event_loop）
+        loop = config.get('_event_loop')
+
+        def _try_db_update(stage, scan_st, desc_suffix, force=False):
+            """线程安全地异步更新验证任务进度"""
+            nonlocal last_db_update
+            now_ts = time.monotonic()
+            if not force and now_ts - last_db_update < 10:
+                return
+            if not task_id or not loop:
+                return
+            try:
+                coro = self._update_verify_progress(
+                    task_id,
+                    total_files=total_scanned,
+                    processed_files=total_sampled,
+                    progress_percent=min(99.0, (total_sampled / max(total_scanned, 1)) * 100) if total_scanned > 0 else 0.0,
+                    operation_stage=stage,
+                    scan_status=scan_st,
+                    description=f"[{desc_suffix}] 已扫描 {total_scanned}, 抽样 {total_sampled}, 通过 {passed}, 失败 {failed}"
+                )
+                asyncio.run_coroutine_threadsafe(coro, loop)
+            except Exception:
+                pass
+            last_db_update = now_ts
+
+        # 立即写入初始状态（扫描开始）
+        _try_db_update('scan', 'running', '扫描文件中...', force=True)
+
         for src in source_paths:
             src_path = Path(src)
             if not src_path.exists():
                 logger.warning(f"[目录验证] 路径不存在: {src}")
                 continue
             if src_path.is_file():
-                all_files.append(src_path)
+                if exclude_patterns and self._should_exclude_file(str(src_path), exclude_patterns):
+                    excluded_count += 1
+                    continue
+                total_scanned += 1
+                sampled_list = [src_path]
+                p, f, s, e = self._verify_batch_sync(sampled_list, verify_enabled, verify_temp)
+                passed += p
+                failed += f
+                total_sampled += s
+                for err_msg in e:
+                    logger.warning(f"[目录验证] 验证失败: {err_msg}")
+                errors.extend(e)
             elif src_path.is_dir():
+                batch = []
                 for root, dirs, files in os.walk(str(src_path)):
+                    if exclude_patterns:
+                        dirs[:] = [d for d in dirs if not self._should_exclude_file(str(Path(root) / d), exclude_patterns)]
                     for f in files:
-                        all_files.append(Path(root) / f)
-
-        if not all_files:
-            return {"status": "success", "message": "指定路径中未发现文件", "total": 0, "sampled": 0, "passed": 0, "failed": 0}
-
-        # 按百分比抽样
-        sample_count = max(1, int(len(all_files) * verify_percent / 100))
-        sample_count = min(sample_count, len(all_files))
-        sampled = random.sample(all_files, sample_count)
-
-        logger.info(f"[目录验证] 发现 {len(all_files)} 个文件，抽样 {sample_count} 个")
-
-        passed = 0
-        failed = 0
-        errors = []
-
-        from config.settings import get_settings
-        settings = get_settings()
-        verify_temp = Path(settings.VERIFY_TEMP_DIR) / str(uuid.uuid4())[:8]
-
-        for i, file_path in enumerate(sampled):
-            try:
-                if file_path.name.endswith(('.tar.zst', '.tar.gz', '.tgz', '.tar', '.7z', '.zip')):
-                    # 归档文件
-                    if verify_enabled:
-                        # 解压验证
-                        verify_temp.mkdir(parents=True, exist_ok=True)
-                        valid, detail = await asyncio.to_thread(
-                            self._verify_archive_extract, file_path, verify_temp
-                        )
-                    else:
-                        # 只检查头部
-                        valid, detail = await asyncio.to_thread(
-                            self._verify_archive_header, file_path
-                        )
-                    # 清理临时文件
-                    for item in verify_temp.iterdir():
-                        try:
-                            if item.is_dir():
-                                shutil.rmtree(str(item))
-                            else:
-                                item.unlink()
-                        except Exception:
-                            pass
-                    if valid:
-                        passed += 1
-                    else:
-                        failed += 1
-                        errors.append(f"{file_path.name}: {detail}")
-                else:
-                    # 普通文件：验证可读性
-                    size = file_path.stat().st_size
-                    if size > 0:
-                        # 尝试读取前 4KB
-                        with open(str(file_path), 'rb') as f:
-                            f.read(4096)
-                    passed += 1
-            except Exception as e:
-                failed += 1
-                errors.append(f"{file_path.name}: {str(e)}")
+                        file_path = Path(root) / f
+                        if exclude_patterns and self._should_exclude_file(str(file_path), exclude_patterns):
+                            excluded_count += 1
+                            continue
+                        batch.append(file_path)
+                        total_scanned += 1
+                        # 每10秒更新扫描进度（即使未满一批）
+                        _try_db_update('scan', 'running', '扫描文件中...')
+                        if len(batch) >= BATCH_SIZE:
+                            sample_count = max(1, int(len(batch) * verify_percent / 100))
+                            sampled_list = random.sample(batch, min(sample_count, len(batch)))
+                            p, f, s, e = self._verify_batch_sync(sampled_list, verify_enabled, verify_temp)
+                            passed += p
+                            failed += f
+                            total_sampled += s
+                            for err_msg in e:
+                                logger.warning(f"[目录验证] 验证失败: {err_msg}")
+                            errors.extend(e)
+                            batch = []
+                            # 批次验证后更新进度（进入验证阶段）
+                            _try_db_update('verify', 'completed', '验证文件中...', force=True)
+                            # 每60秒输出一次进度日志
+                            now_ts = time.monotonic()
+                            if now_ts - last_progress_log >= 60:
+                                logger.info(f"[目录验证] 进度: 已扫描 {total_scanned} 个文件, 抽样 {total_sampled}, 通过 {passed}, 失败 {failed}")
+                                last_progress_log = now_ts
+                # 处理剩余的文件
+                if batch:
+                    sample_count = max(1, int(len(batch) * verify_percent / 100))
+                    sampled_list = random.sample(batch, min(sample_count, len(batch)))
+                    p, f, s, e = self._verify_batch_sync(sampled_list, verify_enabled, verify_temp)
+                    passed += p
+                    failed += f
+                    total_sampled += s
+                    for err_msg in e:
+                        logger.warning(f"[目录验证] 验证失败: {err_msg}")
+                    errors.extend(e)
+                    _try_db_update('verify', 'completed', '验证文件中...', force=True)
 
         # 清理临时目录
         try:
@@ -1121,29 +1319,105 @@ class VerifyActionHandler(ActionHandler):
         except Exception:
             pass
 
-        # 记录日志
-        await log_operation(
-            operation_type=OperationType.TAPE_VERIFY,
-            resource_type="backup",
-            operation_name="目录验证",
-            operation_description=f"目录验证完成: 抽样 {sample_count}/{len(all_files)}, 通过 {passed}, 失败 {failed}",
-            category="backup",
-            success=(failed == 0),
-            result_message=f"抽样 {sample_count}/{len(all_files)}, 通过 {passed}, 失败 {failed}"
-        )
+        if total_scanned == 0:
+            return {"status": "success", "message": "指定路径中未发现文件", "total": 0, "sampled": 0, "passed": 0, "failed": 0}
+
+        logger.info(f"[目录验证] 完成: 扫描 {total_scanned} 个文件 (排除 {excluded_count} 个), 抽样 {total_sampled}, 通过 {passed}, 失败 {failed}")
 
         result = {
             "status": "success" if failed == 0 else ("success" if passed > 0 else "failed"),
-            "message": f"目录验证完成: 抽样 {sample_count}/{len(all_files)}, 通过 {passed}, 失败 {failed}",
-            "total": len(all_files),
-            "sampled": sample_count,
+            "message": f"目录验证完成: 扫描 {total_scanned}, 抽样 {total_sampled}, 通过 {passed}, 失败 {failed}",
+            "total": total_scanned,
+            "sampled": total_sampled,
             "passed": passed,
             "failed": failed,
         }
         if errors:
             result["errors"] = errors[:20]
-
         return result
+
+    def _verify_batch_sync(self, sampled: list, verify_enabled: bool, verify_temp: Path) -> tuple:
+        """同步验证一批文件，返回 (passed, failed, sampled_count, errors)"""
+        passed = 0
+        failed = 0
+        errors = []
+
+        for file_path in sampled:
+            try:
+                if file_path.name.endswith(('.tar.zst', '.tar.gz', '.tgz', '.tar', '.7z', '.zip')) and verify_enabled:
+                    verify_temp.mkdir(parents=True, exist_ok=True)
+                    valid, detail = self._verify_archive_extract(file_path, verify_temp)
+                    # 清理临时文件
+                    if verify_temp.exists():
+                        for item in verify_temp.iterdir():
+                            try:
+                                if item.is_dir():
+                                    shutil.rmtree(str(item))
+                                else:
+                                    item.unlink()
+                            except Exception:
+                                pass
+                    if valid:
+                        passed += 1
+                    else:
+                        failed += 1
+                        errors.append(f"{file_path}: {detail}")
+                else:
+                    # 普通文件：验证可读性
+                    size = file_path.stat().st_size
+                    if size > 0:
+                        with open(str(file_path), 'rb') as f:
+                            f.read(4096)
+                    passed += 1
+            except Exception as e:
+                failed += 1
+                errors.append(f"{file_path}: {str(e)}")
+
+        return passed, failed, len(sampled), errors
+
+    async def _verify_batch(self, batch: list, verify_percent: float, verify_enabled: bool, verify_temp: Path) -> tuple:
+        """验证一批文件，返回 (passed, failed, sampled_count, errors)"""
+        sample_count = max(1, int(len(batch) * verify_percent / 100))
+        sample_count = min(sample_count, len(batch))
+        sampled = random.sample(batch, sample_count)
+        passed = 0
+        failed = 0
+        errors = []
+
+        for file_path in sampled:
+            try:
+                if file_path.name.endswith(('.tar.zst', '.tar.gz', '.tgz', '.tar', '.7z', '.zip')) and verify_enabled:
+                    verify_temp.mkdir(parents=True, exist_ok=True)
+                    valid, detail = await asyncio.to_thread(
+                        self._verify_archive_extract, file_path, verify_temp
+                    )
+                    # 清理临时文件
+                    if verify_temp.exists():
+                        for item in verify_temp.iterdir():
+                            try:
+                                if item.is_dir():
+                                    shutil.rmtree(str(item))
+                                else:
+                                    item.unlink()
+                            except Exception:
+                                pass
+                    if valid:
+                        passed += 1
+                    else:
+                        failed += 1
+                        errors.append(f"{file_path}: {detail}")
+                else:
+                    # 普通文件（含未勾选验证的压缩文件）：验证可读性
+                    size = file_path.stat().st_size
+                    if size > 0:
+                        with open(str(file_path), 'rb') as f:
+                            f.read(4096)
+                    passed += 1
+            except Exception as e:
+                failed += 1
+                errors.append(f"{file_path}: {str(e)}")
+
+        return passed, failed, sample_count, errors
 
     @staticmethod
     def _verify_archive_header(archive_path: Path) -> tuple:

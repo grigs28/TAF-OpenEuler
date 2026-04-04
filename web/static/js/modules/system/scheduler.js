@@ -45,9 +45,7 @@ const SchedulerManager = {
     actionTypes: [
         { value: 'backup', label: '备份任务' },
         { value: 'recovery', label: '恢复任务' },
-        { value: 'cleanup', label: '清理任务' },
-        { value: 'health_check', label: '健康检查' },
-        { value: 'retention_check', label: '保留期检查' },
+        { value: 'verify', label: '验证任务' },
         { value: 'custom', label: '自定义任务' }
     ],
     

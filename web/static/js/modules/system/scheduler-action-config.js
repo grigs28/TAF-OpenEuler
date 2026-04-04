@@ -17,24 +17,27 @@ export class ActionConfigManager {
         document.querySelectorAll('.action-config-panel').forEach(panel => {
             panel.style.display = 'none';
         });
-        
+
         // 隐藏顶部备份类型选择器
         const backupTaskTypeRow = document.getElementById('backupTaskTypeRow');
         if (backupTaskTypeRow) {
             backupTaskTypeRow.style.display = 'none';
         }
-        
+
+        // 根据动作类型显示/隐藏备份专属字段
+        const isBackup = actionType === 'backup';
+        document.querySelectorAll('.backup-only-field').forEach(el => {
+            el.style.display = isBackup ? '' : 'none';
+        });
+
         // 显示对应的配置面板
         const panelMap = {
             'backup': 'backupActionConfig',
             'recovery': 'recoveryActionConfig',
-            'cleanup': 'cleanupActionConfig',
-            'health_check': 'healthCheckActionConfig',
-            'retention_check': 'retentionCheckActionConfig',
             'verify': 'verifyActionConfig',
             'custom': 'customActionConfig'
         };
-        
+
         const panelId = panelMap[actionType];
         if (panelId) {
             const panel = document.getElementById(panelId);
@@ -42,9 +45,9 @@ export class ActionConfigManager {
                 panel.style.display = 'block';
             }
         }
-        
+
         // 如果是备份任务，显示顶部备份类型选择器
-        if (actionType === 'backup') {
+        if (isBackup) {
             if (backupTaskTypeRow) {
                 backupTaskTypeRow.style.display = 'block';
             }
@@ -86,9 +89,7 @@ export class ActionConfigManager {
             const panelMap = {
                 'backup': 'backupActionConfig',
                 'recovery': 'recoveryActionConfig',
-                'cleanup': 'cleanupActionConfig',
-                'health_check': 'healthCheckActionConfig',
-                'retention_check': 'retentionCheckActionConfig',
+                'verify': 'verifyActionConfig',
                 'custom': 'customActionConfig'
             };
             const panelId = panelMap[actionType];
@@ -234,22 +235,6 @@ export class ActionConfigManager {
                     }
                     break;
 
-                case 'cleanup':
-                    // 安全获取清理配置
-                    let retentionDays = 180; // 默认值
-                    if (isElementVisibleAndExists('#cleanupRetentionDays')) {
-                        retentionDays = parseInt(val('#cleanupRetentionDays', '180')) || 180;
-                    }
-                    config = {
-                        retention_days: retentionDays
-                    };
-                    break;
-
-                case 'health_check':
-                case 'retention_check':
-                    config = {};
-                    break;
-
                 case 'verify':
                     config = {
                         verify_type: val('#verifyType', 'directory'),
@@ -259,6 +244,11 @@ export class ActionConfigManager {
                     const verifyTapeDevice = val('#verifyTapeDevice', '');
                     if (verifyTapeDevice) {
                         config.tape_device = verifyTapeDevice;
+                    }
+                    // 掯持排除模式（与备份共享同一 textarea)
+                    const excludeText = val('#backupExcludePatterns', '').trim();
+                    if (excludeText) {
+                        config.exclude_patterns = excludeText.split('\n').filter(p => p.trim());
                     }
                     if (config.verify_type === 'directory' && config.source_paths.length === 0) {
                         showMessage('请至少添加一个验证源路径', 'error');
@@ -355,14 +345,7 @@ export class ActionConfigManager {
                     if (targetPathEl) targetPathEl.value = config.target_path;
                 }
                 break;
-                
-            case 'cleanup':
-                if (config.retention_days) {
-                    const retentionDaysEl = document.getElementById('cleanupRetentionDays');
-                    if (retentionDaysEl) retentionDaysEl.value = config.retention_days;
-                }
-                break;
-                
+
             case 'verify':
                 if (config.verify_type) {
                     const verifyTypeEl = document.getElementById('verifyType');
@@ -380,6 +363,14 @@ export class ActionConfigManager {
                     const verifyTapeDeviceEl = document.getElementById('verifyTapeDevice');
                     if (verifyTapeDeviceEl) verifyTapeDeviceEl.value = config.tape_device;
                 }
+                // 填充排除模式（与备份共享 textarea)
+                if (config.exclude_patterns) {
+                    const excludePatternsEl = document.getElementById('backupExcludePatterns');
+                    if (excludePatternsEl) {
+                        excludePatternsEl.value = config.exclude_patterns.join('\n');
+                    }
+                }
+                break;
                 break;
 
             case 'custom':

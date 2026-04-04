@@ -327,7 +327,8 @@ async def get_backup_tasks(
                         current_compression_progress,  # 传入从内存获取的压缩进度
                         final_dir_has_files,  # 传入 final 目录状态
                         prefetch_done,  # 传入预取器是否完成
-                        in_memory_compression_completed  # 传入压缩是否完成
+                        in_memory_compression_completed,  # 传入压缩是否完成
+                        task_type=row.get("task_type")  # 传入任务类型，验证任务使用两阶段流
                     )
 
                     # 所有统计字段：优先使用内存中的实时统计，其次回退到数据库字段
@@ -384,7 +385,7 @@ async def get_backup_tasks(
                 # 仅当无状态过滤或过滤为pending/all时返回
                 include_sched = (not status) or (normalized_status in ("all", "pending", 'not_run', '未运行'))
                 if include_sched:
-                    sched_where = ["LOWER(action_type::text)=LOWER('BACKUP')"]
+                    sched_where = ["LOWER(action_type::text) IN (LOWER('BACKUP'), LOWER('VERIFY'))"]
                     sched_params = []
                     if q and q.strip():
                         sched_where.append("task_name ILIKE $1")
@@ -438,11 +439,16 @@ async def get_backup_tasks(
                     for srow, acfg, metadata, template_id in parsed_sched_rows:
                         # 从action_config中提取task_type/tape_device/source_paths
                         atype = 'full'
+                        # 检查是否为验证类型计划任务
+                        raw_action_type = srow.get('action_type', '')
+                        if raw_action_type and str(raw_action_type).lower() == 'verify':
+                            atype = 'verify'
                         tdev = None
                         spaths: Optional[List[str]] = None
                         try:
                             if isinstance(acfg, dict):
-                                atype = acfg.get('task_type') or atype
+                                if atype != 'verify':  # 验证任务不从action_config取task_type
+                                    atype = acfg.get('task_type') or atype
                                 tdev = acfg.get('tape_device')
                                 cfg_paths = acfg.get('source_paths')
                                 if isinstance(cfg_paths, list):
@@ -456,7 +462,7 @@ async def get_backup_tasks(
                             spaths = template_fallback.get("source_paths") or []
                         if (not tdev) and template_fallback:
                             tdev = template_fallback.get("tape_device")
-                        stage_info = _build_stage_info("", None, "pending")
+                        stage_info = _build_stage_info("", None, "pending", task_type=atype)
                         tasks.append({
                             "task_id": srow["id"],
                             "task_name": srow["task_name"],
@@ -645,7 +651,8 @@ async def get_backup_task(task_id: int, http_request: Request):
                 current_compression_progress,
                 final_dir_has_files,  # 传入 final 目录状态
                 prefetch_done,  # 传入预取器是否完成
-                single_compression_completed  # 传入压缩是否完成
+                single_compression_completed,  # 传入压缩是否完成
+                task_type=str(row.get("task_type", ""))  # 传入任务类型
             )
 
             return {
