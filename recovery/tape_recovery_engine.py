@@ -275,12 +275,12 @@ class TapeRecoveryEngine:
             except Exception as e:
                 yield {"type": "log", "message": f"清理挂载点: {e}"}
 
-            cmd_str = f"{ltfs_bin} -o devname={tape_device} {mount_point}"
+            cmd_str = f"{ltfs_bin} -o devname={tape_device} -o allow_root {mount_point}"
             yield {"type": "log", "message": f"$ {cmd_str}"}
 
             try:
                 process = await asyncio.create_subprocess_exec(
-                    ltfs_bin, '-o', f'devname={tape_device}', str(mount_point),
+                    ltfs_bin, '-o', f'devname={tape_device}', '-o', 'allow_root', str(mount_point),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
@@ -304,8 +304,10 @@ class TapeRecoveryEngine:
                 read_task = asyncio.create_task(_read_stderr())
                 mounted = False
 
-                # 等待挂载（最多60秒检查 + 30秒二次检查）
-                for wait_time in range(60):
+                # 首次挂载等待更久：LTO-9 新磁带 media optimization 需要 40 分钟，最长可达 2 小时
+                first_mount_timeout = 6600 if attempt == 1 else 480
+                second_mount_timeout = 600 if attempt == 1 else 120
+                for wait_time in range(first_mount_timeout):
                     # 先 yield 队列中的输出
                     while not output_queue.empty():
                         try:
@@ -326,10 +328,10 @@ class TapeRecoveryEngine:
                         mounted = True
                         break
 
-                # 如果还没挂载，再等30秒
+                # 如果还没挂载，继续等待
                 if not mounted and process.returncode is None:
-                    yield {"type": "log", "message": "初始等待未检测到挂载，继续等待..."}
-                    for wait_time in range(30):
+                    yield {"type": "log", "message": f"初始等待未检测到挂载，继续等待（最多 {second_mount_timeout} 秒）..."}
+                    for wait_time in range(second_mount_timeout):
                         while not output_queue.empty():
                             try:
                                 text = output_queue.get_nowait()
@@ -380,9 +382,34 @@ class TapeRecoveryEngine:
                 if process.returncode is not None:
                     yield {"type": "log", "message": f"LTFS 进程已退出，返回码: {process.returncode}"}
                 else:
-                    yield {"type": "log", "message": "挂载超时，终止 LTFS 进程"}
-                    process.kill()
-                    await process.wait()
+                    # 挂载超时，用 fusermount -u 安全卸载，等待 LTFS 自行退出
+                    yield {"type": "log", "message": "挂载超时，尝试 fusermount -u 卸载..."}
+
+                    # 1. 先尝试 fusermount -u 卸载（让 LTFS 有机会做 cleanup）
+                    try:
+                        fuse_proc = await asyncio.create_subprocess_exec(
+                            'fusermount', '-u', str(mount_point),
+                            stdout=asyncio.subprocess.DEVNULL,
+                            stderr=asyncio.subprocess.DEVNULL
+                        )
+                        await asyncio.wait_for(fuse_proc.wait(), timeout=600)
+                    except Exception:
+                        pass
+
+                    # 2. 等待 LTFS 进程自行退出（不 kill，等它写完索引和 CM 数据）
+                    yield {"type": "log", "message": "等待 LTFS 进程自行退出（写入索引和CM数据）..."}
+                    waited = 0
+                    while process.returncode is None:
+                        try:
+                            await asyncio.wait_for(process.wait(), timeout=60)
+                            break
+                        except asyncio.TimeoutError:
+                            waited += 60
+                            yield {"type": "log", "message": f"LTFS 进程仍在运行... ({waited}s)"}
+                    if process.returncode is not None:
+                        yield {"type": "log", "message": f"LTFS 进程已自行退出（返回码: {process.returncode}）"}
+                    else:
+                        yield {"type": "log", "message": "LTFS 进程已退出"}
 
                 if attempt < max_retries:
                     yield {"type": "log", "message": f"等待 {retry_interval} 秒后重试..."}
@@ -806,6 +833,154 @@ class TapeRecoveryEngine:
             logger.error(f"[磁带恢复] 列出备份集内容失败: {e}")
             return {"set_id": set_id, "entries": [], "total_entries": 0,
                     "total_files": 0, "total_dirs": 0, "archives": [], "error": str(e)}
+
+    async def search_files_db_first_streaming(self, set_id: str, keyword: str,
+                                               tape_label: str = None) -> AsyncGenerator[Dict, None]:
+        """数据库优先搜索文件名：先查 DB，DB 无数据时逐个解压归档并缓存
+
+        无论 DB 是否有结果，都必须检索所有归档（因为重名文件可能存在于不同归档）。
+        """
+        set_dir = self._get_mount_point() / set_id
+        keyword_lower = keyword.lower().strip()
+
+        if not keyword_lower:
+            yield {"type": "error", "message": "搜索关键词不能为空"}
+            return
+
+        if not set_dir.exists():
+            yield {"type": "error", "message": f"备份集目录不存在: {set_id}"}
+            return
+
+        # 获取 tape_label
+        if not tape_label:
+            tape_status = await self.get_tape_status()
+            tape_label = tape_status.get("tape_label") or "unknown"
+
+        archive_files = sorted([f for f in set_dir.iterdir() if f.is_file()])
+        total = len(archive_files)
+        yield {"type": "start", "total_archives": total, "keyword": keyword}
+
+        total_matches = 0
+        archives_with_matches = 0
+
+        for idx, archive_file in enumerate(archive_files):
+            # 先查数据库缓存
+            cache_status = await self.check_archive_cache(tape_label, set_id, archive_file.name)
+
+            if cache_status and cache_status.get("cached"):
+                # 从数据库搜索
+                yield {
+                    "type": "progress",
+                    "archive": archive_file.name,
+                    "current": idx + 1,
+                    "total": total,
+                    "source": "cache",
+                }
+                try:
+                    cached_matches = await self._search_cached_files(
+                        tape_label, set_id, archive_file.name, keyword_lower
+                    )
+                    yield {
+                        "type": "archive_result",
+                        "archive": archive_file.name,
+                        "total_files": cache_status["count"],
+                        "match_count": len(cached_matches),
+                        "matches": cached_matches,
+                        "source": "cache",
+                    }
+                    if cached_matches:
+                        archives_with_matches += 1
+                        total_matches += len(cached_matches)
+                except Exception as e:
+                    logger.warning(f"[搜索] 数据库搜索归档 {archive_file.name} 失败: {e}")
+                    yield {
+                        "type": "archive_result",
+                        "archive": archive_file.name,
+                        "total_files": 0,
+                        "match_count": 0,
+                        "matches": [],
+                        "error": str(e),
+                        "source": "cache_error",
+                    }
+            else:
+                # 未缓存，走解压
+                yield {
+                    "type": "progress",
+                    "archive": archive_file.name,
+                    "current": idx + 1,
+                    "total": total,
+                    "source": "decompress",
+                }
+                try:
+                    entries = await asyncio.to_thread(self._list_archive_sync, archive_file)
+                    file_entries = [e for e in entries if not e.get("is_dir")]
+                    matches = [e for e in file_entries if keyword_lower in (e.get("name", "")).lower()]
+
+                    # 保存到数据库缓存
+                    await self.save_archive_contents(
+                        tape_label, set_id, archive_file.name,
+                        entries, archive_file.stat().st_size,
+                    )
+
+                    yield {
+                        "type": "archive_result",
+                        "archive": archive_file.name,
+                        "total_files": len(file_entries),
+                        "match_count": len(matches),
+                        "matches": matches,
+                        "source": "decompress",
+                    }
+                    if matches:
+                        archives_with_matches += 1
+                        total_matches += len(matches)
+                except Exception as e:
+                    logger.error(f"[搜索] 解压归档 {archive_file.name} 失败: {e}")
+                    yield {
+                        "type": "archive_result",
+                        "archive": archive_file.name,
+                        "total_files": 0,
+                        "match_count": 0,
+                        "matches": [],
+                        "error": str(e),
+                        "source": "error",
+                    }
+
+        yield {
+            "type": "done",
+            "total_archives": total,
+            "archives_with_matches": archives_with_matches,
+            "total_matches": total_matches,
+            "keyword": keyword,
+            "message": f"搜索完成: 在 {total} 个归档中找到 {total_matches} 个匹配文件（{archives_with_matches} 个归档含匹配）",
+        }
+
+    async def _search_cached_files(self, tape_label: str, set_id: str,
+                                     archive_filename: str, keyword_lower: str) -> List[Dict]:
+        """从数据库缓存搜索归档内匹配的文件"""
+        try:
+            from utils.scheduler.db_utils import get_opengauss_connection
+            async with get_opengauss_connection() as conn:
+                rows = await conn.fetch(
+                    "SELECT file_path, file_size, is_dir, modified_time "
+                    "FROM tape_archive_contents "
+                    "WHERE tape_label = $1 AND set_id = $2 AND archive_filename = $3 "
+                    "AND is_dir = FALSE AND LOWER(file_path) LIKE $4 "
+                    "ORDER BY file_path",
+                    tape_label, set_id, archive_filename,
+                    '%' + keyword_lower.replace('_', '\\_').replace('%', '\\%') + '%',
+                )
+                results = []
+                for row in rows:
+                    results.append({
+                        "name": row['file_path'],
+                        "size": row['file_size'],
+                        "is_dir": row['is_dir'],
+                        "modified_time": row['modified_time'].isoformat() if row['modified_time'] else None,
+                    })
+                return results
+        except Exception as e:
+            logger.warning(f"[搜索] 数据库查询失败: {e}")
+            return []
 
     async def search_files_streaming(self, set_id: str, keyword: str) -> AsyncGenerator[Dict, None]:
         """在备份集所有归档中搜索文件名，逐个归档流式返回"""

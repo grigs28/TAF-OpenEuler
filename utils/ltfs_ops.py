@@ -32,7 +32,7 @@ async def safe_unmount_ltfs(
     mount_point,
     tape_device=None,
     wait_ltfs=True,
-    max_wait=120,
+    max_wait=3600,
 ):
     """完整5步安全卸载 LTFS（遵循 IBM/Quantum 官方文档）
 
@@ -76,18 +76,44 @@ async def safe_unmount_ltfs(
 
         # 步骤 3: 等待 LTFS 进程完全退出（写索引+CM数据）
         if wait_ltfs:
-            logger.info("[LTFS卸载] 3/5 等待 LTFS 进程退出（写入索引和CM数据）...")
-            exited, waited = await _wait_ltfs_exit(max_wait)
-            if exited:
-                logger.info(f"[LTFS卸载] LTFS 进程已退出（等待 {waited} 秒）")
+            # fusermount 返回后先检查 LTFS 进程是否已退出
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-x", "ltfs"],
+                    capture_output=True, text=True, timeout=5,
+                )
+                already_exited = result.returncode != 0
+            except Exception:
+                already_exited = True
+
+            if already_exited:
+                logger.info("[LTFS卸载] 3/5 LTFS 进程已退出（fusermount 返回时已清理完毕）")
             else:
-                logger.warning(f"[LTFS卸载] LTFS 进程在 {max_wait} 秒后仍未退出")
+                logger.info("[LTFS卸载] 3/5 等待 LTFS 进程退出（写入索引和CM数据）...")
+                exited, waited = await _wait_ltfs_exit(max_wait)
+                if exited:
+                    logger.info(f"[LTFS卸载] LTFS 进程已退出（等待 {waited} 秒）")
+                else:
+                    logger.warning(f"[LTFS卸载] LTFS 进程在 {max_wait} 秒后仍未退出")
         else:
             logger.info("[LTFS卸载] 3/5 跳过等待 LTFS 进程退出")
 
-        # 步骤 4: 验证挂载点已卸载
+        # 步骤 4: 验证挂载点已卸载（双重检查：is_mount + mount | grep）
         logger.info("[LTFS卸载] 4/5 验证挂载点...")
-        if mount_point.is_mount():
+        still_mounted = mount_point.is_mount()
+        if not still_mounted:
+            # 用 mount 命令二次确认（FUSE 挂载点有时 is_mount 不准确）
+            try:
+                mount_check = subprocess.run(
+                    ["mount"], capture_output=True, text=True, timeout=5,
+                )
+                for line in mount_check.stdout.splitlines():
+                    if str(mount_point) in line:
+                        still_mounted = True
+                        break
+            except Exception:
+                pass
+        if still_mounted:
             logger.warning("[LTFS卸载] 挂载点仍然存在，尝试强制卸载...")
             try:
                 subprocess.run(
@@ -97,7 +123,18 @@ async def safe_unmount_ltfs(
                 await asyncio.sleep(2)
             except Exception:
                 pass
-            if mount_point.is_mount():
+            # 二次验证
+            _still = mount_point.is_mount()
+            if not _still:
+                try:
+                    mc = subprocess.run(["mount"], capture_output=True, text=True, timeout=5)
+                    for line in mc.stdout.splitlines():
+                        if str(mount_point) in line:
+                            _still = True
+                            break
+                except Exception:
+                    pass
+            if _still:
                 return False, f"挂载点 {mount_point} 卸载失败"
         else:
             logger.info("[LTFS卸载] 挂载点已卸载")
@@ -167,14 +204,15 @@ async def cleanup_mount(mount_point):
     return not still_mounted
 
 
-async def eject_tape(tape_device, timeout=120):
+async def eject_tape(tape_device, timeout=600):
     """磁带弹出（mt offline）
 
     mt offline 会将磁带卷回并弹出（与 mt eject 等价）。
+    超时后不杀进程（mt 仍在后台运行），返回超时状态由调用方处理。
 
     Args:
         tape_device: 磁带设备路径（如 /dev/nst0）
-        timeout: 超时秒数
+        timeout: 超时秒数（默认600s），超时不杀进程
 
     Returns:
         (success, message)
@@ -183,21 +221,39 @@ async def eject_tape(tape_device, timeout=120):
         return False, "未指定磁带设备"
 
     try:
-        logger.info(f"[磁带弹出] mt -f {tape_device} offline")
+        logger.info(f"[磁带弹出] mt -f {tape_device} offline（超时 {timeout}s，超时不杀进程）...")
         proc = await asyncio.create_subprocess_exec(
             "mt", "-f", tape_device, "offline",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
 
+        # 轮询等待，每60秒输出日志，超时不杀进程
+        waited = 0
+        while proc.returncode is None:
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=60)
+                break
+            except asyncio.TimeoutError:
+                waited += 60
+                logger.info(f"[磁带弹出] mt offline 仍在运行... ({waited}s)")
+                if waited >= timeout:
+                    logger.warning(f"[磁带弹出] 等待 {timeout}s 超时，mt 进程仍在后台运行，不强制终止")
+                    return False, f"mt offline 超时 ({timeout}s)，进程仍在后台运行，请人工确认"
+
+        # 进程已退出
         if proc.returncode == 0:
+            logger.info("[磁带弹出] 磁带已弹出")
             return True, "磁带已弹出"
         else:
-            err = stderr.decode("utf-8", errors="ignore") if stderr else f"返回码 {proc.returncode}"
+            # 读取 stderr
+            try:
+                _, stderr = await asyncio.wait_for(proc.communicate(), timeout=5)
+            except Exception:
+                stderr = None
+            err = stderr.decode("utf-8", errors="ignore").strip() if stderr else f"返回码 {proc.returncode}"
+            logger.error(f"[磁带弹出] mt offline 失败: {err}")
             return False, err
-    except asyncio.TimeoutError:
-        return False, f"mt offline 超时 ({timeout}s)"
     except FileNotFoundError:
         return False, "mt 命令未找到"
     except Exception as e:
@@ -218,7 +274,7 @@ async def _do_unmount(mount_point):
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=60)
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=600)
         if proc.returncode == 0:
             return True
         err = stderr.decode("utf-8", errors="ignore") if stderr else ""
@@ -234,7 +290,7 @@ async def _do_unmount(mount_point):
         return False
 
 
-async def _wait_ltfs_exit(max_wait=120, poll_interval=3):
+async def _wait_ltfs_exit(max_wait=3600, poll_interval=5):
     """等待 LTFS 进程完全退出
 
     fusermount -u 返回后，LTFS 进程仍在写入索引和 CM 数据到磁带。
@@ -247,7 +303,7 @@ async def _wait_ltfs_exit(max_wait=120, poll_interval=3):
     while waited < max_wait:
         try:
             result = subprocess.run(
-                ["pgrep", "-f", "ltfs"],
+                ["pgrep", "-x", "ltfs"],
                 capture_output=True, text=True, timeout=5,
             )
             if result.returncode != 0:

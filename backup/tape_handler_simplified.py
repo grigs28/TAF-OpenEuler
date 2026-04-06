@@ -235,13 +235,13 @@ class TapeHandlerSimplified:
                 logger.info("[LTFS] ✅ 挂载成功（延迟检测）")
                 return True, "挂载成功"
             
+            # 不 kill LTFS 进程，等待自行退出
+            logger.warning("[LTFS] 挂载失败，等待 LTFS 进程自行退出（不强制终止）...")
             try:
-                process.terminate()
-                await asyncio.sleep(1)
-                if process.returncode is None:
-                    process.kill()
-            except Exception:
-                pass
+                await asyncio.wait_for(process.wait(), timeout=600)
+                logger.info("[LTFS] 进程已自行退出")
+            except asyncio.TimeoutError:
+                logger.warning("[LTFS] 进程 600s 后仍未退出，不再等待（进程仍在后台运行）")
             
             _, stderr = await process.communicate()
             error_msg = stderr[:200] if stderr else "挂载超时"

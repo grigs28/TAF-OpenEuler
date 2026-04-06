@@ -350,14 +350,13 @@ class LinuxTapeOperator:
             start_time = time.time()
 
             while True:
-                # 检查超时
+                # 检查超时（不 kill，等待进程自行完成）
                 if time.time() - start_time > timeout:
-                    process.kill()
-                    logger.error(f"[同步] LTFS 格式化超时 ({timeout}秒)")
+                    logger.error(f"[同步] LTFS 格式化超时 ({timeout}秒)，进程仍在后台运行，不强制终止")
                     return {
                         "success": False,
                         "stdout": "\n".join(stdout_lines),
-                        "stderr": f"命令执行超时 ({timeout}秒)",
+                        "stderr": f"命令执行超时 ({timeout}秒)，进程仍在运行",
                         "returncode": -1,
                         "method": "ltfs"
                     }

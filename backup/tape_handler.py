@@ -285,7 +285,7 @@ class TapeHandler:
                     logger.info("[LTFS] 磁带是 LTFS 格式，挂载成功（延迟检测）")
                     return True, "LTFS 格式，已挂载"
 
-                # 进程还在运行但未挂载，需要终止进程
+                # 进程还在运行但未挂载，安全等待进程退出（不 kill）
                 error_msg = "挂载超时或失败"
                 try:
                     # 尝试读取进程输出
@@ -293,22 +293,17 @@ class TapeHandler:
                     error_msg = stderr.decode('utf-8', errors='ignore')[:500] if stderr else "未知错误"
                 except asyncio.TimeoutError:
                     error_msg = "挂载超时"
-                    # 强制终止进程
+                    # 不终止进程，等 LTFS 自行完成写入
+                    logger.warning("[LTFS] 挂载超时，等待 LTFS 进程自行退出（不强制终止）...")
                     try:
-                        process.terminate()
-                        await asyncio.sleep(1)
-                        if process.returncode is None:
-                            process.kill()
-                    except Exception:
-                        pass
+                        await asyncio.wait_for(process.wait(), timeout=600)
+                        logger.info("[LTFS] 进程已自行退出")
+                    except asyncio.TimeoutError:
+                        logger.warning("[LTFS] 进程 600s 后仍未退出，不再等待（进程仍在后台运行）")
 
-                # 确保进程已终止
+                # 检查进程是否已退出
                 if process.returncode is None:
-                    try:
-                        process.kill()
-                        await process.wait()
-                    except Exception:
-                        pass
+                    logger.warning("[LTFS] 进程仍在后台运行，不强制终止")
 
                 # 检查常见错误
                 if 'mountpoint is not empty' in error_msg.lower():
@@ -748,7 +743,12 @@ class TapeHandler:
                     stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=5)
                     error_msg = stderr.decode('utf-8', errors='ignore')[:200] if stderr else "未知错误"
                 except asyncio.TimeoutError:
-                    process.kill()
+                    # 不 kill LTFS 进程，等它自行退出
+                    logger.warning("[挂载重试] 读取超时，等待 LTFS 进程自行退出...")
+                    try:
+                        await asyncio.wait_for(process.wait(), timeout=600)
+                    except asyncio.TimeoutError:
+                        logger.warning("[挂载重试] LTFS 进程 600s 后仍未退出，不再等待")
                     error_msg = "挂载超时"
 
                 logger.warning(f"[挂载重试] 第 {attempt} 次挂载失败: {error_msg}")
