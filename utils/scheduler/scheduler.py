@@ -279,6 +279,30 @@ class BackupScheduler:
         }
 
 
+# 任务类型优先级：backup(1) > tape verify(2) > directory verify(3) > 其他(9)
+_ACTION_PRIORITY = {
+    'backup': 1,
+    'verify': 2,
+    'health_check': 10,
+}
+
+
+def _get_action_priority(task_info: Dict) -> int:
+    """获取任务优先级（数值越小优先级越高）"""
+    task = task_info.get('task')
+    if not task:
+        return 9
+    action_type = task.action_type
+    action_value = action_type.value if hasattr(action_type, 'value') else str(action_type)
+    # 磁带验证优先于目录验证
+    if action_value == 'verify':
+        config = task.action_config or {}
+        if config.get('verify_type') == 'tape':
+            return 2
+        return 3
+    return _ACTION_PRIORITY.get(action_value, 9)
+
+
 class TaskScheduler:
     """增强的计划任务调度器 - 支持数据库持久化和多种调度方式"""
 
@@ -289,6 +313,7 @@ class TaskScheduler:
         self._scheduler_task = None
         self.system_instance = None
         self._running_executions: Dict[int, asyncio.Task] = {}  # 正在运行的任务
+        self._execution_lock = asyncio.Lock()  # 全局互斥锁：同时只允许一个任务执行
 
     async def initialize(self, system_instance):
         """初始化调度器"""
@@ -833,39 +858,22 @@ class TaskScheduler:
                         )
 
                     if current_time >= next_run:
-                        # 记录触发执行的任务信息
-                        logger.info(
-                            f"[调度器主循环] 检测到任务需要执行 - "
-                            f"任务ID: {task_id}, "
-                            f"任务名称: {task_name}, "
-                            f"下次执行时间: {next_run.strftime('%Y-%m-%d %H:%M:%S') if next_run else 'N/A'}, "
-                            f"当前时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}"
-                        )
+                        # 收集待执行任务（不立即执行）
+                        triggered_tasks.append((task_id, task_info, task_name))
 
-                        # 执行任务（在后台执行，不阻塞）
-                        execution_task = asyncio.create_task(task_info['execute_func']())
-                        self._running_executions[task_id] = execution_task
-                        triggered_tasks.append(task_name)
-
-                        # 清理已完成的任务
-                        def cleanup_task(exec_task, tid):
-                            async def cleanup():
-                                try:
-                                    await exec_task
-                                except Exception:
-                                    pass
-                                finally:
-                                    if tid in self._running_executions:
-                                        del self._running_executions[tid]
-                            return cleanup
-
-                        asyncio.create_task(cleanup_task(execution_task, task_id)())
-
-                # 如果有任务被触发，输出汇总信息
+                # 按优先级排序：backup > tape verify > directory verify > 其他
                 if triggered_tasks:
+                    triggered_tasks.sort(key=lambda t: _get_action_priority(t[1]))
+
+                    task_names = [t[2] for t in triggered_tasks]
                     logger.info(
-                        f"[调度器主循环] 本次检查触发了 {len(triggered_tasks)} 个任务: "
-                        f"{', '.join(triggered_tasks)}"
+                        f"[调度器主循环] 本次检查触发 {len(triggered_tasks)} 个任务"
+                        f"（按优先级排序）: {', '.join(task_names)}"
+                    )
+
+                    # 后台顺序执行：高优先级先执行，完成后执行下一个
+                    asyncio.create_task(
+                        self._execute_triggered_tasks(triggered_tasks)
                     )
 
                 # 每分钟检查一次
@@ -877,6 +885,29 @@ class TaskScheduler:
             except Exception as e:
                 logger.error(f"[调度器主循环] 调度器循环出错: {str(e)}", exc_info=True)
                 await asyncio.sleep(360)
+
+    async def _execute_triggered_tasks(self, triggered_tasks: list):
+        """按优先级顺序执行触发的任务（一次只执行一个）"""
+        for task_id, task_info, task_name in triggered_tasks:
+            async with self._execution_lock:
+                logger.info(
+                    f"[调度器顺序执行] 开始执行 - "
+                    f"任务ID: {task_id}, 任务名称: {task_name}"
+                )
+                try:
+                    await task_info['execute_func']()
+                except Exception as e:
+                    logger.error(
+                        f"[调度器顺序执行] 任务执行失败 - "
+                        f"任务ID: {task_id}, 任务名称: {task_name}: {e}"
+                    )
+                finally:
+                    if task_id in self._running_executions:
+                        del self._running_executions[task_id]
+                logger.info(
+                    f"[调度器顺序执行] 任务完成 - "
+                    f"任务ID: {task_id}, 任务名称: {task_name}"
+                )
 
     async def get_tasks(self, enabled_only: bool = False) -> List[ScheduledTask]:
         """获取所有计划任务"""

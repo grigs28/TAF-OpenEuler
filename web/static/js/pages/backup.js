@@ -215,6 +215,8 @@
                 return '<span class="badge bg-primary">运行中</span>';
             case 'cancelled':
                 return '<span class="badge bg-secondary">已取消</span>';
+            case 'interrupted':
+                return '<span class="badge bg-warning text-dark">中断</span>';
             case 'pending':
                 // 对于执行记录的pending状态，需要进一步判断
                 if (hasStarted) {
@@ -313,7 +315,7 @@
                     return 'bg-purple pulse-badge';
                 }
                 if (stageCode === 'compress') {
-                    return 'bg-amber text-dark pulse-badge';
+                    return 'bg-amber pulse-badge';
                 }
                 if (stageCode === 'finalize') {
                     return 'bg-emerald pulse-badge';
@@ -329,7 +331,7 @@
                             case 'scan':
                                 return 'bg-info pulse-badge';
                             case 'compress':
-                                return 'bg-amber text-dark pulse-badge';
+                                return 'bg-amber pulse-badge';
                             case 'prefetch':
                                 return 'bg-purple pulse-badge';
                             default:
@@ -343,7 +345,7 @@
                     case 'prefetch':
                         return 'bg-purple pulse-badge';
                     case 'compress':
-                        return 'bg-amber text-dark pulse-badge';
+                        return 'bg-amber pulse-badge';
                     case 'copy':
                         return 'bg-primary pulse-badge';
                     case 'finalize':
@@ -1209,11 +1211,10 @@
             }
         }
 
-        // 模板任务且状态为pending时，使用更协调的样式
+        // 模板任务使用深色背景浅色字
         let rowClass = '';
         if (task.is_template) {
-            // 所有模板任务都使用浅灰色背景，更柔和协调
-            rowClass = 'table-light';
+            rowClass = 'bg-dark text-light';
         }
         
         return `
