@@ -272,13 +272,18 @@ const SchedulerManager = {
             });
         }
 
-        // 验证类型切换：控制磁带设备容器显隐
+        // 验证类型切换：控制磁带设备容器和源路径容器显隐
         const verifyTypeSelect = document.getElementById('verifyType');
         if (verifyTypeSelect) {
             verifyTypeSelect.addEventListener('change', () => {
+                const isTape = verifyTypeSelect.value === 'tape';
                 const tapeContainer = document.getElementById('verifyTapeDeviceContainer');
                 if (tapeContainer) {
-                    tapeContainer.style.display = verifyTypeSelect.value === 'tape' ? 'block' : 'none';
+                    tapeContainer.style.display = isTape ? 'block' : 'none';
+                }
+                const sourcePathContainer = document.getElementById('verifySourcePathContainer');
+                if (sourcePathContainer) {
+                    sourcePathContainer.style.display = isTape ? 'none' : 'block';
                 }
             });
         }

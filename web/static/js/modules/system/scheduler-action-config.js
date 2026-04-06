@@ -349,7 +349,10 @@ export class ActionConfigManager {
             case 'verify':
                 if (config.verify_type) {
                     const verifyTypeEl = document.getElementById('verifyType');
-                    if (verifyTypeEl) verifyTypeEl.value = config.verify_type;
+                    if (verifyTypeEl) {
+                        verifyTypeEl.value = config.verify_type;
+                        verifyTypeEl.dispatchEvent(new Event('change'));
+                    }
                 }
                 if (config.verify_percent) {
                     const verifyPercentEl = document.getElementById('verifyPercent');
