@@ -136,6 +136,12 @@ class Settings(BaseSettings):
     WECHAT_ENABLED: bool = False  # 是否启用微信通知
     WECHAT_REPORT_INTERVAL: int = 30  # 备份进度汇报间隔（分钟）
 
+    # Syslog 转发配置
+    SYSLOG_ENABLED: bool = False  # 是否启用 syslog 转发
+    SYSLOG_HOST: str = "192.168.0.14"  # Syslog 服务器地址
+    SYSLOG_PORT: int = 515  # Syslog 服务器端口（Vector JSON 端口）
+    SYSLOG_LEVEL: str = "WARNING"  # 转发级别：DEBUG/INFO/WARNING/ERROR/CRITICAL
+
     # SMB/CIFS 网络路径配置
     SMB_USERNAME: str = ""  # SMB 用户名（如：administrator）
     SMB_PASSWORD: str = ""  # SMB 密码

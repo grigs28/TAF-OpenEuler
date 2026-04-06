@@ -12,7 +12,7 @@ from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from .models import DingTalkConfig, NotificationEvents, NotificationUser
+from .models import DingTalkConfig, NotificationEvents, NotificationUser, SyslogConfig
 from models.system_log import OperationType, LogCategory, LogLevel
 from utils.log_utils import log_operation, log_system
 from utils.scheduler.db_utils import get_opengauss_connection
@@ -761,3 +761,207 @@ async def delete_notification_user(user_id: int, request: Request):
         logger.error(f"删除通知人员失败: {error_msg}", exc_info=True)
         raise HTTPException(status_code=500, detail=error_msg)
 
+
+# ========== Syslog 转发配置 ==========
+
+@router.get("/notification/syslog")
+async def get_syslog_config():
+    """获取 Syslog 转发配置"""
+    try:
+        from config.settings import get_settings
+        settings = get_settings()
+
+        return {
+            "success": True,
+            "config": {
+                "syslog_enabled": settings.SYSLOG_ENABLED,
+                "syslog_host": settings.SYSLOG_HOST,
+                "syslog_port": settings.SYSLOG_PORT,
+                "syslog_level": settings.SYSLOG_LEVEL
+            }
+        }
+    except Exception as e:
+        logger.error(f"获取 Syslog 配置失败: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+
+@router.put("/notification/syslog")
+async def update_syslog_config(config: SyslogConfig, request: Request):
+    """更新 Syslog 转发配置"""
+    start_time = datetime.now()
+
+    try:
+        from config.settings import get_settings, reload_settings
+        from config.env_file_manager import EnvFileManager
+
+        current_settings = get_settings()
+        old_values = {
+            "syslog_enabled": current_settings.SYSLOG_ENABLED,
+            "syslog_host": current_settings.SYSLOG_HOST,
+            "syslog_port": current_settings.SYSLOG_PORT,
+            "syslog_level": current_settings.SYSLOG_LEVEL
+        }
+
+        # 验证级别
+        valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
+        level = config.syslog_level.upper()
+        if level not in valid_levels:
+            return {"success": False, "message": f"无效的日志级别: {config.syslog_level}"}
+
+        # 验证端口
+        if not (1 <= config.syslog_port <= 65535):
+            return {"success": False, "message": "端口范围应为 1-65535"}
+
+        # 写入 .env
+        env_manager = EnvFileManager()
+        updates = {
+            "SYSLOG_ENABLED": str(config.syslog_enabled).lower(),
+            "SYSLOG_HOST": config.syslog_host,
+            "SYSLOG_PORT": str(config.syslog_port),
+            "SYSLOG_LEVEL": level
+        }
+        env_manager.write_env_file(updates, backup=True)
+
+        # 重新加载配置
+        reload_settings()
+
+        # 动态更新 syslog handler（不重启服务）
+        _update_syslog_handler()
+
+        duration_ms = int((datetime.now() - start_time).total_seconds() * 1000)
+
+        # 记录操作日志
+        client_ip = request.client.host if request.client else "unknown"
+        await log_operation(
+            operation_type=OperationType.CONFIG,
+            resource_type="system",
+            resource_id="syslog",
+            resource_name="Syslog转发配置",
+            operation_name="更新Syslog配置",
+            operation_description=f"更新Syslog配置: {config.syslog_host}:{config.syslog_port}",
+            category="system",
+            success=True,
+            old_values=old_values,
+            new_values=updates,
+            ip_address=client_ip,
+            request_method="PUT",
+            request_url=str(request.url),
+            duration_ms=duration_ms
+        )
+
+        return {
+            "success": True,
+            "message": "Syslog 配置已更新",
+            "config": updates
+        }
+
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"更新 Syslog 配置失败: {error_msg}", exc_info=True)
+        return {"success": False, "message": error_msg}
+
+
+@router.post("/notification/syslog/test")
+async def test_syslog_connection(request: Request):
+    """测试 Syslog 连接（JSON 格式，VictoriaLogs 兼容）"""
+    try:
+        from config.settings import get_settings
+        settings = get_settings()
+        host = settings.SYSLOG_HOST
+        port = settings.SYSLOG_PORT
+
+        _send_syslog_json("Syslog 连接测试 - " + datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + " UTC")
+
+        return {
+            "success": True,
+            "message": f"测试消息已发送到 {host}:{port}"
+        }
+
+    except socket.timeout:
+        return {"success": False, "message": f"连接超时: {host}:{port}"}
+    except Exception as e:
+        return {"success": False, "message": f"连接失败: {str(e)}"}
+
+
+def _send_syslog_json(message: str, level_name: str = "INFO"):
+    """通过原生 socket 发送 JSON 格式日志到 Vector/VictoriaLogs
+
+    字段说明：
+    - _msg: VictoriaLogs 要求的日志内容字段
+    - timestamp: UTC 时间戳
+    - level: 日志级别
+    - log_source: 日志来源主机名
+    """
+    import socket as _socket
+    from datetime import datetime as _dt
+    from config.settings import get_settings
+
+    settings = get_settings()
+    if not settings.SYSLOG_ENABLED:
+        return
+
+    import platform
+    hostname = platform.node().split('.')[0] or "taf"
+
+    data = json.dumps({
+        "timestamp": _dt.utcnow().isoformat() + "Z",
+        "hostname": hostname,
+        "app_name": "taf",
+        "level": level_name.lower(),
+        "_msg": message,
+        "log_source": hostname,
+    })
+
+    try:
+        sock = _socket.socket(_socket.AF_INET, _socket.SOCK_DGRAM)
+        sock.sendto(data.encode('utf-8'), (settings.SYSLOG_HOST, settings.SYSLOG_PORT))
+        sock.close()
+    except Exception:
+        pass
+
+
+def _update_syslog_handler():
+    """动态更新 syslog handler（配置变更后调用）
+
+    使用自定义 Handler 通过原生 socket 发送 JSON 格式到 Vector/VictoriaLogs。
+    """
+    from config.settings import get_settings
+
+    settings = get_settings()
+    root_logger = logging.getLogger()
+
+    # 移除现有的自定义 syslog handler
+    for handler in root_logger.handlers[:]:
+        if isinstance(handler, _JsonSyslogHandler):
+            root_logger.removeHandler(handler)
+            handler.close()
+
+    # 如果启用，重新添加
+    if settings.SYSLOG_ENABLED:
+        try:
+            handler = _JsonSyslogHandler(settings)
+            handler.setLevel(getattr(logging, settings.SYSLOG_LEVEL.upper(), logging.WARNING))
+            root_logger.addHandler(handler)
+            logger.info(f"Syslog handler 已更新: {settings.SYSLOG_HOST}:{settings.SYSLOG_PORT} (级别: {settings.SYSLOG_LEVEL})")
+        except Exception as e:
+            logger.warning(f"更新 Syslog handler 失败: {str(e)}")
+    else:
+        logger.info("Syslog 转发已关闭")
+
+
+class _JsonSyslogHandler(logging.Handler):
+    """自定义 Handler：将日志以 JSON 格式通过原生 socket 发送到 Vector"""
+
+    def __init__(self, settings):
+        super().__init__()
+        self.host = settings.SYSLOG_HOST
+        self.port = settings.SYSLOG_PORT
+
+    def emit(self, record):
+        try:
+            _send_syslog_json(
+                message=record.getMessage(),
+                level_name=record.levelname,
+            )
+        except Exception:
+            pass
