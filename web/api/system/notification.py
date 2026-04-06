@@ -10,6 +10,7 @@ import traceback
 from typing import Dict, Any, Optional
 from datetime import datetime
 from fastapi import APIRouter, HTTPException, Request
+import json
 from pydantic import BaseModel, Field
 
 from .models import DingTalkConfig, NotificationEvents, NotificationUser, SyslogConfig
@@ -870,15 +871,13 @@ async def test_syslog_connection(request: Request):
         host = settings.SYSLOG_HOST
         port = settings.SYSLOG_PORT
 
-        _send_syslog_json("Syslog 连接测试 - " + datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S') + " UTC")
+        _send_syslog_json("Syslog 连接测试")
 
         return {
             "success": True,
             "message": f"测试消息已发送到 {host}:{port}"
         }
 
-    except socket.timeout:
-        return {"success": False, "message": f"连接超时: {host}:{port}"}
     except Exception as e:
         return {"success": False, "message": f"连接失败: {str(e)}"}
 
@@ -900,16 +899,11 @@ def _send_syslog_json(message: str, level_name: str = "INFO"):
     if not settings.SYSLOG_ENABLED:
         return
 
-    import platform
-    hostname = platform.node().split('.')[0] or "taf"
-
     data = json.dumps({
-        "timestamp": _dt.utcnow().isoformat() + "Z",
-        "hostname": hostname,
-        "app_name": "taf",
+        "timestamp": _dt.now().strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z",
+        "host": "taf",
         "level": level_name.lower(),
-        "_msg": message,
-        "log_source": hostname,
+        "message": message,
     })
 
     try:
