@@ -29,6 +29,9 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时执行
     logger.info("Web应用启动中...")
+    # 初始化 Syslog JSON 转发 handler
+    from web.api.system.notification import _update_syslog_handler
+    _update_syslog_handler()
     try:
         yield
     finally:
