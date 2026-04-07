@@ -220,13 +220,15 @@
                         </div>
                     </div>
 
-                    <!-- 运行中的任务和最近失败的任务 -->
+                    <!-- 运行中的任务和最近完成的任务 -->
                     <h6 class="mb-3">
-                        <i class="bi bi-hourglass-split me-2"></i>运行中的任务和最近失败的任务
+                        <i class="bi bi-hourglass-split me-2"></i>运行中和最近完成的任务
                     </h6>
-                    <div class="row" id="runningTasksList">
-                        <div class="col-12">
-                            <p class="text-muted">加载中...</p>
+                    <div>
+                        <div class="row" id="runningTasksList">
+                            <div class="col-12">
+                                <p class="text-muted">加载中...</p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -262,6 +264,28 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                    <!-- 分页 -->
+                    <div class="d-flex justify-content-between align-items-center mt-3">
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="text-muted small">每页</span>
+                            <select class="form-select form-select-sm" id="taskPageSize" style="width: auto; min-width: 80px;">
+                                <option value="10" selected>10</option>
+                                <option value="20">20</option>
+                                <option value="50">50</option>
+                                <option value="100">100</option>
+                            </select>
+                            <span class="text-muted small">条</span>
+                            <span class="text-muted small ms-2" id="taskPaginationInfo">显示 0-0 条，共 0 条</span>
+                        </div>
+                        <div class="btn-group btn-group-sm">
+                            <button class="btn btn-outline-secondary" id="taskPrevPage" disabled>
+                                <i class="bi bi-chevron-left"></i>上一页
+                            </button>
+                            <button class="btn btn-outline-secondary" id="taskNextPage" disabled>
+                                下一页<i class="bi bi-chevron-right"></i>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>

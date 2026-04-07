@@ -788,6 +788,11 @@ class TaskScheduler:
                         f"当前时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}"
                     )
 
+                # 锁守卫：有任务正在执行时跳过本轮，不产生排队协程
+                if self._execution_lock.locked():
+                    await asyncio.sleep(360)
+                    continue
+
                 # 检查每个任务
                 triggered_tasks = []
                 for task_id, task_info in list(self.tasks.items()):
@@ -825,41 +830,39 @@ class TaskScheduler:
                         )
                         continue
 
-                    # 获取任务的执行状态信息（用于日志输出）
-                    last_success = task.last_success_time if task else None
+                    # 时间未到，跳过
+                    if current_time < next_run:
+                        continue
+
+                    # 月度去重：本月已成功执行过的月度任务不再触发
                     schedule_type = task.schedule_type.value if task and hasattr(task.schedule_type, 'value') else 'N/A'
+                    last_success = task.last_success_time if task else None
+                    if schedule_type.lower() == 'monthly' and last_success:
+                        if (last_success.year == current_time.year and
+                                last_success.month == current_time.month):
+                            # 重算 next_run 到下个月，更新内存和数据库
+                            new_next_run = calculate_next_run_time(task)
+                            if new_next_run:
+                                task_info['next_run'] = new_next_run
+                                await self._persist_next_run(task_id, new_next_run)
+                                logger.info(
+                                    f"[调度器主循环] 月度任务本月已执行，跳过 - "
+                                    f"任务ID: {task_id}, 任务名称: {task_name}, "
+                                    f"下次执行: {new_next_run.strftime('%Y-%m-%d %H:%M:%S')}"
+                                )
+                            continue
 
-                    # 判断月度任务是否本月已执行
-                    is_monthly_executed = False
-                    if task and schedule_type.lower() == 'monthly' and last_success:
-                        is_monthly_executed = (
-                            last_success.year == current_time.year and
-                            last_success.month == current_time.month
-                        )
+                    # 收集待执行任务
+                    triggered_tasks.append((task_id, task_info, task_name))
 
-                    # 调试日志：输出任务检查详情（每100次循环输出一次，避免日志过多）
-                    if loop_count % 100 == 0:
-                        monthly_status = ""
-                        if schedule_type.lower() == 'monthly':
-                            if is_monthly_executed:
-                                monthly_status = f", 本月已执行: 是 ({last_success.strftime('%Y-%m-%d %H:%M:%S') if last_success else 'N/A'})"
-                            else:
-                                monthly_status = f", 本月已执行: 否" + (f" (上次成功: {last_success.strftime('%Y-%m-%d %H:%M:%S')})" if last_success else " (从未执行)")
-
-                        logger.debug(
-                            f"[调度器主循环] 检查任务 - "
-                            f"任务ID: {task_id}, "
-                            f"任务名称: {task_name}, "
-                            f"下次执行时间: {next_run.strftime('%Y-%m-%d %H:%M:%S')}, "
-                            f"当前时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}, "
-                            f"时间差: {(next_run - current_time).total_seconds():.0f}秒, "
-                            f"是否到达: {current_time >= next_run}"
-                            f"{monthly_status}"
-                        )
-
-                    if current_time >= next_run:
-                        # 收集待执行任务（不立即执行）
-                        triggered_tasks.append((task_id, task_info, task_name))
+                    # 立即更新 next_run 到下一个周期，防止重复触发
+                    new_next_run = calculate_next_run_time(task)
+                    if new_next_run:
+                        task_info['next_run'] = new_next_run
+                        await self._persist_next_run(task_id, new_next_run)
+                    else:
+                        # 无法计算下次时间（如一次性任务已过期），设为远未来防止重复
+                        task_info['next_run'] = current_time.replace(year=current_time.year + 10)
 
                 # 按优先级排序：backup > tape verify > directory verify > 其他
                 if triggered_tasks:
@@ -876,7 +879,7 @@ class TaskScheduler:
                         self._execute_triggered_tasks(triggered_tasks)
                     )
 
-                # 每分钟检查一次
+                # 每6分钟检查一次
                 await asyncio.sleep(360)
 
             except asyncio.CancelledError:
@@ -908,6 +911,25 @@ class TaskScheduler:
                     f"[调度器顺序执行] 任务完成 - "
                     f"任务ID: {task_id}, 任务名称: {task_name}"
                 )
+
+    async def _persist_next_run(self, task_id: int, next_run: datetime):
+        """将 next_run 持久化到数据库"""
+        try:
+            async with get_opengauss_connection() as conn:
+                await conn.execute(
+                    "UPDATE scheduled_tasks SET next_run_time = $1 WHERE id = $2",
+                    next_run, task_id
+                )
+                actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+                try:
+                    await actual_conn.commit()
+                except Exception:
+                    try:
+                        await actual_conn.rollback()
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"[调度器] 更新任务 {task_id} next_run 到数据库失败: {e}")
 
     async def get_tasks(self, enabled_only: bool = False) -> List[ScheduledTask]:
         """获取所有计划任务"""

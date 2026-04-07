@@ -430,7 +430,7 @@
         
         try {
             const cardCol = document.createElement('div');
-            cardCol.className = 'col-md-4 col-lg-4 mb-3';
+            cardCol.className = 'col-md-4 col-lg-4 mb-1';
 
             const card = document.createElement('div');
             card.className = 'service-card';
@@ -945,205 +945,41 @@
     }
 
     async function loadRunningTasks() {
-        if (!dom.runningList) {
-            console.warn('loadRunningTasks: runningList element not found');
-            return;
-        }
+        if (!dom.runningList) return;
         try {
-            const [running, failed] = await Promise.all([
+            const [runningResult, completedResult, failedResult] = await Promise.all([
                 fetchJSON('/api/backup/tasks?status=running&limit=10'),
+                fetchJSON('/api/backup/tasks?status=completed&limit=5'),
                 fetchJSON('/api/backup/tasks?status=failed&limit=5'),
             ]);
-            
-            // 调试信息 - 使用 console.log 确保在浏览器控制台可见
-            console.log('loadRunningTasks: running tasks:', running);
-            console.log('loadRunningTasks: failed tasks:', failed);
-            console.log('loadRunningTasks: running type:', typeof running, 'isArray:', Array.isArray(running));
-            console.log('loadRunningTasks: failed type:', typeof failed, 'isArray:', Array.isArray(failed));
-            
-            // 检查运行中的任务
-            if (Array.isArray(running) && running.length > 0) {
-                console.log('loadRunningTasks: running列表中的任务:', running.map(t => ({
-                    id: t.task_id || t.id,
-                    name: t.task_name,
-                    status: t.status,
-                    status_type: typeof t.status
-                })));
-            }
-            
-            // 清空容器（但保留已完成任务的卡片）
-            const existingCards = Array.from(dom.runningList.children);
-            const existingTaskIds = new Set();
-            existingCards.forEach(card => {
-                // 检查卡片本身或卡片内的元素是否有任务ID
-                const taskIdAttr = card.getAttribute('data-task-id') ||
-                                   card.querySelector('[data-task-id]')?.getAttribute('data-task-id') ||
-                                   card.querySelector('[data-task-speed]')?.getAttribute('data-task-speed');
-                if (taskIdAttr) {
-                    existingTaskIds.add(parseInt(taskIdAttr, 10));
-                }
-            });
-            
-            // 清空容器，但稍后会重新添加需要显示的任务
+            // 兼容新旧API格式
+            const extract = (r) => Array.isArray(r) ? r : (r.tasks || []);
+            const running = extract(runningResult);
+            const completed = extract(completedResult);
+            const failed = extract(failedResult);
+
+            // 合并：运行中 → 已完成 → 失败（新任务在前）
+            const tasks = [...running, ...completed, ...failed];
+
             dom.runningList.innerHTML = '';
-            const tasks = [];
-            
-            // 确保 running 是数组
-            if (Array.isArray(running)) {
-                tasks.push(...running);
-            } else if (running) {
-                console.warn('loadRunningTasks: running is not an array:', running);
-                if (typeof running === 'object') {
-                    tasks.push(running);
-                }
-            }
-            
-            const now = Date.now();
-            // 确保 failed 是数组
-            if (Array.isArray(failed)) {
-                failed.forEach(task => {
-                    const completed = task.completed_at ? new Date(task.completed_at).getTime() : 0;
-                    if (completed && now - completed <= 10 * 60 * 1000) {
-                        tasks.push(task);
-                    }
-                });
-            } else if (failed && typeof failed === 'object') {
-                console.warn('loadRunningTasks: failed is not an array:', failed);
-                const completed = failed.completed_at ? new Date(failed.completed_at).getTime() : 0;
-                if (completed && now - completed <= 10 * 60 * 1000) {
-                    tasks.push(failed);
-                }
-            }
-            
-            // 检查任务状态，标记已完成的任务
-            tasks.forEach(task => {
-                const taskId = task.task_id || task.id;
-                const taskStatus = (task.status || '').toLowerCase();
-                if (taskStatus === 'completed' && taskId) {
-                    completedTaskIds.add(taskId);
-                }
-            });
-            
-            console.log('loadRunningTasks: total tasks to display:', tasks.length);
-            console.log('loadRunningTasks: tasks data:', tasks);
-            console.log('loadRunningTasks: completed task IDs:', Array.from(completedTaskIds));
-            
             if (tasks.length === 0) {
-                // 如果没有新任务，但有待显示已完成的任务卡片，保留它们
-                if (existingCards.length > 0) {
-                    existingCards.forEach(card => {
-                        const taskIdAttr = card.getAttribute('data-task-id') ||
-                                           card.querySelector('[data-task-id]')?.getAttribute('data-task-id') ||
-                                           card.querySelector('[data-task-speed]')?.getAttribute('data-task-speed');
-                        if (taskIdAttr) {
-                            const taskId = parseInt(taskIdAttr, 10);
-                            // 只保留已完成的任务卡片
-                            if (completedTaskIds.has(taskId)) {
-                                dom.runningList.appendChild(card);
-                            }
-                        }
-                    });
-                    if (dom.runningList.children.length === 0) {
-                        dom.runningList.innerHTML = '<div class="col-12"><p class="text-muted">暂无运行中的任务和最近失败的任务</p></div>';
-                    }
-                } else {
-                    dom.runningList.innerHTML = '<div class="col-12"><p class="text-muted">暂无运行中的任务和最近失败的任务</p></div>';
-                }
+                dom.runningList.innerHTML = '<div class="col-12"><p class="text-muted">暂无运行中的任务</p></div>';
             } else {
-                // 验证并创建/更新卡片
-                let cardsCreated = 0;
-                const processedTaskIds = new Set();
-                
-                tasks.forEach((task, index) => {
-                    try {
-                        // 验证任务数据是否完整
-                        if (!task) {
-                            console.warn(`loadRunningTasks: 任务 ${index} 为空`);
-                            return;
-                        }
-                        
-                        // 验证必需字段 - 确保至少有一个标识符
-                        if (!task.task_name && !task.task_id && !task.id) {
-                            console.warn(`loadRunningTasks: 任务 ${index} 缺少必需字段:`, task);
-                            return;
-                        }
-                        
+                tasks.forEach(task => {
+                    if (!task || (!task.task_name && !task.task_id && !task.id)) return;
+                    if (!task.task_name) task.task_name = '任务 #' + (task.task_id || task.id);
+                    const card = createRunningCard(task);
+                    if (card && card.nodeType === 1) {
                         const taskId = task.task_id || task.id;
-                        const taskStatus = (task.status || '').toLowerCase();
-                        
-                        // 如果任务已完成且已经在 completedTaskIds 中，且已有卡片存在，则跳过刷新
-                        if (taskStatus === 'completed' && taskId && completedTaskIds.has(taskId)) {
-                            // 查找是否已有该任务的卡片
-                            const existingCard = existingCards.find(card => {
-                                const cardTaskId = card.getAttribute('data-task-id') ||
-                                                  card.querySelector('[data-task-id]')?.getAttribute('data-task-id') ||
-                                                  card.querySelector('[data-task-speed]')?.getAttribute('data-task-speed');
-                                return cardTaskId && parseInt(cardTaskId, 10) === taskId;
-                            });
-                            
-                            if (existingCard) {
-                                // 保留现有卡片，不刷新
-                                dom.runningList.appendChild(existingCard);
-                                processedTaskIds.add(taskId);
-                                return;
-                            }
-                        }
-                        
-                        // 如果没有 task_name，尝试使用 task_id 或 id 作为名称
-                        if (!task.task_name) {
-                            if (task.task_id) {
-                                task.task_name = `任务 #${task.task_id}`;
-                            } else if (task.id) {
-                                task.task_name = `任务 #${task.id}`;
-                            }
-                        }
-                        
-                        // 使用 createRunningCard 创建卡片元素
-                        const card = createRunningCard(task);
-                        if (card && card.nodeType === 1) { // 检查是否是有效的DOM元素
-                            // 为卡片添加 data-task-id 属性，便于后续识别
-                            if (taskId) {
-                                card.setAttribute('data-task-id', taskId);
-                            }
-                            dom.runningList.appendChild(card);
-                            cardsCreated++;
-                            processedTaskIds.add(taskId);
-                        } else {
-                            console.error('loadRunningTasks: createRunningCard returned invalid element for task:', task);
-                            console.error('loadRunningTasks: card value:', card);
-                        }
-                    } catch (cardError) {
-                        console.error('loadRunningTasks: Error creating card for task:', task);
-                        console.error('loadRunningTasks: Error details:', cardError);
-                        console.error('loadRunningTasks: Error stack:', cardError.stack);
+                        if (taskId) card.setAttribute('data-task-id', taskId);
+                        dom.runningList.appendChild(card);
                     }
                 });
-                
-                // 保留其他已完成任务的卡片（如果它们不在当前任务列表中）
-                existingCards.forEach(card => {
-                    const taskIdAttr = card.getAttribute('data-task-id') ||
-                                       card.querySelector('[data-task-id]')?.getAttribute('data-task-id') ||
-                                       card.querySelector('[data-task-speed]')?.getAttribute('data-task-speed');
-                    if (taskIdAttr) {
-                        const taskId = parseInt(taskIdAttr, 10);
-                        // 如果该任务已完成且不在当前处理的任务列表中，保留其卡片
-                        if (completedTaskIds.has(taskId) && !processedTaskIds.has(taskId)) {
-                            dom.runningList.appendChild(card);
-                        }
-                    }
-                });
-                
-                // 如果没有创建任何卡片，显示提示
-                if (cardsCreated === 0 && tasks.length > 0 && dom.runningList.children.length === 0) {
-                    console.error('loadRunningTasks: 有任务但无法创建卡片，任务数据:', tasks);
-                    dom.runningList.innerHTML = '<div class="col-12"><p class="text-warning">无法生成任务卡片，请检查控制台错误信息</p></div>';
-                }
             }
-            if (dom.runningTasksCounter) dom.runningTasksCounter.textContent = tasks.length;
+            if (dom.runningTasksCounter) dom.runningTasksCounter.textContent = running.length;
         } catch (error) {
             console.error('加载运行中的任务失败:', error);
-            console.error('错误堆栈:', error.stack);
-            dom.runningList.innerHTML = '<div class="col-12"><p class="text-danger">加载失败: ' + (error.message || '未知错误') + '</p></div>';
+            dom.runningList.innerHTML = '<div class="col-12"><p class="text-danger">加载失败</p></div>';
         }
     }
 
@@ -1248,43 +1084,59 @@
         `;
     }
 
+    // 分页状态
+    let allTaskPage = 0;
+    let allTaskPageSize = 10;
+    let allTaskTotal = 0;
+
     async function loadAllTasks() {
         if (!dom.allTasksTable) return;
         try {
-            let url = '/api/backup/tasks?limit=100&offset=0';
+            const offset = allTaskPage * allTaskPageSize;
+            let url = `/api/backup/tasks?limit=${allTaskPageSize}&offset=${offset}`;
             const statusValue = dom.statusFilter ? dom.statusFilter.value : '';
             const typeValue = dom.typeFilter ? dom.typeFilter.value : '';
             const searchValue = dom.searchInput ? dom.searchInput.value.trim() : '';
             if (statusValue) url += `&status=${encodeURIComponent(statusValue)}`;
             if (typeValue) url += `&task_type=${encodeURIComponent(typeValue)}`;
             if (searchValue) url += `&q=${encodeURIComponent(searchValue)}`;
-            const tasks = await fetchJSON(url);
-            
-            // 添加调试日志
-            console.log('loadAllTasks: 获取到的任务数量:', tasks ? tasks.length : 0);
-            if (tasks && tasks.length > 0) {
-                console.log('loadAllTasks: 第一个任务:', tasks[0]);
-                console.log('loadAllTasks: 第一个任务的状态:', tasks[0].status);
-                // 检查所有任务的状态
-                const runningTasks = tasks.filter(t => (t.status || '').toLowerCase() === 'running');
-                const pendingTasks = tasks.filter(t => (t.status || '').toLowerCase() === 'pending');
-                console.log('loadAllTasks: 任务状态统计:', {
-                    total: tasks.length,
-                    running: runningTasks.length,
-                    pending: pendingTasks.length,
-                    running_tasks: runningTasks.map(t => ({id: t.task_id || t.id, name: t.task_name, status: t.status})),
-                    pending_tasks: pendingTasks.slice(0, 3).map(t => ({id: t.task_id || t.id, name: t.task_name, status: t.status}))
-                });
-            }
-            
+            const result = await fetchJSON(url);
+
+            // 兼容新旧API格式
+            const tasks = Array.isArray(result) ? result : (result.tasks || []);
+            const total = result.total !== undefined ? result.total : tasks.length;
+            allTaskTotal = total;
+
             if (!tasks || tasks.length === 0) {
                 dom.allTasksTable.innerHTML = '<tr><td colspan="8" class="text-center text-muted">暂无任务</td></tr>';
-                return;
+            } else {
+                dom.allTasksTable.innerHTML = tasks.map(buildTableRow).join('');
             }
-            dom.allTasksTable.innerHTML = tasks.map(buildTableRow).join('');
+            updateAllTaskPagination(tasks.length);
         } catch (error) {
             console.error('加载所有任务失败:', error);
-            dom.allTasksTable.innerHTML = `<tr><td colspan="8" class="text-center text-danger">加载失败: ${error.message}</td></tr>`;
+            dom.allTasksTable.innerHTML = '<tr><td colspan="8" class="text-center text-danger">加载失败</td></tr>';
+        }
+    }
+
+    function updateAllTaskPagination(returnedCount) {
+        const infoEl = document.getElementById('taskPaginationInfo');
+        const prevBtn = document.getElementById('taskPrevPage');
+        const nextBtn = document.getElementById('taskNextPage');
+
+        if (infoEl) {
+            if (allTaskTotal === 0) {
+                infoEl.textContent = '暂无数据';
+            } else {
+                const start = allTaskPage * allTaskPageSize + 1;
+                const end = allTaskPage * allTaskPageSize + returnedCount;
+                infoEl.textContent = '显示 ' + start + '-' + end + ' 条，共 ' + allTaskTotal + ' 条';
+            }
+        }
+        if (prevBtn) prevBtn.disabled = allTaskPage === 0;
+        if (nextBtn) {
+            const hasMore = (allTaskPage + 1) * allTaskPageSize < allTaskTotal;
+            nextBtn.disabled = !hasMore || returnedCount === 0;
         }
     }
 
@@ -1363,19 +1215,42 @@
 
     function bindFilterEvents() {
         if (dom.statusFilter) {
-            dom.statusFilter.addEventListener('change', loadAllTasks);
+            dom.statusFilter.addEventListener('change', () => { allTaskPage = 0; loadAllTasks(); });
         }
         if (dom.typeFilter) {
-            dom.typeFilter.addEventListener('change', loadAllTasks);
+            dom.typeFilter.addEventListener('change', () => { allTaskPage = 0; loadAllTasks(); });
         }
         if (dom.searchInput) {
             dom.searchInput.addEventListener('keypress', (e) => {
-                if (e.key === 'Enter') loadAllTasks();
+                if (e.key === 'Enter') { allTaskPage = 0; loadAllTasks(); }
             });
         }
         if (dom.searchBtn) {
-            dom.searchBtn.addEventListener('click', loadAllTasks);
+            dom.searchBtn.addEventListener('click', () => { allTaskPage = 0; loadAllTasks(); });
         }
+
+        // 分页事件
+        var prevBtn = document.getElementById('taskPrevPage');
+        if (prevBtn) {
+            prevBtn.addEventListener('click', function() {
+                if (allTaskPage > 0) { allTaskPage--; loadAllTasks(); }
+            });
+        }
+        var nextBtn = document.getElementById('taskNextPage');
+        if (nextBtn) {
+            nextBtn.addEventListener('click', function() {
+                allTaskPage++; loadAllTasks();
+            });
+        }
+        var pageSizeSelect = document.getElementById('taskPageSize');
+        if (pageSizeSelect) {
+            pageSizeSelect.addEventListener('change', function() {
+                allTaskPageSize = parseInt(this.value, 10);
+                allTaskPage = 0;
+                loadAllTasks();
+            });
+        }
+
         setInterval(() => {
             loadBackupStatistics();
             loadAllTasks();

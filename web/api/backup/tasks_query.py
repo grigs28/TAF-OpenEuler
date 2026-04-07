@@ -11,14 +11,14 @@ from typing import List, Dict, Any, Optional
 from fastapi import APIRouter, HTTPException, Request
 from models.backup import BackupTaskType, BackupTaskStatus
 from utils.scheduler.db_utils import get_opengauss_connection
-from .models import BackupTaskResponse
+from .models import BackupTaskResponse  # noqa: F401 - used by /tasks/{task_id}
 from .utils import _normalize_status_value, _build_stage_info
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.get("/tasks", response_model=List[BackupTaskResponse])
+@router.get("/tasks")
 async def get_backup_tasks(
     status: Optional[str] = None,
     task_type: Optional[str] = None,
@@ -306,6 +306,11 @@ async def get_backup_tasks(
                             if system and system.backup_engine:
                                 if hasattr(system.backup_engine, 'final_dir_monitor') and system.backup_engine.final_dir_monitor:
                                     _set_id = row.get("backup_set_str_id")
+                                    # 数据库中 backup_set_str_id 为空时，从内存中的 compression_worker 回退获取
+                                    if not _set_id:
+                                        _cw = getattr(system.backup_engine, '_current_compression_worker', None)
+                                        if _cw and hasattr(_cw, 'backup_set') and _cw.backup_set:
+                                            _set_id = getattr(_cw.backup_set, 'set_id', None)
                                     if _set_id:
                                         final_dir_has_files = not system.backup_engine.final_dir_monitor.is_final_dir_empty(_set_id)
                         except Exception:
@@ -521,7 +526,11 @@ async def get_backup_tasks(
                 if tasks is None:
                     logger.warning("openGauss路径中tasks为None，返回空列表")
                     return []
-                return tasks[offset:offset+limit]
+                total_count = len(tasks)
+                return {
+                    "tasks": tasks[offset:offset+limit],
+                    "total": total_count
+                }
         except Exception as e:
             error_msg = str(e)
             # 如果表不存在，返回空列表
@@ -637,6 +646,11 @@ async def get_backup_task(task_id: int, http_request: Request):
                     if system and system.backup_engine:
                         if hasattr(system.backup_engine, 'final_dir_monitor') and system.backup_engine.final_dir_monitor:
                             _set_id = row.get("backup_set_str_id")
+                            # 数据库中 backup_set_str_id 为空时，从内存中的 compression_worker 回退获取
+                            if not _set_id:
+                                _cw = getattr(system.backup_engine, '_current_compression_worker', None)
+                                if _cw and hasattr(_cw, 'backup_set') and _cw.backup_set:
+                                    _set_id = getattr(_cw.backup_set, 'set_id', None)
                             if _set_id:
                                 final_dir_has_files = not system.backup_engine.final_dir_monitor.is_final_dir_empty(_set_id)
                 except Exception:
