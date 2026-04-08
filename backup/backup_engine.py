@@ -166,6 +166,25 @@ class BackupEngine:
             self.final_dir_monitor.start()
             logger.info("Final目录监控器已启动（独立线程，10秒轮询扫描）")
 
+            # 清理上次非正常退出遗留的僵尸任务（status=running 但进程已死）
+            try:
+                from utils.scheduler.db_utils import get_opengauss_connection
+                from datetime import datetime as _dt
+                async with get_opengauss_connection() as conn:
+                    result = await conn.execute(
+                        """
+                        UPDATE backup_tasks
+                        SET status = 'interrupted'::backuptaskstatus,
+                            error_message = '上次运行意外中断',
+                            updated_at = $1
+                        WHERE status = 'running'::backuptaskstatus
+                        """,
+                        _dt.now()
+                    )
+                    logger.info(f"[启动] 已清理僵尸任务（running→interrupted）: {result}")
+            except Exception as e:
+                logger.warning(f"[启动] 清理僵尸任务失败: {str(e)}")
+
             self._initialized = True
             logger.info("备份引擎初始化完成")
 
@@ -416,7 +435,6 @@ class BackupEngine:
                 # 检查月份
                 parsed = extract_label_year_month(label)
                 if parsed:
-                    from datetime import datetime
                     year, month = parsed['year'], parsed['month']
                     logger.info(f"  年月: {year}年{month:02d}月")
 
