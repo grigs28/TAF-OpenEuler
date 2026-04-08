@@ -1117,18 +1117,21 @@ class VerifyActionHandler(ActionHandler):
                     pass
 
             # 7. 记录操作日志
+            is_success = failed == 0
+            error_detail = "\n".join(errors) if errors else None
             await log_operation(
                 operation_type=OperationType.TAPE_VERIFY,
                 resource_type="tape",
                 operation_name="磁带验证",
                 operation_description=f"磁带验证完成: 抽样 {sample_count}/{len(archives)}, 通过 {passed}, 失败 {failed}",
                 category="backup",
-                success=(failed == 0),
-                result_message=f"抽样 {sample_count}/{len(archives)}, 通过 {passed}, 失败 {failed}"
+                success=is_success,
+                result_message=f"抽样 {sample_count}/{len(archives)}, 通过 {passed}, 失败 {failed}",
+                error_message=error_detail
             )
 
             result = {
-                "status": "success" if failed == 0 else ("success" if passed > 0 else "failed"),
+                "status": "success" if failed == 0 else "failed",
                 "message": f"磁带验证完成: 抽样 {sample_count}/{len(archives)}, 通过 {passed}, 失败 {failed}",
                 "total": len(archives),
                 "sampled": sample_count,
@@ -1325,7 +1328,7 @@ class VerifyActionHandler(ActionHandler):
         logger.info(f"[目录验证] 完成: 扫描 {total_scanned} 个文件 (排除 {excluded_count} 个), 抽样 {total_sampled}, 通过 {passed}, 失败 {failed}")
 
         result = {
-            "status": "success" if failed == 0 else ("success" if passed > 0 else "failed"),
+            "status": "success" if failed == 0 else "failed",
             "message": f"目录验证完成: 扫描 {total_scanned}, 抽样 {total_sampled}, 通过 {passed}, 失败 {failed}",
             "total": total_scanned,
             "sampled": total_sampled,
