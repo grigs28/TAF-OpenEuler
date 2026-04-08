@@ -1027,7 +1027,7 @@ class VerifyActionHandler(ActionHandler):
         if not self.system_instance:
             return {"status": "failed", "message": "系统实例未初始化"}
 
-        tape_handler = getattr(self.system_instance, 'tape_handler', None)
+        tape_handler = getattr(self.system_instance.backup_engine, 'tape_handler', None)
         if not tape_handler:
             return {"status": "failed", "message": "TapeHandler 未初始化"}
 
