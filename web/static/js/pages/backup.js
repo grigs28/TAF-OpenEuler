@@ -213,6 +213,7 @@
                 return '<span class="badge bg-danger">失败</span>';
             case 'running':
                 return '<span class="badge bg-primary">运行中</span>';
+            case 'canceled':
             case 'cancelled':
                 return '<span class="badge bg-secondary">已取消</span>';
             case 'interrupted':
@@ -947,19 +948,21 @@
     async function loadRunningTasks() {
         if (!dom.runningList) return;
         try {
-            const [runningResult, completedResult, failedResult] = await Promise.all([
+            const [runningResult, completedResult, failedResult, canceledResult] = await Promise.all([
                 fetchJSON('/api/backup/tasks?status=running&limit=10'),
                 fetchJSON('/api/backup/tasks?status=completed&limit=5'),
                 fetchJSON('/api/backup/tasks?status=failed&limit=5'),
+                fetchJSON('/api/backup/tasks?status=cancelled&limit=5'),
             ]);
             // 兼容新旧API格式
             const extract = (r) => Array.isArray(r) ? r : (r.tasks || []);
             const running = extract(runningResult);
             const completed = extract(completedResult);
             const failed = extract(failedResult);
+            const canceled = extract(canceledResult);
 
-            // 合并：运行中 → 已完成 → 失败（新任务在前）
-            const tasks = [...running, ...completed, ...failed];
+            // 合并：运行中 → 已完成 → 失败 → 取消（新任务在前）
+            const tasks = [...running, ...completed, ...failed, ...canceled];
 
             dom.runningList.innerHTML = '';
             if (tasks.length === 0) {
