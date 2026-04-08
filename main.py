@@ -145,6 +145,20 @@ class TapeBackupSystem:
                 logger.warning(f"数据库初始化失败，将在Web界面中提示用户: {str(db_error)}")
                 logger.info("系统将继续启动，以便用户在Web界面中配置数据库")
 
+            # 清理验证临时目录
+            try:
+                from pathlib import Path
+                from config.settings import get_settings
+                settings = get_settings()
+                verify_temp = Path(settings.VERIFY_TEMP_DIR)
+                if verify_temp.exists():
+                    import shutil as _shutil
+                    _shutil.rmtree(str(verify_temp), ignore_errors=True)
+                    verify_temp.mkdir(parents=True, exist_ok=True)
+                    logger.info(f"已清理验证临时目录: {verify_temp}")
+            except Exception as e:
+                logger.warning(f"清理验证临时目录失败: {e}")
+
             # 初始化磁带管理器
             safe_print("[2/7] 初始化磁带管理器...")
             step_start = time.time()
