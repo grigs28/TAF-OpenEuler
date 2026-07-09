@@ -30,6 +30,7 @@ class BackupTaskStatus(enum.Enum):
     COMPLETED = "completed"      # 已完成
     FAILED = "failed"           # 失败
     CANCELLED = "cancelled"      # 已取消
+    INTERRUPTED = "interrupted"  # 中断（非正常停止）
     PAUSED = "paused"           # 暂停
 
 
@@ -180,6 +181,7 @@ class BackupFile(BaseModel):
     compressed = Column(Boolean, default=False, comment="是否压缩")
     encrypted = Column(Boolean, default=False, comment="是否加密")
     checksum = Column(String(128), comment="文件校验和")
+    error_message = Column(Text, comment="错误信息（扫描/压缩阶段出错的文件）")
     is_copy_success = Column(Boolean, default=False, comment="是否复制成功")
     copy_status_at = Column(DateTime(timezone=True), comment="复制状态更新时间")
 

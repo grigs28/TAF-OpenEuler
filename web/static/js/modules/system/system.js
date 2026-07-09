@@ -349,6 +349,27 @@ async function saveNotificationSection() {
     if (defaultPhoneDisplay && config.dingtalk_default_phone) {
         defaultPhoneDisplay.textContent = config.dingtalk_default_phone;
     }
+
+    // 保存 Syslog 配置
+    const syslogEnabled = document.getElementById('syslogEnabled');
+    if (syslogEnabled) {
+        const syslogConfig = {
+            syslog_enabled: syslogEnabled.checked,
+            syslog_host: document.getElementById('syslogHost').value,
+            syslog_port: parseInt(document.getElementById('syslogPort').value) || 514,
+            syslog_level: document.getElementById('syslogLevel').value
+        };
+        const syslogResp = await fetch('/api/system/notification/syslog', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(syslogConfig)
+        });
+        const syslogResult = await syslogResp.json();
+        if (!syslogResp.ok || !syslogResult.success) {
+            throw new Error(syslogResult.message || '保存 Syslog 配置失败');
+        }
+    }
+
     return true;
 }
 
@@ -656,6 +677,16 @@ async function loadAllSystemConfig() {
             }
 
 
+            // SSO 单点登录配置
+            if (config.yz_login_url) {
+                const yzLoginInput = document.getElementById('yzLoginUrl');
+                if (yzLoginInput) yzLoginInput.value = config.yz_login_url;
+            }
+            if (config.taf_callback_url) {
+                const tafCallbackInput = document.getElementById('tafCallbackUrl');
+                if (tafCallbackInput) tafCallbackInput.value = config.taf_callback_url;
+            }
+
             console.log('系统配置加载完成');
         }
     } catch (error) {
@@ -743,6 +774,10 @@ async function saveEnvConfigSection() {
                 if (!checkbox) return undefined;
                 return checkbox.checked === true;
             })(),
+
+            // SSO 单点登录配置
+            yz_login_url: document.getElementById('yzLoginUrl')?.value || null,
+            taf_callback_url: document.getElementById('tafCallbackUrl')?.value || null,
         };
         
         // 移除 null 值
@@ -856,5 +891,55 @@ function loadServiceStatus() {
         .catch(function() {
             hint.textContent = '检测失败';
         });
+}
+
+// ===== Syslog 转发配置 =====
+document.addEventListener('DOMContentLoaded', function() {
+    // 加载 syslog 配置
+    fetch('/api/system/notification/syslog')
+        .then(r => r.json())
+        .then(data => {
+            if (data.success && data.config) {
+                const c = data.config;
+                document.getElementById('syslogEnabled').checked = c.syslog_enabled;
+                document.getElementById('syslogHost').value = c.syslog_host || '192.168.0.14';
+                document.getElementById('syslogPort').value = c.syslog_port || 514;
+                document.getElementById('syslogLevel').value = (c.syslog_level || 'WARNING').toUpperCase();
+                toggleSyslogSettings(c.syslog_enabled);
+            }
+        })
+        .catch(err => console.error('加载 Syslog 配置失败:', err));
+
+    // 启用/禁用开关
+    document.getElementById('syslogEnabled').addEventListener('change', function() {
+        toggleSyslogSettings(this.checked);
+    });
+
+    // 测试连接
+    document.getElementById('testSyslogBtn').addEventListener('click', async function() {
+        const btn = this;
+        const originalHtml = btn.innerHTML;
+        btn.disabled = true;
+        btn.textContent = '测试中...';
+
+        try {
+            const resp = await fetch('/api/system/notification/syslog/test', {method: 'POST'});
+            const result = await resp.json();
+            showToast(result.message, result.success ? 'success' : 'danger');
+        } catch (e) {
+            showToast('测试失败: ' + e.message, 'danger');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = originalHtml;
+        }
+    });
+});
+
+function toggleSyslogSettings(enabled) {
+    const el = document.getElementById('syslogSettings');
+    if (el) {
+        el.style.opacity = enabled ? '1' : '0.5';
+        el.querySelectorAll('input, select, button').forEach(e => e.disabled = !enabled);
+    }
 }
 

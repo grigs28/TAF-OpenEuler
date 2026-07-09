@@ -65,6 +65,10 @@ class SystemEnvConfig(BaseModel):
     # 磁带自动格式化配置
     enable_tape_format_before_full: Optional[bool] = Field(None, description="完整备份前是否自动格式化磁带（保留卷标）")
 
+    # SSO 单点登录配置
+    yz_login_url: Optional[str] = Field(None, description="yz-login 服务地址")
+    taf_callback_url: Optional[str] = Field(None, description="TAF SSO 回调地址")
+
 
 @router.get("/env-config")
 async def get_env_config():
@@ -144,6 +148,10 @@ async def get_env_config():
 
             # 磁带自动格式化配置
             "enable_tape_format_before_full": parse_bool(env_vars.get("ENABLE_TAPE_FORMAT_BEFORE_FULL"), True),
+
+            # SSO 单点登录配置
+            "yz_login_url": env_vars.get("YZ_LOGIN_URL", ""),
+            "taf_callback_url": env_vars.get("TAF_CALLBACK_URL", ""),
         }
         
         return {
@@ -247,6 +255,12 @@ async def update_env_config(config: SystemEnvConfig, request: Request):
         # 磁带自动格式化配置
         if config.enable_tape_format_before_full is not None:
             updates["ENABLE_TAPE_FORMAT_BEFORE_FULL"] = str(config.enable_tape_format_before_full).lower()
+
+        # SSO 单点登录配置
+        if config.yz_login_url is not None:
+            updates["YZ_LOGIN_URL"] = config.yz_login_url
+        if config.taf_callback_url is not None:
+            updates["TAF_CALLBACK_URL"] = config.taf_callback_url
         
         # 更新数据库URL（如果数据库配置有变化）
         if any(key in updates for key in ["DB_HOST", "DB_PORT", "DB_USER", "DB_PASSWORD", "DB_DATABASE"]):

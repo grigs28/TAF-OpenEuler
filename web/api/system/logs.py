@@ -135,6 +135,12 @@ async def get_system_logs(
                 operation_where.append(f"user_id = ${param_idx}")
                 params.append(user_id)
                 param_idx += 1
+            if level:
+                # 操作日志只有 success (info) / failure (error) 两种
+                if level.lower() in ('error', 'critical'):
+                    operation_where.append("success = false")
+                elif level.lower() == 'warning':
+                    operation_where.append("false")  # 操作日志无 warning 级别，返回空
 
             # 添加LIMIT和OFFSET参数
             limit_param_idx = param_idx

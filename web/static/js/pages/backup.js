@@ -1044,9 +1044,10 @@
             const totalBytes = task.total_bytes || 0;
             dataSizeDisplay = `${formatBytes(processedBytes)} / ${formatBytes(totalBytes)}`;
 
-            // 如果已开始但处理数据为0，显示说明
+            // 如果已开始但处理数据为0
             if (task.started_at && processedBytes === 0 && totalBytes === 0) {
-                dataSizeDisplay = '准备中...';
+                // 已完成的任务显示"—"，运行中的显示"准备中..."
+                dataSizeDisplay = task.completed_at ? '—' : '准备中...';
             }
         }
 

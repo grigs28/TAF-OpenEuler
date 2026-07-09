@@ -383,7 +383,7 @@ function getStatusIcon(status) {
 // 加载统计数据
 async function loadDashboardData() {
     try {
-        const response = await fetch('/api/system/statistics');
+        const response = await fetch('/api/system/statistics', {credentials: 'include'});
         const data = await response.json();
         
         // 更新备份任务统计
@@ -591,7 +591,7 @@ function renderRecentBackups(backups) {
 async function loadTapeDeviceInfo() {
     try {
         // 获取设备列表
-        const devicesResponse = await fetch('/api/tape/devices');
+        const devicesResponse = await fetch('/api/tape/devices', {credentials: 'include'});
         const devicesData = await devicesResponse.json();
         
         const deviceModelEl = document.getElementById('deviceModel');
@@ -620,7 +620,7 @@ async function loadTapeDeviceInfo() {
             } else {
                 // 尝试从IBM API获取序列号
                 try {
-                    const serialResponse = await fetch('/api/tape/ibm/serial');
+                    const serialResponse = await fetch('/api/tape/ibm/serial', {credentials: 'include'});
                     const serialData = await serialResponse.json();
                     if (serialData && serialData.success && serialData.serial_number) {
                         deviceSerialEl.textContent = `序列号: ${serialData.serial_number}`;
@@ -647,7 +647,7 @@ async function loadTapeDeviceInfo() {
 // 加载磁带设备状态
 async function loadTapeDeviceStatus() {
     try {
-        const response = await fetch('/api/system/tape/config');
+        const response = await fetch('/api/system/tape/config', {credentials: 'include'});
         const data = await response.json();
         
         const statusElement = document.getElementById('tapeDeviceStatus');
@@ -669,7 +669,7 @@ async function loadTapeDeviceStatus() {
 // 检查数据库连接状态
 async function checkDatabaseStatus() {
     try {
-        const response = await fetch('/api/system/database/status');
+        const response = await fetch('/api/system/database/status', {credentials: 'include'});
         const data = await response.json();
         
         const dbStatusEl = document.getElementById('dbStatus');

@@ -1,18 +1,43 @@
 // 主JavaScript文件
 // Main JavaScript File
 
+// 登录工具类
+const loginUtils = {
+    async logout() {
+        try {
+            localStorage.removeItem('authToken');
+            window.location.href = '/api/yz/logout';
+        } catch (error) {
+            console.error('退出登录失败:', error);
+            window.location.href = '/';
+        }
+    },
+    async validateToken() {
+        try {
+            const resp = await fetch('/api/yz/user', { credentials: 'same-origin' });
+            const data = await resp.json();
+            return { isAuthenticated: data.ok, username: data.user?.username || '' };
+        } catch (error) {
+            return { isAuthenticated: false, username: '' };
+        }
+    }
+};
+
 document.addEventListener('DOMContentLoaded', function() {
     // 初始化版本点击事件
     initVersionModal();
-    
+
     // 修复模态框z-index问题
     fixModalZIndex();
-    
+
     // 初始化所有模态框拖拽功能
     initModalDraggable();
-    
+
     // 使用原生拖拽API实现模态框拖动
     initNativeModalDraggable();
+
+    // 绑定退出按钮事件
+    initLogoutButton();
 });
 
 // 修复模态框z-index，确保所有模态框显示在最上层
@@ -288,14 +313,26 @@ function initNativeModalDraggable() {
             dialog.style.transform = 'none';
         };
         
-        const closeDragElement = function() {
+const closeDragElement = function() {
             isDragging = false;
             document.removeEventListener('mousemove', elementDrag);
             document.removeEventListener('mouseup', closeDragElement);
         };
-        
+
         // 移除旧的事件监听器（如果存在）
         header.onmousedown = dragMouseDown;
     });
 }
 
+/**
+ * 初始化退出按钮
+ */
+function initLogoutButton() {
+    const logoutBtn = document.querySelector('.btn-logout');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            loginUtils.logout();
+        });
+    }
+}

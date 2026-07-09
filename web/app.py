@@ -17,7 +17,6 @@ from config.settings import get_settings
 from utils.logger import get_logger
 from web.api import backup, recovery, tape, system, user, scheduler, tools, wechat
 # system、tape 和 backup 现在已经是模块包，直接导入 router
-from web.middleware.auth_middleware import AuthMiddleware
 from web.middleware.logging_middleware import LoggingMiddleware
 
 logger = get_logger(__name__)
@@ -95,8 +94,16 @@ def create_app(system_instance=None) -> FastAPI:
 
     # 添加自定义中间件
     app.add_middleware(LoggingMiddleware)
-    if not settings.DEBUG:
-        app.add_middleware(AuthMiddleware)
+
+    # SSO 认证中间件（替代原 AuthMiddleware）
+    try:
+        from web.yz_auth import router as yz_router, sso_middleware
+        from starlette.middleware.base import BaseHTTPMiddleware
+        app.include_router(yz_router)
+        app.add_middleware(BaseHTTPMiddleware, dispatch=sso_middleware)
+        logger.info("YZ SSO 登录已启用")
+    except ImportError:
+        logger.warning("yz_auth 模块未找到，跳过 SSO 认证")
 
     # 存储系统实例引用
     app.state.system = system_instance

@@ -289,7 +289,10 @@ async def create_scheduled_task(task: ScheduledTaskCreate, request: Request = No
             tags=task.tags,
             task_metadata=task.task_metadata
         )
-        
+        # 同时设置 backup_task_id 列，确保 JOIN 查询能直接匹配
+        if task.backup_task_id:
+            scheduled_task.backup_task_id = task.backup_task_id
+
         # 添加任务
         success = await scheduler.add_task(scheduled_task)
         

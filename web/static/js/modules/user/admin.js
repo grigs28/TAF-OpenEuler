@@ -1,4 +1,3 @@
-import { loginUtils } from './components/loginModal.js';
 import { logger } from './components/logger.js';
 import { initVersionHistory } from './components/versionHistory.js';
 
@@ -95,7 +94,17 @@ const app = Vue.createApp({
     mounted() {
         const path = window.location.pathname;
         if (path.startsWith('/admin')) {
-            loginUtils.checkAdminAccess(this);
+            // SSO 模式下通过 cookie 验证权限
+            fetch('/api/yz/user', { credentials: 'same-origin' })
+                .then(r => r.json())
+                .then(data => {
+                    if (data.ok) {
+                        this.auth.username = data.display_name || data.username;
+                        this.auth.isAuthenticated = true;
+                        this.auth.token = 'sso';
+                    }
+                })
+                .catch(() => {});
         }
     },
 
@@ -228,29 +237,22 @@ const app = Vue.createApp({
             }
         },
 
-        // 验证token
+        // SSO 模式下通过 cookie 验证
         async validateToken() {
-            const token = localStorage.getItem('authToken');
-            if (!token) {
-                this.showLoginModal = true;
-                return;
-            }
-
             try {
-                const userInfo = await loginUtils.getUserInfo();
-                if (!userInfo) {
-                    throw new Error('Token无效');
+                const resp = await fetch('/api/yz/user', { credentials: 'same-origin' });
+                const data = await resp.json();
+                if (data.ok) {
+                    this.auth.isAuthenticated = true;
+                    this.auth.username = data.display_name || data.username;
+                    this.auth.token = 'sso';
+                    this.isAdmin = data.is_admin === 1;
+                    return;
                 }
-
-                this.auth.isAuthenticated = true;
-                this.auth.username = userInfo.username;
-                this.auth.token = token;
-                this.isAdmin = userInfo.is_admin || false;
             } catch (error) {
-                console.error('Token验证失败:', error);
-                localStorage.removeItem('authToken');
-                this.showLoginModal = true;
+                console.error('SSO 验证失败:', error);
             }
+            this.showLoginModal = true;
         },
 
         // 切换标签页
@@ -334,13 +336,15 @@ const app = Vue.createApp({
         async logout() {
             try {
                 localStorage.removeItem('authToken');
+                document.cookie = 'taf_sso_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
                 this.auth.isAuthenticated = false;
                 this.auth.username = '';
                 this.auth.token = '';
                 this.isAdmin = false;
-                window.location.href = '/';
+                window.location.href = '/api/yz/logout';
             } catch (error) {
                 console.error('退出登录失败:', error);
+                window.location.href = '/';
             }
         },
         
@@ -875,12 +879,8 @@ const app = Vue.createApp({
     }
 });
 
-// 注册全局组件
-app.component('login-modal', loginUtils.LoginModal);
-
 // 初始化版本历史组件
 initVersionHistory(app);
-loginUtils.initLoginModal(app);
 
 // 挂载应用
 app.mount('#app');

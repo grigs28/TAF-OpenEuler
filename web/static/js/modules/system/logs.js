@@ -4,6 +4,7 @@
 let currentLogPage = 0;
 let logPageSize = 50;
 let totalLogCount = 0;
+let currentLogLevel = '';  // 按钮选中的日志级别，用于筛选
 
 // 分类和操作类型的中文映射
 const categoryLabels = {
@@ -50,7 +51,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     // 筛选器变化自动刷新
-    ['logCategory', 'logLevel', 'logOperationType'].forEach(function(id) {
+    ['logCategory', 'logOperationType'].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) {
             el.addEventListener('change', function() {
@@ -80,6 +81,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (!level) return;
             // 保存到后端，成功后再高亮按钮
             fetch('/api/system/env-config', {
+                credentials: 'include',
                 method: 'PUT',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({log_level: level})
@@ -87,6 +89,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (result.success) {
                     logLevelToggle.querySelectorAll('button').forEach(function(b) { b.classList.remove('active'); });
                     btn.classList.add('active');
+                    // 同时用按钮级别过滤日志显示
+                    currentLogLevel = level.toLowerCase();
+                    currentLogPage = 0;
+                    loadSystemLogs();
                     console.log('日志级别已切换为: ' + level);
                 } else {
                     alert('切换失败: ' + (result.detail || '未知错误'));
@@ -105,10 +111,9 @@ document.addEventListener('DOMContentLoaded', function() {
         exportLogsBtn.addEventListener('click', function() {
             var params = new URLSearchParams();
             var category = document.getElementById('logCategory');
-            var level = document.getElementById('logLevel');
             var opType = document.getElementById('logOperationType');
             if (category && category.value) params.set('category', category.value);
-            if (level && level.value) params.set('level', level.value);
+            if (currentLogLevel) params.set('level', currentLogLevel);
             if (opType && opType.value) params.set('operation_type', opType.value);
             window.open('/api/system/logs/export?' + params.toString(), '_blank');
         });
@@ -157,17 +162,15 @@ document.addEventListener('DOMContentLoaded', function() {
 // 加载筛选器选项（从数据库实际存在的值）
 async function loadLogFilterOptions() {
     try {
-        var response = await fetch('/api/system/log-filters');
+        var response = await fetch('/api/system/log-filters', {credentials: 'include'});
         var result = await response.json();
         if (!result.success) return;
 
         // 保留当前选中值
         var catSelect = document.getElementById('logCategory');
-        var lvlSelect = document.getElementById('logLevel');
         var opSelect = document.getElementById('logOperationType');
 
         var curCat = catSelect ? catSelect.value : '';
-        var curLvl = lvlSelect ? lvlSelect.value : '';
         var curOp = opSelect ? opSelect.value : '';
 
         // 填充分类
@@ -180,18 +183,6 @@ async function loadLogFilterOptions() {
                 catSelect.appendChild(opt);
             });
             catSelect.value = curCat;
-        }
-
-        // 填充级别
-        if (lvlSelect && result.levels) {
-            lvlSelect.options.length = 1;
-            result.levels.forEach(function(val) {
-                var opt = document.createElement('option');
-                opt.value = val;
-                opt.textContent = levelLabels[val] || val;
-                lvlSelect.appendChild(opt);
-            });
-            lvlSelect.value = curLvl;
         }
 
         // 填充操作类型
@@ -221,7 +212,7 @@ async function loadSystemLogs() {
     try {
         // 获取筛选条件
         const category = document.getElementById('logCategory')?.value || '';
-        const level = document.getElementById('logLevel')?.value || '';
+        const level = currentLogLevel;
         const operationType = document.getElementById('logOperationType')?.value || '';
         
         // 构建查询参数
@@ -234,7 +225,7 @@ async function loadSystemLogs() {
         if (level) params.append('level', level);
         if (operationType) params.append('operation_type', operationType);
         
-        const response = await fetch(`/api/system/logs?${params.toString()}`);
+        const response = await fetch(`/api/system/logs?${params.toString()}`, {credentials: 'include'});
         
         if (!response.ok) {
             throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -403,10 +394,11 @@ async function clearSystemLogs() {
 // 加载当前日志级别并高亮按钮
 async function loadCurrentLogLevel() {
     try {
-        var response = await fetch('/api/system/env-config');
+        var response = await fetch('/api/system/env-config', {credentials: 'include'});
         var result = await response.json();
         if (result.success && result.config) {
             var currentLevel = (result.config.log_level || 'INFO').toUpperCase();
+            currentLogLevel = currentLevel.toLowerCase();
             var toggle = document.getElementById('logLevelToggle');
             if (toggle) {
                 toggle.querySelectorAll('button').forEach(function(btn) {

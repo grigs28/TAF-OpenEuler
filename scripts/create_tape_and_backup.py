@@ -144,8 +144,8 @@ def create_tape_and_backup():
             INSERT INTO scheduled_tasks (
                 task_name, description, schedule_type, schedule_config,
                 action_type, action_config, status, enabled,
-                tags, task_metadata, created_at, updated_at
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                tags, task_metadata, backup_task_id, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING id
             """,
             (schedule_task_name,
@@ -158,6 +158,7 @@ def create_tape_and_backup():
             True,
             json.dumps([]),
             json.dumps(task_metadata),
+            task_id,
             now, now)
         )
         row = cur.fetchone()

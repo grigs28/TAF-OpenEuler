@@ -275,12 +275,12 @@ class TapeRecoveryEngine:
             except Exception as e:
                 yield {"type": "log", "message": f"清理挂载点: {e}"}
 
-            cmd_str = f"{ltfs_bin} -o devname={tape_device} -o allow_root {mount_point}"
+            cmd_str = f"{ltfs_bin} -o devname={tape_device} {mount_point}"
             yield {"type": "log", "message": f"$ {cmd_str}"}
 
             try:
                 process = await asyncio.create_subprocess_exec(
-                    ltfs_bin, '-o', f'devname={tape_device}', '-o', 'allow_root', str(mount_point),
+                    ltfs_bin, '-o', f'devname={tape_device}', str(mount_point),
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )

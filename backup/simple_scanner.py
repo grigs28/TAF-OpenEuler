@@ -685,6 +685,7 @@ class SimpleScanner:
                 compressed = False
                 encrypted = False
                 checksum = None
+                error_message = file_info.get('error_message')
                 is_copy_success = False
                 copy_status_at = None
                 
@@ -716,6 +717,7 @@ class SimpleScanner:
                     compressed,             # compressed
                     encrypted,              # encrypted
                     checksum,               # checksum
+                    file_info.get('error_message'),  # error_message
                     is_copy_success,        # is_copy_success
                     copy_status_at,         # copy_status_at
                     backup_time,            # backup_time
@@ -742,13 +744,13 @@ class SimpleScanner:
                     backup_set_id, file_path, file_name, directory_path, display_name,
                     file_type, file_size, compressed_size, file_permissions, file_owner,
                     file_group, created_time, modified_time, accessed_time, tape_block_start,
-                    tape_block_count, compressed, encrypted, checksum, is_copy_success,
+                    tape_block_count, compressed, encrypted, checksum, error_message, is_copy_success,
                     copy_status_at, backup_time, chunk_number, version,
                     created_at, updated_at
                 ) VALUES (
                     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                     $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-                    $21, $22, $23, $24, NOW(), NOW()
+                    $21, $22, $23, $24, $25, NOW(), NOW()
                 )
                 """,
                 insert_data

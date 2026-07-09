@@ -122,7 +122,12 @@ async def get_backup_tasks(
                    st.id as scheduler_task_id
             FROM backup_tasks bt
             LEFT JOIN backup_sets bs ON bt.backup_set_id = bs.id
-            LEFT JOIN scheduled_tasks st ON st.backup_task_id = bt.id AND st.action_type = 'backup'
+            LEFT JOIN scheduled_tasks st ON st.action_type = 'backup' AND (
+                st.backup_task_id = bt.id
+                OR st.backup_task_id = bt.template_id
+                OR (st.backup_task_id IS NULL AND bt.template_id IS NOT NULL
+                    AND (st.task_metadata->>'backup_task_id')::int = bt.template_id)
+            )
             WHERE {where_sql}
             ORDER BY bt.created_at DESC
         """

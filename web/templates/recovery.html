@@ -240,11 +240,8 @@
                                 <button class="btn btn-outline-secondary btn-sm" id="deselectAllBtn" title="取消全选">
                                     <i class="bi bi-x-lg me-1"></i>取消
                                 </button>
-                                <button class="btn btn-outline-secondary btn-sm" id="expandAllBtn" title="展开全部">
-                                    <i class="bi bi-arrows-expand me-1"></i>展开全部
-                                </button>
-                                <button class="btn btn-outline-secondary btn-sm" id="collapseAllBtn" title="折叠全部" style="display:none;">
-                                    <i class="bi bi-arrows-collapse me-1"></i>折叠
+                                <button class="btn btn-outline-secondary btn-sm" id="expandAllBtn" title="检索全部（缓存到数据库）">
+                                    <i class="bi bi-database me-1"></i>检索全部
                                 </button>
                             </div>
                             <button class="btn btn-outline-secondary btn-sm" id="goToRestoreBtn" disabled>
@@ -453,7 +450,7 @@
 
     // ============ 磁带状态 ============
     function checkTapeStatus() {
-        fetch('/api/recovery/tape-status')
+        fetch('/api/recovery/tape-status', {credentials: 'include'})
         .then(function(r) { return r.json(); })
         .then(function(data) {
             var dot = document.getElementById('tapeDot');
@@ -508,6 +505,8 @@
 
     // SSE 流式请求辅助函数
     function _streamFetch(url, opts, onEvent, onDone) {
+        opts = opts || {};
+        opts.credentials = 'include';
         fetch(url, opts).then(function(r) {
             var reader = r.body.getReader();
             var decoder = new TextDecoder();
@@ -881,25 +880,54 @@
                 childContainer.className = 'tree-children';
                 childContainer.style.display = 'none';
                 childContainer.setAttribute('data-loaded', 'false');
-                // 点击展开/折叠
+                // 点击展开/折叠（手风琴：只保留一个展开，折叠时清空DOM释放内存）
                 archiveNode.addEventListener('click', function(e) {
                     if (e.target.tagName === 'INPUT') return;
                     if (childContainer.style.display === 'none') {
+                        // 手风琴：关闭之前展开的归档，清空其 DOM
+                        var prevExpanded = document.querySelectorAll('#fileTree .tree-children');
+                        prevExpanded.forEach(function(c) {
+                            if (c !== childContainer && c.style.display !== 'none') {
+                                c.style.display = 'none';
+                                c.textContent = '';
+                                c.setAttribute('data-loaded', 'false');
+                            }
+                        });
                         childContainer.style.display = '';
+                        // 检查是否有缓存数据（检索全部后标记了 data-cache-count）
+                        var cacheCount = parseInt(childContainer.getAttribute('data-cache-count') || '0');
                         // 首次展开时加载文件列表
                         if (childContainer.getAttribute('data-loaded') === 'false') {
                             childContainer.setAttribute('data-loaded', 'loading');
-                            childContainer.innerHTML = '<div class="text-center text-muted py-1" style="padding-left:20px;font-size:0.8rem;"><i class="bi bi-hourglass me-1"></i>读取归档文件列表...</div>';
+                            childContainer.textContent = '读取中...';
+                            childContainer.style.paddingLeft = '20px';
+                            childContainer.style.fontSize = '0.8rem';
+                            childContainer.style.color = '#888';
                             // 输出到操作日志
                             var loadLogEl = _addScanLog('正在读取归档文件列表: ' + a.filename + ' ...', 'scanning');
                             _addProgressLog('正在读取归档文件列表: ' + a.filename + ' ...', 'scanning');
-                            fetch('/api/recovery/backup-sets/' + encodeURIComponent(setId) + '/archive-contents?archive=' + encodeURIComponent(a.filename))
+                            // 如果有缓存，从数据库分页加载；否则走原始解压
+                            var loadUrl;
+                            if (cacheCount > 0) {
+                                loadUrl = '/api/recovery/backup-sets/' + encodeURIComponent(setId) + '/archive-contents?archive=' + encodeURIComponent(a.filename) + '&page=1&page_size=500&use_cache=true';
+                            } else {
+                                loadUrl = '/api/recovery/backup-sets/' + encodeURIComponent(setId) + '/archive-contents?archive=' + encodeURIComponent(a.filename);
+                            }
+                            fetch(loadUrl, {credentials: 'include'})
                             .then(function(r) { return r.json(); })
                             .then(function(data) {
-                                childContainer.innerHTML = '';
+                                childContainer.textContent = '';
+                                childContainer.style.paddingLeft = '';
+                                childContainer.style.fontSize = '';
+                                childContainer.style.color = '';
                                 var entries = data.entries || [];
                                 if (!entries.length) {
-                                    childContainer.innerHTML = '<div class="text-muted" style="padding-left:20px;font-size:0.8rem;">空归档</div>';
+                                    var emptyDiv = document.createElement('div');
+                                    emptyDiv.className = 'text-muted';
+                                    emptyDiv.style.paddingLeft = '20px';
+                                    emptyDiv.style.fontSize = '0.8rem';
+                                    emptyDiv.textContent = '空归档';
+                                    childContainer.appendChild(emptyDiv);
                                     _updateScanLog(loadLogEl, '归档 ' + a.filename + ': 空归档', 'file');
                                     _addProgressLog('归档 ' + a.filename + ': 空归档', 'file');
                                     return;
@@ -907,17 +935,41 @@
                                 // 只显示文件（非目录），排序
                                 var files = entries.filter(function(e) { return !e.is_dir; })
                                     .sort(function(a, b) { return (a.name || '').localeCompare(b.name || ''); });
-                                files.forEach(function(f) {
+                                // 限制 DOM 渲染数量，避免卡顿
+                                var maxRender = 500;
+                                var renderFiles = files.slice(0, maxRender);
+                                renderFiles.forEach(function(f) {
                                     var leaf = document.createElement('div');
                                     leaf.className = 'tree-node';
                                     leaf.style.paddingLeft = '20px';
-                                    leaf.innerHTML =
-                                        '<input type="checkbox" data-role="file" data-archive="' + escapeHtml(a.filename) + '" data-file="' + escapeHtml(f.name) + '">' +
-                                        '<i class="bi bi-file-earmark-text text-muted"></i>' +
-                                        '<span style="font-size:0.85rem;">' + escapeHtml(f.name) + '</span>' +
-                                        '<small class="text-muted ms-auto" style="font-size:0.7rem;">' + formatBytes(f.size || 0) + '</small>';
+                                    var cb = document.createElement('input');
+                                    cb.type = 'checkbox';
+                                    cb.setAttribute('data-role', 'file');
+                                    cb.setAttribute('data-archive', a.filename);
+                                    cb.setAttribute('data-file', f.name);
+                                    var icon = document.createElement('i');
+                                    icon.className = 'bi bi-file-earmark-text text-muted';
+                                    var nameSpan = document.createElement('span');
+                                    nameSpan.style.fontSize = '0.85rem';
+                                    nameSpan.textContent = f.name;
+                                    var sizeSmall = document.createElement('small');
+                                    sizeSmall.className = 'text-muted ms-auto';
+                                    sizeSmall.style.fontSize = '0.7rem';
+                                    sizeSmall.textContent = formatBytes(f.size || 0);
+                                    leaf.appendChild(cb);
+                                    leaf.appendChild(icon);
+                                    leaf.appendChild(nameSpan);
+                                    leaf.appendChild(sizeSmall);
                                     childContainer.appendChild(leaf);
                                 });
+                                if (files.length > maxRender) {
+                                    var moreDiv = document.createElement('div');
+                                    moreDiv.className = 'text-muted';
+                                    moreDiv.style.paddingLeft = '20px';
+                                    moreDiv.style.fontSize = '0.8rem';
+                                    moreDiv.textContent = '... 还有 ' + (files.length - maxRender) + ' 个文件（共 ' + files.length + ' 个，已缓存）';
+                                    childContainer.appendChild(moreDiv);
+                                }
                                 // 存入 allArchiveData 供选择汇总
                                 allArchiveData[a.filename] = files.map(function(f) {
                                     return { name: f.name, size: f.size, is_dir: false, source_archive: a.filename };
@@ -929,13 +981,22 @@
                                 _addProgressLog(loadMsg, 'done');
                             })
                             .catch(function(err) {
-                                childContainer.innerHTML = '<div class="text-danger" style="padding-left:20px;font-size:0.8rem;">加载失败: ' + escapeHtml(err.message) + '</div>';
+                                childContainer.textContent = '';
+                                var errDiv = document.createElement('div');
+                                errDiv.className = 'text-danger';
+                                errDiv.style.paddingLeft = '20px';
+                                errDiv.style.fontSize = '0.8rem';
+                                errDiv.textContent = '加载失败: ' + err.message;
+                                childContainer.appendChild(errDiv);
                                 _updateScanLog(loadLogEl, '归档 ' + a.filename + ': 加载失败 - ' + err.message, 'error');
                                 _addProgressLog('归档 ' + a.filename + ': 加载失败 - ' + err.message, 'error');
                             });
                         }
                     } else {
+                        // 折叠：清空 DOM 释放内存
                         childContainer.style.display = 'none';
+                        childContainer.textContent = '';
+                        childContainer.setAttribute('data-loaded', 'false');
                     }
                 });
                 tree.appendChild(archiveNode);
@@ -946,7 +1007,7 @@
         }
 
         // 无缓存数据时回退到 API
-        fetch('/api/recovery/backup-sets/' + encodeURIComponent(setId) + '/contents')
+        fetch('/api/recovery/backup-sets/' + encodeURIComponent(setId) + '/contents', {credentials: 'include'})
         .then(function(r) { return r.json(); })
         .then(function(data) {
             if (data.detail) { tree.innerHTML = '<div class="alert alert-danger">' + data.detail + '</div>'; return; }
@@ -1166,6 +1227,7 @@
         _addScanLog('开始创建恢复任务，目标: ' + targetPath, 'info');
 
         fetch('/api/recovery/restore', {
+            credentials: 'include',
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
@@ -1190,7 +1252,7 @@
     var _lastRecoveryLogArchive = '';
     function pollRecoveryStatus() {
         if (!currentRecoveryId) return;
-        fetch('/api/recovery/recovery-status/' + currentRecoveryId)
+        fetch('/api/recovery/recovery-status/' + currentRecoveryId, {credentials: 'include'})
         .then(function(r) { return r.json(); })
         .then(function(data) {
             var pct = data.progress_percent || 0;
@@ -1219,6 +1281,7 @@
         btn.innerHTML = '<i class="bi bi-hourglass me-2"></i>打包中...';
         _addScanLog('开始打包 ZIP 下载...', 'info');
         fetch('/api/recovery/download-zip', {
+            credentials: 'include',
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({ set_id: selectedSetId, selected_files: sel }),
@@ -1299,7 +1362,7 @@
     function loadDirList(path) {
         var listEl = document.getElementById('dirModalList');
         listEl.innerHTML = '<div class="text-center text-muted py-3">加载中...</div>';
-        fetch('/api/system/file-system/list?path=' + encodeURIComponent(path))
+        fetch('/api/system/file-system/list?path=' + encodeURIComponent(path), {credentials: 'include'})
         .then(function(r) { return r.json(); })
         .then(function(data) {
             listEl.innerHTML = '';
@@ -1489,7 +1552,8 @@
             '</div>';
         document.getElementById('filePager').style.display = 'none';
 
-        var searchUrl = '/api/recovery/backup-sets/' + encodeURIComponent(selectedSetId) + '/search-files-stream?q=' + encodeURIComponent(keyword) + '&_t=' + Date.now();
+        var tapeLabelForSearch = document.getElementById('tapeLabel').textContent || 'unknown';
+        var searchUrl = '/api/recovery/backup-sets/' + encodeURIComponent(selectedSetId) + '/search-files-stream?q=' + encodeURIComponent(keyword) + '&tape_label=' + encodeURIComponent(tapeLabelForSearch) + '&_t=' + Date.now();
 
         // 关闭旧的 EventSource
         if (_currentEventSource) { _currentEventSource.close(); _currentEventSource = null; }
@@ -1672,11 +1736,8 @@
         // 获取磁带卷标
         var tapeLabel = document.getElementById('tapeLabel').textContent || 'unknown';
 
-        _addScanLog('开始展开全部，查询缓存并读取归档...', 'info');
-        _addProgressLog('开始展开全部...', 'info');
-
-        // 先展开所有已有的
-        document.querySelectorAll('#fileTree .tree-children').forEach(function(c) { c.style.display = ''; });
+        _addScanLog('开始检索全部归档，缓存到数据库...', 'info');
+        _addProgressLog('开始检索全部归档...', 'info');
 
         var expandUrl = '/api/recovery/backup-sets/' + encodeURIComponent(selectedSetId)
             + '/expand-all-stream?tape_label=' + encodeURIComponent(tapeLabel) + '&_t=' + Date.now();
@@ -1686,7 +1747,7 @@
             { method: 'GET' },
             function(ev) {
                 if (ev.type === 'start') {
-                    _addScanLog('共 ' + (ev.total_archives || 0) + ' 个归档需要检查', 'info');
+                    _addScanLog('共 ' + (ev.total_archives || 0) + ' 个归档需要检索', 'info');
                     _addProgressLog('共 ' + (ev.total_archives || 0) + ' 个归档', 'info');
                 }
                 else if (ev.type === 'archive_progress') {
@@ -1701,7 +1762,7 @@
                     _addScanLog(msg, logType);
                     _addProgressLog(msg, logType);
 
-                    // 更新对应的 archive 节点显示文件数
+                    // 更新对应的 archive 节点显示文件数和缓存状态
                     var archCbs = document.querySelectorAll('input[data-role="archive"]');
                     archCbs.forEach(function(cb) {
                         if (cb.dataset.archive === ev.archive) {
@@ -1710,47 +1771,37 @@
                             if (countSmall) {
                                 countSmall.textContent = (ev.total_files || 0) + ' 个文件';
                             }
-                            // 标记为已缓存
+                            // 标记缓存数量（点击展开时从数据库分页加载）
                             var nextSibling = parent.nextElementSibling;
                             if (nextSibling && nextSibling.classList.contains('tree-children')) {
-                                nextSibling.setAttribute('data-loaded', 'true');
+                                nextSibling.setAttribute('data-loaded', 'false');
                                 nextSibling.setAttribute('data-cache-count', ev.total_files || 0);
-                                // 显示文件数量提示
-                                if (ev.total_files > 0) {
-                                    nextSibling.innerHTML = '<div class="text-muted" style="padding-left:20px;font-size:0.8rem;">' + (ev.total_files) + ' 个文件（已缓存，点击展开查看）</div>';
-                                }
+                                nextSibling.textContent = '';
+                                nextSibling.style.display = 'none';
                             }
                         }
                     });
                 }
                 else if (ev.type === 'done') {
-                    _addScanLog(ev.message || '展开完成', 'done');
-                    _addProgressLog(ev.message || '展开完成', 'done');
-                    document.getElementById('expandAllBtn').style.display = 'none';
-                    document.getElementById('collapseAllBtn').style.display = '';
+                    _addScanLog(ev.message || '检索完成', 'done');
+                    _addProgressLog(ev.message || '检索完成', 'done');
                     btn.disabled = false;
-                    // 更新 allArchiveData 的统计
                     updateSelectionSummary();
                 }
                 else if (ev.type === 'error') {
-                    _addScanLog('错误: ' + (ev.message || '展开失败'), 'error');
-                    _addProgressLog('错误: ' + (ev.message || '展开失败'), 'error');
+                    _addScanLog('错误: ' + (ev.message || '检索失败'), 'error');
+                    _addProgressLog('错误: ' + (ev.message || '检索失败'), 'error');
                     btn.disabled = false;
                 }
             },
             function(err) {
                 if (err) {
-                    _addScanLog('展开全部失败: ' + (err.message || ''), 'error');
-                    _addProgressLog('展开全部失败', 'error');
+                    _addScanLog('检索全部失败: ' + (err.message || ''), 'error');
+                    _addProgressLog('检索全部失败', 'error');
                 }
                 btn.disabled = false;
             }
         );
-    });
-    document.getElementById('collapseAllBtn').addEventListener('click', function() {
-        document.querySelectorAll('#fileTree .tree-children').forEach(function(c) { c.style.display = 'none'; });
-        document.getElementById('collapseAllBtn').style.display = 'none';
-        document.getElementById('expandAllBtn').style.display = '';
     });
 
     document.getElementById('goToRestoreBtn').addEventListener('click', function() {

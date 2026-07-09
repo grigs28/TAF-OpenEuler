@@ -76,6 +76,24 @@
                 </div>
             </div>
         </div>
+
+        <div class="col-md-6">
+            <div class="setting-card service-card mb-3">
+                <div class="card-body">
+                    <h6 class="card-title">单点登录 (SSO)</h6>
+                    <div class="mb-3">
+                        <label class="form-label">yz-login 服务地址</label>
+                        <input type="text" class="form-control" id="yzLoginUrl" placeholder="http://192.168.0.8">
+                        <small class="form-text text-secondary">SSO 登录服务地址，如 http://192.168.0.8</small>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">TAF 回调地址</label>
+                        <input type="text" class="form-control" id="tafCallbackUrl" placeholder="http://192.168.0.16:8081/api/yz/callback">
+                        <small class="form-text text-secondary">yz-login 登录后回调到 TAF 的地址</small>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
 

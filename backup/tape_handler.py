@@ -71,15 +71,20 @@ class TapeHandler:
         if ltfs_device:
             return ltfs_device
 
-        # 如果没有配置，尝试自动转换 /dev/nst0 -> /dev/sg2
+        # 如果没有配置，通过 sysfs 找到对应的 sg 设备
         tape_device = self._get_tape_device()
         if tape_device.startswith('/dev/nst') or tape_device.startswith('/dev/st'):
-            # 尝试找到对应的 sg 设备
             import os
-            for i in range(10):
-                sg_path = f'/dev/sg{i}'
-                if os.path.exists(sg_path):
-                    return sg_path
+            # 从 /dev/nst0 提取设备名 nst0
+            dev_name = os.path.basename(tape_device)
+            # 通过 sysfs 查找对应的 SCSI generic 设备
+            # /sys/class/scsi_tape/nst0/device/generic -> scsi_generic/sg2
+            generic_path = f'/sys/class/scsi_tape/{dev_name}/device/generic'
+            if os.path.exists(generic_path):
+                sg_name = os.path.basename(os.readlink(generic_path))
+                logger.info(f"自动检测 LTFS 设备: {tape_device} -> /dev/{sg_name}")
+                return f'/dev/{sg_name}'
+            logger.warning(f"无法通过 sysfs 找到 {tape_device} 对应的 sg 设备")
 
         return tape_device
 

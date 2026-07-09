@@ -69,13 +69,43 @@ class FileScanner:
                 'is_symlink': entry.is_symlink()
             }
         except (PermissionError, OSError, FileNotFoundError, IOError) as e:
-            # 权限错误、访问错误等，返回None，让调用者跳过该文件
-            logger.debug(f"无法获取文件信息（权限/访问错误）: {entry.path if hasattr(entry, 'path') else 'unknown'} (错误: {str(e)})")
-            return None
+            # 权限错误、访问错误等，返回带错误信息的最小记录
+            logger.warning(f"跳过无法访问的文件: {entry.path if hasattr(entry, 'path') else 'unknown'} (错误: {str(e)})")
+            entry_path_str = entry.path if hasattr(entry, 'path') else 'unknown'
+            try:
+                file_name = Path(entry_path_str).name
+            except Exception:
+                file_name = entry_path_str.split('\\')[-1].split('/')[-1]
+            return {
+                'path': entry_path_str,
+                'name': file_name,
+                'size': 0,
+                'modified_time': datetime.now(),
+                'permissions': '',
+                'is_file': True,
+                'is_dir': False,
+                'is_symlink': False,
+                'error_message': f'扫描错误: {str(e)}'
+            }
         except Exception as e:
-            # 其他错误，也返回None
+            # 其他错误，也返回带错误信息的最小记录
             logger.warning(f"获取文件信息失败 {entry.path if hasattr(entry, 'path') else 'unknown'}: {str(e)}")
-            return None
+            entry_path_str = entry.path if hasattr(entry, 'path') else 'unknown'
+            try:
+                file_name = Path(entry_path_str).name
+            except Exception:
+                file_name = entry_path_str.split('\\')[-1].split('/')[-1]
+            return {
+                'path': entry_path_str,
+                'name': file_name,
+                'size': 0,
+                'modified_time': datetime.now(),
+                'permissions': '',
+                'is_file': True,
+                'is_dir': False,
+                'is_symlink': False,
+                'error_message': f'扫描错误: {str(e)}'
+            }
     
     async def get_file_info(self, file_path: Path) -> Optional[Dict]:
         """获取文件信息（兼容旧接口，用于非 scandir 场景）
@@ -101,13 +131,33 @@ class FileScanner:
                 'is_symlink': file_path.is_symlink()
             }
         except (PermissionError, OSError, FileNotFoundError, IOError) as e:
-            # 权限错误、访问错误等，返回None，让调用者跳过该文件
-            logger.debug(f"无法获取文件信息（权限/访问错误）: {file_path} (错误: {str(e)})")
-            return None
+            # 权限错误、访问错误等，返回带错误信息的最小记录
+            logger.warning(f"跳过无法访问的文件: {file_path} (错误: {str(e)})")
+            return {
+                'path': str(file_path),
+                'name': file_path.name,
+                'size': 0,
+                'modified_time': datetime.now(),
+                'permissions': '',
+                'is_file': True,
+                'is_dir': False,
+                'is_symlink': False,
+                'error_message': f'扫描错误: {str(e)}'
+            }
         except Exception as e:
-            # 其他错误，也返回None
+            # 其他错误，也返回带错误信息的最小记录
             logger.warning(f"获取文件信息失败 {file_path}: {str(e)}")
-            return None
+            return {
+                'path': str(file_path),
+                'name': file_path.name,
+                'size': 0,
+                'modified_time': datetime.now(),
+                'permissions': '',
+                'is_file': True,
+                'is_dir': False,
+                'is_symlink': False,
+                'error_message': f'扫描错误: {str(e)}'
+            }
     
     def should_exclude_file(self, file_path: str, exclude_patterns: List[str]) -> bool:
         """检查文件或目录是否应该被排除

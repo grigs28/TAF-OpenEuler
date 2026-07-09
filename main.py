@@ -86,6 +86,20 @@ def safe_print(message: str):
         print(message.encode('ascii', 'ignore').decode('ascii'))
 
 
+def _get_local_ip() -> str:
+    """获取本机局域网 IP"""
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.1)
+        s.connect(('192.168.0.1', 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return '127.0.0.1'
+
+
 class TapeBackupSystem:
     """磁带备份系统主类"""
 
@@ -352,7 +366,8 @@ class TapeBackupSystem:
             print("=" * 80, flush=True)
             safe_print(f"Web服务已启动 (服务启动耗时: {service_time:.2f}秒)")
             safe_print(f"访问地址: http://localhost:{self.settings.WEB_PORT}")
-            safe_print(f"局域网访问: http://192.168.0.28:{self.settings.WEB_PORT}")
+            local_ip = _get_local_ip()
+            safe_print(f"局域网访问: http://{local_ip}:{self.settings.WEB_PORT}")
             print("=" * 80, flush=True)
             safe_print("提示: 按 Ctrl+C 停止服务\n")
             # 确保输出缓冲区刷新，避免Windows终端等待
@@ -615,6 +630,10 @@ if __name__ == "__main__":
 
     safe_print("\nPython 版本: " + sys.version.split()[0])
     safe_print("工作目录: " + os.getcwd())
+
+    # 显示应用版本
+    from config.settings import _read_version_from_changelog
+    safe_print(f"TAF 版本: v{_read_version_from_changelog()}")
 
     # 检测重复实例
     _check_and_create_lock()
