@@ -1037,6 +1037,30 @@ class CompressionWorker:
                     original_size = compressed_info.get('original_size', 0) or 0
                     self.total_size += compressed_size
                     self.total_original_size += original_size
+
+                    # 记录压缩失败的文件（带文件名）到系统日志
+                    failed_files = compressed_info.get('failed_files', [])
+                    if failed_files:
+                        task_id = getattr(self.backup_task, 'id', None)
+                        # 汇总写入系统日志表（一条记录包含所有失败文件）
+                        try:
+                            from utils.log_utils import log_system
+                            from models.system_log import LogLevel, LogCategory
+                            summary = '; '.join(
+                                f"{ff.get('path', '?')}({ff.get('reason', '?')})"
+                                for ff in failed_files[:20]
+                            )
+                            await log_system(
+                                level=LogLevel.WARNING,
+                                category=LogCategory.BACKUP,
+                                message=f"压缩失败 {len(failed_files)} 个文件: {summary}",
+                                module='compression_worker',
+                                function='_compress_file_group',
+                                task_id=task_id,
+                                details={'failed_files': failed_files[:50]}
+                            )
+                        except Exception:
+                            pass
                     
                     # 纯内存模式：跳过所有数据库操作（不写chunk_number、不更新DB进度）
                     if self.in_memory_store is not None:
