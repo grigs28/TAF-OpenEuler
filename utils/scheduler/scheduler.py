@@ -18,7 +18,7 @@ from models.scheduled_task import ScheduledTask, ScheduledTaskStatus
 from config.database import db_manager
 
 from .db_utils import is_opengauss, get_opengauss_connection
-from .schedule_calculator import calculate_next_run_time
+from .schedule_calculator import calculate_next_run_time, get_monthly_cycle_start
 from .task_executor import create_task_executor
 from .task_storage import (
     load_tasks_from_db, get_task_by_id, get_all_tasks,
@@ -834,20 +834,21 @@ class TaskScheduler:
                     if current_time < next_run:
                         continue
 
-                    # 月度去重：本月已成功执行过的月度任务不再触发
+                    # 月度去重：本周期已成功执行过的月度任务不再触发（周期语义，非日历月）
                     schedule_type = task.schedule_type.value if task and hasattr(task.schedule_type, 'value') else 'N/A'
                     last_success = task.last_success_time if task else None
                     if schedule_type.lower() == 'monthly' and last_success:
-                        if (last_success.year == current_time.year and
-                                last_success.month == current_time.month):
-                            # 重算 next_run 到下个月，更新内存和数据库
+                        period_start = get_monthly_cycle_start(current_time, task.schedule_config)
+                        if period_start and last_success >= period_start:
+                            # 重算 next_run 到下个周期，更新内存和数据库
                             new_next_run = calculate_next_run_time(task)
                             if new_next_run:
                                 task_info['next_run'] = new_next_run
                                 await self._persist_next_run(task_id, new_next_run)
                                 logger.info(
-                                    f"[调度器主循环] 月度任务本月已执行，跳过 - "
+                                    f"[调度器主循环] 月度任务本周期已执行，跳过 - "
                                     f"任务ID: {task_id}, 任务名称: {task_name}, "
+                                    f"周期起始: {period_start.strftime('%Y-%m-%d')}, "
                                     f"下次执行: {new_next_run.strftime('%Y-%m-%d %H:%M:%S')}"
                                 )
                             continue

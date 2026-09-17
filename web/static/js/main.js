@@ -23,6 +23,21 @@ const loginUtils = {
     }
 };
 
+// 全局认证 fetch：自动带 Cookie，401 时跳转重新登录
+// 用法与 fetch 一致：const resp = await authFetch('/api/xxx');
+window.authFetch = async function(url, opts) {
+    opts = opts || {};
+    if (!opts.credentials) opts.credentials = 'include';
+    const resp = await fetch(url, opts);
+    if (resp.status === 401) {
+        // SSO 会话已失效（如服务重启后），跳转受保护页面触发 SSO 重新登录
+        window.location.href = '/backup';
+        // 抛出异常中断后续逻辑（页面即将跳转）
+        throw new Error('会话已过期，正在跳转登录...');
+    }
+    return resp;
+};
+
 document.addEventListener('DOMContentLoaded', function() {
     // 初始化版本点击事件
     initVersionModal();

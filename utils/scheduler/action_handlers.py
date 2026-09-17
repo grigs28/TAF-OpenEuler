@@ -16,6 +16,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from utils.datetime_utils import now, format_datetime
+from utils.scheduler.schedule_calculator import get_monthly_cycle_start
 from typing import Dict, Any, Optional, List
 
 from models.scheduled_task import ScheduledTask, TaskActionType
@@ -141,39 +142,52 @@ class BackupActionHandler(ActionHandler):
                 schedule_type = getattr(scheduled_task, 'schedule_type', None)
                 schedule_type_str = schedule_type.value if hasattr(schedule_type, 'value') else str(schedule_type) if schedule_type else 'unknown'
 
-                # 特殊处理：月度任务
+                # 特殊处理：月度任务（周期语义，与调度计算器一致）
                 if schedule_type and getattr(schedule_type, 'value', '').lower() in ('monthly', 'month'):
                     if last_success:
-                        logger.info(
-                            f"[月度任务检查] 已成功执行过，跳过本次备份 - "
-                            f"任务ID: {getattr(scheduled_task, 'id', 'N/A')}, "
-                            f"任务名称: {getattr(scheduled_task, 'task_name', 'N/A')}, "
-                            f"上次成功时间: {last_success.strftime('%Y-%m-%d %H:%M:%S')}, "
-                            f"当前时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                        period_start = get_monthly_cycle_start(
+                            current_time,
+                            getattr(scheduled_task, 'schedule_config', None) or {}
                         )
-                        try:
-                            await log_operation(
-                                operation_type=OperationType.SCHEDULER_RUN,
-                                resource_type="scheduler",
-                                resource_id=str(getattr(scheduled_task, 'id', '')),
-                                resource_name=getattr(scheduled_task, 'task_name', ''),
-                                operation_name="执行计划任务",
-                                operation_description="跳过：月度任务已成功执行过",
-                                category="scheduler",
-                                success=True,
-                                result_message="跳过执行（月度任务已成功执行过）"
+                        if period_start and last_success >= period_start:
+                            logger.info(
+                                f"[月度任务检查] 本周期已成功执行过，跳过本次备份 - "
+                                f"任务ID: {getattr(scheduled_task, 'id', 'N/A')}, "
+                                f"任务名称: {getattr(scheduled_task, 'task_name', 'N/A')}, "
+                                f"周期起始: {period_start.strftime('%Y-%m-%d')}, "
+                                f"上次成功时间: {last_success.strftime('%Y-%m-%d %H:%M:%S')}, "
+                                f"当前时间: {current_time.strftime('%Y-%m-%d %H:%M:%S')}"
                             )
-                            await log_system(
-                                level=LogLevel.INFO,
-                                category=LogCategory.SYSTEM,
-                                message="月度任务跳过：已成功执行过",
-                                module="utils.scheduler.action_handlers",
-                                function="BackupActionHandler.execute",
-                                task_id=getattr(scheduled_task, 'id', None)
-                            )
-                        except Exception:
-                            pass
-                        return {"status": "skipped", "message": "月度任务已成功执行过"}
+                            try:
+                                await log_operation(
+                                    operation_type=OperationType.SCHEDULER_RUN,
+                                    resource_type="scheduler",
+                                    resource_id=str(getattr(scheduled_task, 'id', '')),
+                                    resource_name=getattr(scheduled_task, 'task_name', ''),
+                                    operation_name="执行计划任务",
+                                    operation_description="跳过：月度任务本周期已成功执行过",
+                                    category="scheduler",
+                                    success=True,
+                                    result_message="跳过执行（月度任务本周期已成功执行过）"
+                                )
+                                await log_system(
+                                    level=LogLevel.INFO,
+                                    category=LogCategory.SYSTEM,
+                                    message="月度任务跳过：本周期已成功执行过",
+                                    module="utils.scheduler.action_handlers",
+                                    function="BackupActionHandler.execute",
+                                    task_id=getattr(scheduled_task, 'id', None)
+                                )
+                            except Exception:
+                                pass
+                            return {"status": "skipped", "message": "月度任务本周期已成功执行过"}
+                        # last_success 在本周期起始之前 → 本周期未执行，继续往下走
+                        logger.info(
+                            f"[月度任务检查] 新周期开始，上次成功在上周期，正常执行 - "
+                            f"任务ID: {getattr(scheduled_task, 'id', 'N/A')}, "
+                            f"周期起始: {period_start.strftime('%Y-%m-%d') if period_start else 'N/A'}, "
+                            f"上次成功时间: {last_success.strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
                     else:
                         logger.info(
                             f"[月度任务检查] 从未成功执行过，检查任务锁 - "

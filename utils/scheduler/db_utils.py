@@ -57,6 +57,26 @@ async def get_backup_files_table_by_set_id(conn, backup_set_id: int) -> str:
     return table_name
 
 
+async def _check_connection_with_timeout(conn):
+    """连接池借出前的快速存活检查（带 3 秒超时）
+
+    场景：服务端 session_timeout=0 不杀会话，但长时间空闲后 TCP 链路被中间
+    网络设备（防火墙/NAT）静默断开。原生 check_connection 发探测包后需等待
+    TCP 数据重传超时（分钟级）才能判死，远超借出超时（10s）。
+    此函数给探测加 3 秒超时，超时即视为死连接，池立即丢弃重建，
+    避免"长时间不访问后第一次打开页面数据库连不上"。
+    """
+    try:
+        from psycopg_pool import AsyncConnectionPool
+        await asyncio.wait_for(
+            AsyncConnectionPool.check_connection(conn),
+            timeout=3.0,
+        )
+    except asyncio.TimeoutError as e:
+        from psycopg import OperationalError
+        raise OperationalError("连接存活检查超时（3s），判定为死连接") from e
+
+
 async def _create_opengauss_pool():
     """创建openGauss连接池（优先使用 psycopg3，修复 BufferError）"""
     import re
@@ -194,8 +214,14 @@ async def _create_opengauss_pool():
         
         try:
             # psycopg3 使用 binary protocol，修复 BufferError
-            # 构建连接字符串
-            conninfo = f"host={host} port={port} user={username} password={password} dbname={database}"
+            # 构建连接字符串（含 TCP keepalive + tcp_user_timeout，快速发现半死连接）
+            # tcp_user_timeout=5000ms：数据（含探测包）5秒无ACK即在内核层判死，
+            # 配合 check 的 3 秒超时，把判死时间从分钟级压缩到秒级
+            conninfo = (
+                f"host={host} port={port} user={username} password={password} dbname={database} "
+                f"keepalives=1 keepalives_idle=60 keepalives_interval=10 keepalives_count=3 "
+                f"tcp_user_timeout=5000"
+            )
             pool = AsyncConnectionPool(
                 conninfo=conninfo,
                 min_size=min_size,
@@ -206,6 +232,7 @@ async def _create_opengauss_pool():
                 max_idle=max_inactive_lifetime,  # 非活跃连接的最大生命周期（秒）
                 max_lifetime=max_inactive_lifetime * 2,  # 连接最大生命周期
                 reconnect_timeout=pool_timeout,  # 重连超时
+                check=_check_connection_with_timeout,  # 借出前快速检查连接存活（3s超时判死，应对中间设备静默断链）
             )
             await pool.open()
             logger.info(

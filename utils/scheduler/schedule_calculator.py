@@ -17,6 +17,69 @@ from utils.datetime_utils import parse_datetime, now
 logger = logging.getLogger(__name__)
 
 
+def _get_day_of_month(config: dict) -> int:
+    """从调度配置中解析并规范化 day_of_month"""
+    day_of_month = config.get('day_of_month', 1)
+    try:
+        day_of_month = int(day_of_month)
+    except (ValueError, TypeError):
+        logger.error(f"无效的 day_of_month 值: {day_of_month}，使用默认值 1")
+        day_of_month = 1
+    if day_of_month < 1:
+        day_of_month = 1
+    elif day_of_month > 31:
+        day_of_month = 31
+    return day_of_month
+
+
+def get_monthly_cycle_start(current_time: datetime, schedule_config: dict) -> Optional[datetime]:
+    """获取月度任务的当前周期起始时间
+
+    周期语义：每月 day_of_month 日 → 下月 (day_of_month-1) 日为一个周期。
+    例如 day=15：8/15~9/14 属于"8月周期"。
+    跨月补跑（如 9/3 成功）属于 8/15~9/14 周期，不会误判为"9月已执行"。
+
+    Returns:
+        周期起始时间（含调度时分秒），解析失败返回 None
+    """
+    try:
+        config = schedule_config or {}
+        day_of_month = _get_day_of_month(config)
+
+        time_str = config.get('time', '02:00:00')
+        time_parts = time_str.split(':')
+        hour = int(time_parts[0])
+        minute = int(time_parts[1]) if len(time_parts) > 1 else 0
+        second = int(time_parts[2]) if len(time_parts) > 2 else 0
+
+        def _clamp_day(year, month, day):
+            return min(day, calendar.monthrange(year, month)[1])
+
+        # 本月目标时间
+        target_this_month = current_time.replace(
+            day=_clamp_day(current_time.year, current_time.month, day_of_month),
+            hour=hour, minute=minute, second=second, microsecond=0
+        )
+
+        if current_time >= target_this_month:
+            # 已过本月目标日 → 本周期从本月目标日开始
+            return target_this_month
+        else:
+            # 未到本月目标日 → 本周期从上月目标日开始
+            if current_time.month == 1:
+                prev_year, prev_month = current_time.year - 1, 12
+            else:
+                prev_year, prev_month = current_time.year, current_time.month - 1
+            return current_time.replace(
+                year=prev_year, month=prev_month,
+                day=_clamp_day(prev_year, prev_month, day_of_month),
+                hour=hour, minute=minute, second=second, microsecond=0
+            )
+    except Exception as e:
+        logger.error(f"计算月度周期起始时间失败: {str(e)}")
+        return None
+
+
 def calculate_next_run_time(scheduled_task: ScheduledTask) -> Optional[datetime]:
     """计算下次执行时间"""
     try:
@@ -107,34 +170,43 @@ def calculate_next_run_time(scheduled_task: ScheduledTask) -> Optional[datetime]
             return next_time
             
         elif schedule_type == ScheduleType.MONTHLY:
-            # 每月任务：每月固定日期的固定时间
-            day_of_month = config.get('day_of_month', 1)
-            try:
-                day_of_month = int(day_of_month)
-            except (ValueError, TypeError):
-                logger.error(f"无效的 day_of_month 值: {day_of_month}，使用默认值 1")
-                day_of_month = 1
+            # 每月任务：周期 = 每月 day_of_month 日 → 下月 (day_of_month-1) 日
+            # 周期语义：跨月补跑（如 9/3 补跑属于 8/15~9/14 周期）不会误判月份
+            period_start = get_monthly_cycle_start(current_time, config)
+            if period_start is None:
+                logger.error(f"[调度时间计算] 月度任务周期计算失败 - 任务: {scheduled_task.task_name}")
+                return None
 
-            if day_of_month < 1:
-                day_of_month = 1
-            elif day_of_month > 31:
-                day_of_month = 31
-
+            day_of_month = _get_day_of_month(config)
             time_str = config.get('time', '02:00:00')
             time_parts = time_str.split(':')
             hour = int(time_parts[0])
             minute = int(time_parts[1]) if len(time_parts) > 1 else 0
             second = int(time_parts[2]) if len(time_parts) > 2 else 0
 
-            # 判断本月是否已执行成功
+            # 判断本周期是否已执行成功（周期判断，非日历月）
             last_success = scheduled_task.last_success_time
-            this_month_executed = (
-                last_success is not None
-                and last_success.year == current_time.year
-                and last_success.month == current_time.month
-            )
+            cycle_executed = last_success is not None and last_success >= period_start
 
-            # 计算本月目标时间
+            if cycle_executed:
+                # 本周期已执行 → 下个周期起始日
+                if period_start.month == 12:
+                    next_year, next_month = period_start.year + 1, 1
+                else:
+                    next_year, next_month = period_start.year, period_start.month + 1
+                last_day = calendar.monthrange(next_year, next_month)[1]
+                actual_day = min(day_of_month, last_day)
+                next_time = period_start.replace(year=next_year, month=next_month, day=actual_day)
+                logger.debug(
+                    f"[调度时间计算] 月度任务本周期已执行 → 下周期 - "
+                    f"任务: {scheduled_task.task_name}, 目标日: {day_of_month}号, "
+                    f"周期起始: {period_start.strftime('%Y-%m-%d')}, "
+                    f"上次成功: {last_success.strftime('%Y-%m-%d')}, "
+                    f"下次: {next_time.strftime('%Y-%m-%d %H:%M')}"
+                )
+                return next_time
+
+            # 本月目标时间
             try:
                 target_this_month = current_time.replace(
                     day=min(day_of_month, calendar.monthrange(current_time.year, current_time.month)[1]),
@@ -147,66 +219,24 @@ def calculate_next_run_time(scheduled_task: ScheduledTask) -> Optional[datetime]
                     hour=hour, minute=minute, second=second, microsecond=0
                 )
 
-            # 本月目标日已过
             if target_this_month <= current_time:
-                if this_month_executed:
-                    # 已执行 → 排下月
-                    if current_time.month == 12:
-                        next_year = current_time.year + 1
-                        next_month = 1
-                    else:
-                        next_year = current_time.year
-                        next_month = current_time.month + 1
-                    last_day = calendar.monthrange(next_year, next_month)[1]
-                    actual_day = min(day_of_month, last_day)
-                    next_time = current_time.replace(year=next_year, month=next_month, day=actual_day,
-                                                      hour=hour, minute=minute, second=second, microsecond=0)
-                    logger.debug(
-                        f"[调度时间计算] 月度任务本月已执行 → 下月 - "
-                        f"任务: {scheduled_task.task_name}, 目标日: {day_of_month}号, "
-                        f"上次成功: {last_success.strftime('%Y-%m-%d')}, "
-                        f"下次: {next_time.strftime('%Y-%m-%d %H:%M')}"
-                    )
-                    return next_time
-
-                # 本月未执行 → 立即执行
+                # 目标日已过且本周期未执行 → 立即补跑
                 logger.info(
-                    f"[调度时间计算] 月度任务本月目标日已过且未执行 → 立即执行 - "
+                    f"[调度时间计算] 月度任务目标日已过且本周期未执行 → 立即执行 - "
                     f"任务: {scheduled_task.task_name}, 目标日: {day_of_month}号, "
+                    f"周期起始: {period_start.strftime('%Y-%m-%d')}, "
                     f"上次成功: {last_success.strftime('%Y-%m-%d') if last_success else '从未'}"
                 )
                 return current_time + timedelta(minutes=1)
 
-            # 本月目标日尚未到
-            if this_month_executed:
-                # 本月已执行 → 排下月
-                if current_time.month == 12:
-                    next_year = current_time.year + 1
-                    next_month = 1
-                else:
-                    next_year = current_time.year
-                    next_month = current_time.month + 1
-                last_day = calendar.monthrange(next_year, next_month)[1]
-                actual_day = min(day_of_month, last_day)
-                next_time = current_time.replace(year=next_year, month=next_month, day=actual_day,
-                                                  hour=hour, minute=minute, second=second, microsecond=0)
-                logger.debug(
-                    f"[调度时间计算] 月度任务本月已执行 → 下月 - "
-                    f"任务: {scheduled_task.task_name}, 目标日: {day_of_month}号, "
-                    f"上次成功: {last_success.strftime('%Y-%m-%d')}, "
-                    f"下次: {next_time.strftime('%Y-%m-%d %H:%M')}"
-                )
-                return next_time
-
-            # 本月未执行且目标日尚未到 → 正常排本月目标日
+            # 目标日未到 → 等待本月目标日
             logger.info(
-                f"[调度时间计算] 月度任务本月未执行，等待目标日 - "
+                f"[调度时间计算] 月度任务本周期未执行，等待目标日 - "
                 f"任务: {scheduled_task.task_name}, 目标日: {day_of_month}号, "
-                f"上次成功: {last_success.strftime('%Y-%m-%d') if last_success else '从未'}, "
                 f"下次: {target_this_month.strftime('%Y-%m-%d %H:%M')}"
             )
             return target_this_month
-            
+
         elif schedule_type == ScheduleType.YEARLY:
             # 每年任务：每年固定月日的固定时间
             month = config.get('month', 1)

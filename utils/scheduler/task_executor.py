@@ -68,19 +68,22 @@ def create_task_executor(
                 operation_description=f"开始执行计划任务: {scheduled_task.task_name}",
                 category="scheduler",
                 success=True,
-                result_message=f"任务执行开始 (执行ID: {execution_id})"
+                result_message=f"任务执行开始 (执行ID: {execution_id})",
+                new_values={"manual_run": manual_run}
             )
 
             # 更新任务状态为运行中
+            # 注意：last_run_time 只在任务成功时更新（见成功路径），
+            # 启动/失败/跳过时不得写入，保证"上次执行"始终指向真实成功的运行
             async with get_opengauss_connection() as conn:
                 try:
                     await conn.execute(
                         """
                         UPDATE scheduled_tasks
-                        SET status = $1::scheduledtaskstatus, last_run_time = $2
-                        WHERE id = $3
+                        SET status = $1::scheduledtaskstatus
+                        WHERE id = $2
                         """,
-                        'running', start_time, scheduled_task.id
+                        'running', scheduled_task.id
                     )
 
                     # psycopg3 binary protocol 需要显式提交事务
@@ -175,6 +178,34 @@ def create_task_executor(
             end_time = datetime.now()
             duration = int((end_time - start_time).total_seconds() * 1000)  # 转换为毫秒
 
+            # 检查处理器返回状态：skipped 不算成功执行
+            result_status = result.get('status') if isinstance(result, dict) else None
+            if result_status == 'skipped':
+                logger.info(f"[任务执行器] 任务被跳过（不更新成功统计）: {scheduled_task.task_name}, 原因: {result.get('message', '')}")
+                # 记录运行结束（跳过，不算成功也不算失败）
+                try:
+                    await record_run_end(execution_id, end_time, 'skipped', result=result)
+                except Exception:
+                    pass
+                # 仅记录操作日志，不更新 last_success_time / success_runs
+                try:
+                    await log_operation(
+                        operation_type=OperationType.SCHEDULER_RUN,
+                        resource_type="scheduler",
+                        resource_id=str(scheduled_task.id),
+                        resource_name=scheduled_task.task_name,
+                        operation_name="执行计划任务",
+                        operation_description=f"计划任务被跳过: {result.get('message', '')}",
+                        category="scheduler",
+                        success=True,
+                        result_message=result.get('message', ''),
+                        duration_ms=duration,
+                        new_values={"manual_run": manual_run}
+                    )
+                except Exception:
+                    pass
+                return result
+
             # 记录运行结束（成功）
             try:
                 await record_run_end(execution_id, end_time, 'success', result=result)
@@ -212,19 +243,29 @@ def create_task_executor(
                 next_run = calculate_next_run_time(scheduled_task)
 
                 # 更新任务到数据库
+                # 原则：只有任务成功才更新 last_run_time（上次执行时间）
+                # 注意：占位符不能重复编号（psycopg3_compat 按出现次数转 %s），end_time 传两次
                 await conn.execute(
                     """
                     UPDATE scheduled_tasks
                     SET status = $1::scheduledtaskstatus,
-                        last_success_time = $2,
-                        total_runs = $3,
-                        success_runs = $4,
-                        average_duration = $5,
-                        next_run_time = $6
-                    WHERE id = $7
+                        last_run_time = $2,
+                        last_success_time = $3,
+                        total_runs = $4,
+                        success_runs = $5,
+                        average_duration = $6,
+                        next_run_time = $7
+                    WHERE id = $8
                     """,
-                    'active', end_time, total_runs, success_runs, avg_duration, next_run, scheduled_task.id
+                    'active', end_time, end_time, total_runs, success_runs, avg_duration, next_run, scheduled_task.id
                 )
+
+                # psycopg3 binary protocol 需要显式提交事务
+                actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+                try:
+                    await actual_conn.commit()
+                except Exception as commit_err:
+                    logger.warning(f"提交任务成功统计事务失败（可能已自动提交）: {commit_err}")
 
                 # 更新内存中的 next_run_time
                 scheduled_task.next_run_time = next_run
@@ -300,7 +341,8 @@ def create_task_executor(
                 category="scheduler",
                 success=True,
                 result_message=f"任务执行成功 (执行ID: {execution_id}, 耗时: {duration}ms)",
-                duration_ms=duration
+                duration_ms=duration,
+                new_values={"manual_run": manual_run}
             )
 
             # 记录系统日志
@@ -342,6 +384,12 @@ def create_task_executor(
                         """,
                         'error', error_msg, scheduled_task.id
                     )
+                    # psycopg3 binary protocol 需要显式提交事务
+                    actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+                    try:
+                        await actual_conn.commit()
+                    except Exception as commit_err:
+                        logger.warning(f"提交任务中断状态事务失败（可能已自动提交）: {commit_err}")
             except Exception as update_error:
                 logger.error(f"更新任务状态失败（忽略继续）: {str(update_error)}")
 
@@ -414,6 +462,12 @@ def create_task_executor(
                         """,
                         'error', total_runs, failure_runs, end_time, error_msg, scheduled_task.id
                     )
+                    # psycopg3 binary protocol 需要显式提交事务
+                    actual_conn = conn._conn if hasattr(conn, '_conn') else conn
+                    try:
+                        await actual_conn.commit()
+                    except Exception as commit_err:
+                        logger.warning(f"提交任务失败统计事务失败（可能已自动提交）: {commit_err}")
             except Exception as db_error:
                 logger.error(f"更新任务日志失败: {str(db_error)}")
 
@@ -451,7 +505,8 @@ def create_task_executor(
                 category="scheduler",
                 success=False,
                 error_message=error_msg,
-                duration_ms=duration
+                duration_ms=duration,
+                new_values={"manual_run": manual_run}
             )
 
             # 记录系统日志（错误）

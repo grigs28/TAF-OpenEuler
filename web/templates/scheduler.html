@@ -246,10 +246,19 @@ async function loadSchedulerHistory() {
                 const opTypeMap = {
                     'scheduler_create': '创建任务', 'scheduler_update': '更新任务',
                     'scheduler_delete': '删除任务', 'scheduler_enable': '启用任务',
-                    'scheduler_disable': '禁用任务', 'scheduler_run': '手动运行',
+                    'scheduler_disable': '禁用任务',
                     'scheduler_stop': '停止任务'
                 };
-                const opType = opTypeMap[log.operation_type] || log.operation_type || '-';
+                let opType = opTypeMap[log.operation_type] || log.operation_type || '-';
+                // scheduler_run 区分手动/自动（从日志 details.new_values.manual_run 读取）
+                if (log.operation_type === 'scheduler_run') {
+                    const nv = log.details && log.details.new_values;
+                    if (nv && typeof nv.manual_run !== 'undefined') {
+                        opType = nv.manual_run ? '手动运行' : '自动运行';
+                    } else {
+                        opType = '执行任务';  // 旧记录无 manual_run 标记
+                    }
+                }
                 row.appendChild(Object.assign(document.createElement('td'), {textContent: opType}));
 
                 row.appendChild(Object.assign(document.createElement('td'), {textContent: log.operation_name || log.resource_name || '-'}));
