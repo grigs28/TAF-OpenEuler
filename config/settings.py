@@ -168,6 +168,7 @@ class Settings(BaseSettings):
 
     # 扫描进度更新配置
     SCAN_UPDATE_INTERVAL: int = 2000  # 后台扫描每处理多少个文件更新一次数据库（total_files/total_bytes）
+    SCAN_LOG_INTERVAL_SECONDS: int = 60  # 扫描批次进度日志的最小间隔（秒），0或负值视为60
     SCAN_WAIT_TIMEOUT: int = 300  # 等待后台扫描写入文件记录的超时时间（秒），默认300秒（5分钟）
     # 压缩并行批次配置
     COMPRESSION_PARALLEL_BATCHES: int = 3  # 压缩并行批次数量（默认3），预读取程序队列数为该值+1

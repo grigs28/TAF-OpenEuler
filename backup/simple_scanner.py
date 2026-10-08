@@ -156,6 +156,8 @@ class SimpleScanner:
         
         # 批次大小（与测试程序一致）
         batch_size = getattr(self.settings, "SCAN_UPDATE_INTERVAL", 10000) or 10000
+        # 批次进度日志的最小间隔（秒），避免小批次高频刷屏
+        scan_log_interval = float(getattr(self.settings, "SCAN_LOG_INTERVAL_SECONDS", 60) or 60)
         
         # === 阶段1: UNC/网络路径处理（必须在异步上下文中完成） ===
         expanded_paths = []
@@ -207,6 +209,7 @@ class SimpleScanner:
         # === 阶段3: 异步读取队列 + 写入批次（事件循环保持响应） ===
         loop = asyncio.get_running_loop()
         batch_number = 0
+        last_progress_log_time = 0.0  # 上次批次进度日志时间（0.0 保证首批一定记录）
 
         # 打开数据库连接（仅在数据库模式下；内存模式使用空连接）
         async with _conditional_db_connection(use_memory_mode) as (conn, actual_conn):
@@ -269,15 +272,18 @@ class SimpleScanner:
                             backup_task.total_files = stats["total_written"]
                             backup_task.total_bytes = stats["total_bytes"]
 
-                        # 批次进度日志
-                        elapsed = time.time() - stats['start_time']
-                        files_per_sec = stats['total_written'] / elapsed if elapsed > 0 else 0
-                        logger.info(
-                            f"[简洁扫描] 批次 {batch_number}: {write_verb} {stats['total_written']:,} 个文件, "
-                            f"总容量: {format_bytes(stats['total_bytes'])}, "
-                            f"速度: {files_per_sec:.0f} 文件/秒, "
-                            f"耗时: {elapsed:.1f}秒"
-                        )
+                        # 批次进度日志（按 SCAN_LOG_INTERVAL_SECONDS 限流）
+                        now_ts = time.time()
+                        if now_ts - last_progress_log_time >= scan_log_interval:
+                            elapsed = now_ts - stats['start_time']
+                            files_per_sec = stats['total_written'] / elapsed if elapsed > 0 else 0
+                            logger.info(
+                                f"[简洁扫描] 批次 {batch_number}: {write_verb} {stats['total_written']:,} 个文件, "
+                                f"总容量: {format_bytes(stats['total_bytes'])}, "
+                                f"速度: {files_per_sec:.0f} 文件/秒, "
+                                f"耗时: {elapsed:.1f}秒"
+                            )
+                            last_progress_log_time = now_ts
 
                         # 让出事件循环，让预取器和压缩器有机会运行
                         await asyncio.sleep(0)
@@ -412,7 +418,7 @@ class SimpleScanner:
         current_batch = []
         start_time = time.time()
         last_progress_time = start_time
-        progress_interval = 5.0
+        progress_interval = float(getattr(self.settings, "SCAN_LOG_INTERVAL_SECONDS", 60) or 60)
         last_log_count = 0
         log_interval_count = 10000
 

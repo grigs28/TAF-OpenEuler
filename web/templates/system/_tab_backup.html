@@ -22,10 +22,6 @@
                         <label class="form-check-label" for="scanMemoryOnly">纯内存扫描模式</label>
                         <small class="text-muted d-block">启用后扫描器仅写入内存，减少扫描阶段数据库I/O，崩溃时无孤儿记录</small>
                     </div>
-                    <div class="form-check form-switch mb-3">
-                        <input class="form-check-input" type="checkbox" id="useCheckpoint">
-                        <label class="form-check-label" for="useCheckpoint">启用检查点文件</label>
-                    </div>
                     <div class="mb-3">
                         <label class="form-label">压缩临时目录</label>
                         <input type="text" class="form-control" id="backupCompressDir" value="temp/compress">

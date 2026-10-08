@@ -663,10 +663,6 @@ async function loadAllSystemConfig() {
                 const scanMemoryOnlyInput = document.getElementById('scanMemoryOnly');
                 if (scanMemoryOnlyInput) scanMemoryOnlyInput.checked = config.scan_memory_only;
             }
-            if (config.use_checkpoint !== undefined) {
-                const useCheckpointInput = document.getElementById('useCheckpoint');
-                if (useCheckpointInput) useCheckpointInput.checked = config.use_checkpoint;
-            }
             if (config.compression_parallel_batches) {
                 const compressionParallelBatchesInput = document.getElementById('compressionParallelBatches');
                 if (compressionParallelBatchesInput) compressionParallelBatchesInput.value = config.compression_parallel_batches;
@@ -748,7 +744,6 @@ async function saveEnvConfigSection() {
                 if (!checkbox) return undefined;
                 return checkbox.checked === true;
             })(),
-            use_checkpoint: document.getElementById('useCheckpoint')?.checked || null,
             compression_parallel_batches: (() => {
                 const input = document.getElementById('compressionParallelBatches');
                 if (!input) return null;
