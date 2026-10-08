@@ -217,6 +217,17 @@ document.addEventListener('DOMContentLoaded', function() {
             tab.show();
         }
     }
+
+    // 切换标签页时把当前标签写入 URL hash，刷新后保持在当前标签页
+    document.querySelectorAll('[data-bs-toggle="tab"]').forEach(function(btn) {
+        btn.addEventListener('shown.bs.tab', function() {
+            const target = this.getAttribute('data-bs-target') || this.getAttribute('href') || '';
+            const tabId = target.replace('#', '');
+            if (tabId) {
+                history.replaceState(null, '', '#' + tabId);
+            }
+        });
+    });
 });
 
 // ===== 通知配置JavaScript =====
