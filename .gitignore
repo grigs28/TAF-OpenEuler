@@ -118,3 +118,6 @@ nul
 
 # yz SSO 登录模块（不上传 git）
 web/yz_auth/
+
+# 单实例锁文件（运行时自动生成）
+.taf.pid
