@@ -17,6 +17,13 @@
                         <label class="form-label">后台扫描进度统计间隔（秒）</label>
                         <input type="number" class="form-control" id="scanLogIntervalSeconds" value="60" min="1" step="1">
                     </div>
+                    <div class="mb-3">
+                        <label class="form-label">扫描等待超时（秒）</label>
+                        <input type="number" class="form-control" id="scanWaitTimeout" min="60" step="60" value="300">
+                        <small class="form-text text-secondary">
+                            扫描启动后等待此时间再开始压缩（默认300秒）。若扫描提前完成，则立即开始压缩，不空等剩余时间。
+                        </small>
+                    </div>
                     <div class="form-check form-switch mb-3">
                         <input class="form-check-input" type="checkbox" id="scanMemoryOnly">
                         <label class="form-check-label" for="scanMemoryOnly">纯内存扫描模式</label>

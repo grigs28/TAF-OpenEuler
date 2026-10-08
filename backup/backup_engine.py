@@ -1407,8 +1407,23 @@ class BackupEngine:
                 )
                 logger.info("后台扫描任务已启动")
                 scan_wait_timeout = getattr(self.settings, "SCAN_WAIT_TIMEOUT", 300) or 300
-                logger.info(f"等待后台扫描写入文件记录（{scan_wait_timeout}秒）...")
-                await asyncio.sleep(scan_wait_timeout)
+                logger.info(
+                    f"等待后台扫描写入文件记录（最多{scan_wait_timeout}秒，扫描提前完成则立即继续）..."
+                )
+                # 等待扫描任务完成或超时：扫描提前完成时不再空等剩余时间
+                _done, _pending = await asyncio.wait({scan_progress_task}, timeout=scan_wait_timeout)
+                if scan_progress_task in _done:
+                    _scan_exc = scan_progress_task.exception()
+                    if _scan_exc is not None:
+                        # 扫描在等待期内异常退出：立即抛出，避免后续压缩空跑
+                        logger.error("后台扫描任务在等待期内异常退出")
+                        raise _scan_exc
+                    logger.info("[备份引擎] 扫描已提前完成，立即开始压缩（无需等满超时）")
+                else:
+                    logger.info(
+                        f"等待达 {scan_wait_timeout} 秒上限，扫描仍在进行，"
+                        f"开始压缩（扫描与压缩并发执行）"
+                    )
             else:
                 logger.info("扫描状态为 completed，跳过扫描阶段")
             
