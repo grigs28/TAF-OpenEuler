@@ -142,6 +142,10 @@ class Settings(BaseSettings):
     SYSLOG_PORT: int = 515  # Syslog 服务器端口（Vector JSON 端口）
     SYSLOG_LEVEL: str = "WARNING"  # 转发级别：DEBUG/INFO/WARNING/ERROR/CRITICAL
 
+    # YZ SSO 登录配置
+    YZ_LOGIN_URL: str = "http://192.168.0.19:5555"
+    TAF_CALLBACK_URL: str = "http://192.168.0.19:8081/api/yz/callback"
+
     # SMB/CIFS 网络路径配置
     SMB_USERNAME: str = ""  # SMB 用户名（如：administrator）
     SMB_PASSWORD: str = ""  # SMB 密码

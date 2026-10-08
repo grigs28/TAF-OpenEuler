@@ -297,13 +297,24 @@ async def get_cached_archive_contents(set_id: str, archive: str, request: Reques
 
 
 @router.get("/backup-sets/{set_id}/search-files-stream")
-async def search_files_stream(set_id: str, q: str, request: Request):
-    """在备份集所有归档中搜索文件名（SSE 流式，逐个归档检索）"""
+async def search_files_stream(set_id: str, q: str, request: Request,
+                                tape_label: str = ""):
+    """在备份集所有归档中搜索文件名（SSE 流式，数据库优先，逐个归档检索）
+
+    优先从数据库缓存搜索，未缓存的归档走解压并自动缓存。
+    必须检索所有归档（因为重名文件可能存在于不同归档）。
+    """
     engine = _get_engine(request)
+
+    if not tape_label:
+        status = await engine.get_tape_status()
+        tape_label = status.get("tape_label") or "unknown"
 
     async def _stream():
         try:
-            async for event in engine.search_files_streaming(set_id, q):
+            async for event in engine.search_files_db_first_streaming(
+                set_id, q, tape_label=tape_label
+            ):
                 yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"

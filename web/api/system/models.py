@@ -79,3 +79,11 @@ class NotificationEvents(BaseModel):
     notify_system_error: bool = Field(True, description="系统错误")
     notify_system_started: bool = Field(True, description="系统启动")
 
+
+class SyslogConfig(BaseModel):
+    """Syslog 转发配置模型"""
+    syslog_enabled: bool = Field(False, description="是否启用")
+    syslog_host: str = Field("192.168.0.14", description="服务器地址")
+    syslog_port: int = Field(514, description="端口")
+    syslog_level: str = Field("WARNING", description="转发级别")
+

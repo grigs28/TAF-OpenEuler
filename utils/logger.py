@@ -141,6 +141,43 @@ def setup_logging():
     except Exception as e:
         logger.warning(f"添加系统日志处理器失败: {str(e)}")
 
+    # Syslog 转发处理器（UDP JSON，适配 Vector taf_udp 源）
+    if settings.SYSLOG_ENABLED:
+        try:
+            import socket
+            import json as _json
+            import platform
+
+            class _JSONSyslogHandler(logging.Handler):
+                """通过 UDP 发送 JSON 格式日志，兼容 Vector taf_udp (codec=json)"""
+                def __init__(self, host, port):
+                    super().__init__()
+                    self._addr = (host, int(port))
+                    self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                    self._hostname = platform.node() or "unknown"
+
+                def emit(self, record):
+                    try:
+                        payload = _json.dumps({
+                            "timestamp": datetime.fromtimestamp(record.created, tz=None).isoformat() + "Z",
+                            "app_name": "taf",
+                            "host": self._hostname,
+                            "level": record.levelname.lower(),
+                            "message": self.format(record),
+                            "logger": record.name,
+                        }, ensure_ascii=False)
+                        self._sock.sendto(payload.encode("utf-8"), self._addr)
+                    except Exception:
+                        self.handleError(record)
+
+            syslog_handler = _JSONSyslogHandler(settings.SYSLOG_HOST, settings.SYSLOG_PORT)
+            syslog_handler.setLevel(getattr(logging, settings.SYSLOG_LEVEL.upper(), logging.WARNING))
+            syslog_handler.setFormatter(formatter)
+            root_logger.addHandler(syslog_handler)
+            logger.info(f"Syslog JSON 转发已启用: {settings.SYSLOG_HOST}:{settings.SYSLOG_PORT} (级别: {settings.SYSLOG_LEVEL})")
+        except Exception as e:
+            logger.warning(f"Syslog 转发初始化失败: {str(e)}")
+
     # 设置第三方库日志级别
     logging.getLogger('sqlalchemy.engine').setLevel(logging.WARNING)
     logging.getLogger('sqlalchemy.pool').setLevel(logging.WARNING)

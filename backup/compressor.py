@@ -699,6 +699,9 @@ def _compress_with_tar(
                         compress_progress['bytes_written'] = archive_path_abs.stat().st_size if archive_path_abs.exists() else 0
                         backup_task.progress_percent = min(100.0, compress_progress_value)
                 except Exception as add_error:
+                    if isinstance(add_error, BrokenPipeError) or 'Broken pipe' in str(add_error):
+                        logger.info(f"[tar] 管道已断开，停止压缩")
+                        break
                     logger.warning(f"[tar] 添加文件失败: {file_path}, 错误: {add_error}")
                     failed_files.append({'path': str(file_path), 'reason': f'写入失败: {add_error}'})
                     continue
@@ -902,6 +905,10 @@ def _compress_with_zstd_cli(
                         backup_task.progress_percent = min(100.0, compress_progress_value)
 
                 except Exception as add_error:
+                    # Broken pipe 说明 zstd 进程已死（通常是关闭时被 kill），立即停止
+                    if isinstance(add_error, BrokenPipeError) or 'Broken pipe' in str(add_error):
+                        logger.info(f"[zstd-cli] 管道已断开（zstd 进程已终止），停止压缩")
+                        break
                     logger.warning(f"[zstd-cli] 添加文件失败: {file_path}, 错误: {add_error}")
                     failed_files.append({'path': str(file_path), 'reason': f'写入失败: {add_error}'})
                     continue
@@ -1172,6 +1179,9 @@ def _compress_with_zstd(
                                 compress_progress_value = 10.0 + (current_processed / total_files) * 90.0
                                 backup_task.progress_percent = min(100.0, compress_progress_value)
                         except Exception as add_error:
+                            if isinstance(add_error, BrokenPipeError) or 'Broken pipe' in str(add_error):
+                                logger.info(f"[zstd] 管道已断开，停止压缩")
+                                break
                             logger.warning(f"[zstd] 添加文件失败: {file_path}, 错误: {add_error}")
                             failed_files.append({'path': str(file_path), 'reason': f'写入失败: {add_error}'})
                             continue

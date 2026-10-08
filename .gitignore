@@ -115,3 +115,6 @@ ITDT/**
 *.dll
 
 nul
+
+# yz SSO 登录模块（不上传 git）
+web/yz_auth/

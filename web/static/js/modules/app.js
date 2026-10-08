@@ -2,7 +2,6 @@ import { initSystemMonitor } from './components/system_monitor.js';
 import { initVersionHistory } from './components/versionHistory.js';
 import { initReadmeModal } from './components/readmeModal.js';
 import { initConfigModal } from './components/configModal.js';
-import { loginUtils } from './components/loginModal.js';
 import { logger } from './components/logger.js';
 
 // 创建Vue应用实例
@@ -79,22 +78,9 @@ const app = Vue.createApp({
     },
 
     mounted() {
-        const token = localStorage.getItem('authToken');
+        // SSO 自动登录检测
+        this.ssoAutoLogin();
 
-        // 初始化时验证token有效性
-        this.validateToken();
-        if (token) {
-            try {
-                // 解析JWT token
-                const payload = JSON.parse(atob(token.split('.')[1]));
-                this.auth.username = payload.username;
-                this.auth.isAuthenticated = true;
-                this.auth.token = token;
-            } catch (e) {
-                console.error('Token解析失败:', e);
-                localStorage.removeItem('authToken');
-            }
-        }
         this.init();
         this.initWebSocket();
 
@@ -1249,11 +1235,28 @@ const app = Vue.createApp({
         onLoginSuccess({ username, token }) {
             this.auth.username = username;
             this.auth.isAuthenticated = true;
-            this.auth.token = token;
+            this.auth.token = token || 'sso';
             this.addLog('登录成功', 'success');
             this.closeWebSocket();
             this.initWebSocket();
             this.loadModels();
+        },
+
+        async ssoAutoLogin() {
+            try {
+                const resp = await fetch('/api/yz/user', { credentials: 'same-origin' });
+                const data = await resp.json();
+                if (data.ok) {
+                    this.auth.username = data.display_name || data.username;
+                    this.auth.isAuthenticated = true;
+                    this.auth.token = 'sso';
+                    if (window.location.search.indexOf('sso=1') !== -1) {
+                        window.history.replaceState(null, '', window.location.pathname);
+                    }
+                }
+            } catch (e) {
+                console.log('SSO 检测:', e);
+            }
         },
 
         async loadWebsiteSettings() {
@@ -1285,7 +1288,6 @@ initSystemMonitor(app);
 initVersionHistory(app);
 initReadmeModal(app);
 initConfigModal(app);
-loginUtils.initLoginModal(app);
 
 // 等待 DOM 加载完成后再挂载应用
 document.addEventListener('DOMContentLoaded', () => {

@@ -28,7 +28,10 @@ class SystemLogHandler(logging.Handler):
         'backup_task_manager',
         'backup_db',
         'tape_handler',
-        'backup_notifier'
+        'backup_notifier',
+        'utils.scheduler',
+        'recovery',
+        'tape',
     ]
     
     # 需要记录的日志级别（WARNING及以上）
