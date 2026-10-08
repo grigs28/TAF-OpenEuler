@@ -156,6 +156,7 @@ body {
     width: 100%;
     height: 100%;
     z-index: -1;
+    pointer-events: none; /* 右键穿透 canvas，避免弹出"图片另存为"菜单 */
 }
 
 /* 主容器 - 使用Bootstrap响应式container */
